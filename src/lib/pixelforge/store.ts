@@ -31,6 +31,7 @@ import {
   type MotionApplyPayload,
   type PartRect,
   type Project,
+  type QAIssue,
   type StrokeHandle as CoreStrokeHandle,
 } from '@pixelforge/core'
 import { DEFAULT_PALETTE } from './palettes'
@@ -57,7 +58,7 @@ export type { SelectionRect, ClipboardContent, TransformKind }
 export const MIN_ZOOM = 1
 export const MAX_ZOOM = 48
 
-export type RightTab = 'layers' | 'ai' | 'agent'
+export type RightTab = 'layers' | 'ai' | 'motion' | 'agent'
 
 /** Draft motion part (Motion Composer panel → part.set command). */
 export interface MotionPartDraft {
@@ -269,6 +270,10 @@ export interface EditorState {
   autosave: boolean
   // ui
   rightTab: RightTab
+  /** Phase-1 Task 10 QA: live plan-preview issues from the Motion Composer
+   *  panel (frame-scoped) — the timeline badges these frames while a motion
+   *  preview is active. Cleared by the panel on unmount / accept. */
+  motionPreviewIssues: QAIssue[]
   paletteOpen: boolean
   rightOpen: boolean
   rightWidth: number
@@ -370,6 +375,7 @@ export interface EditorState {
   setCurrentStep: (n: number) => void
   setPlaybackMode: (m: PlaybackMode) => void
   setRightTab: (t: RightTab) => void
+  setMotionPreviewIssues: (issues: QAIssue[]) => void
   setPaletteOpen: (v: boolean) => void
   setRightOpen: (v: boolean) => void
   setRightWidth: (w: number) => void
@@ -444,6 +450,7 @@ export const useEditor = create<EditorState>()((set, get) => ({
   docVersion: 0,
   loadEpoch: 0,
   projectId: null,
+  motionPreviewIssues: [],
   activeClipId: initialDoc.clips[0]?.id ?? '',
   activeFrameIndex: 0,
   activeLayerId: initialDoc.clips[0]?.layers[0]?.id ?? '',
@@ -1192,6 +1199,7 @@ export const useEditor = create<EditorState>()((set, get) => ({
   setCurrentStep: (n) => set({ currentStep: Math.max(0, Math.round(n)) }),
   setPlaybackMode: (m) => set({ playbackMode: m }),
   setRightTab: (t) => set({ rightTab: t }),
+  setMotionPreviewIssues: (issues) => set({ motionPreviewIssues: issues }),
   setPaletteOpen: (v) => set({ paletteOpen: v }),
   setRightOpen: (v) => set({ rightOpen: v }),
   setRightWidth: (w) => set({ rightWidth: Math.min(560, Math.max(260, Math.round(w))) }),

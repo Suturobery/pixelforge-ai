@@ -1,0 +1,674 @@
+     1→     1→/**
+     2→     2→ * PixelForge AI — MCP tool catalog (v3.1 §5.2/§5.3, P0 scope: L0 + L1).
+     3→     3→ *
+     4→     4→ * Every non-server-side tool is a RELAY: the MCP server validates identity +
+     5→     5→ * tier + rate budget, then forwards the call to the PixelForge renderer,
+     6→     6→ * which executes it on the REAL CommandBus — the same bus, validation and
+     7→     7→ * undo history as manual editing. Nothing here mutates a document directly.
+     8→     8→ *
+     9→     9→ * DEFERRED tools (v3.1 dependencies — NOT registered, NOT advertised):
+    10→    10→ *   L2 (resize_canvas, save_project-as, export_*, purge_trash) → P1
+    11→    11→ *     approval center (Task 11); L3 (generate_sprite) → Task 11 (paid ops
+    12→    12→ *     require the approval workflow — NEVER an unrestricted tool; v3.1 §5.2).
+    13→    13→ * Task 9 registered the candidate-review set (get_candidates L0;
+    14→    14→ * accept/reject_candidate + apply_normalize L1) — no paid generation here.
+    15→    15→ * Task 10 registers the motion set (suggest_motion_preset L0; set_parts +
+    16→    16→ * apply_motion_preset L1) — deterministic, $0, executed on the real bus.
+    17→    17→ */
+    18→    18→
+    19→    19→import { z } from 'zod';
+    20→    20→import type { Tier } from './types';
+    21→    21→
+    22→    22→export const HEX_RE = /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+    23→    23→export const hexColor = z.string().regex(HEX_RE, 'must be a hex color like #rrggbb (or #rgb/#rrggbbaa)');
+    24→    24→
+    25→    25→const clipRef = {
+    26→    26→  clipId: z.string().min(1).optional().describe('Target clip id (from get_project_state). Defaults to the active clip.'),
+    27→    27→  clipName: z.string().min(1).max(60).optional().describe('Target clip by exact name (used when clipId is omitted).'),
+    28→    28→};
+    29→    29→const frameRef = {
+    30→    30→  frameId: z.string().min(1).optional().describe('Target frame id. Overrides frameIndex.'),
+    31→    31→  frameIndex: z.number().int().min(0).max(4095).optional().describe('Target frame position (0-based). Defaults to the active frame.'),
+    32→    32→};
+    33→    33→const layerRef = {
+    34→    34→  layerId: z.string().min(1).optional().describe('Target layer id. Overrides layerName.'),
+    35→    35→  layerName: z.string().min(1).max(120).optional().describe('Target layer by exact name. Defaults to the active layer.'),
+    36→    36→};
+    37→    37→const staleGuard = {
+    38→    38→  expectedStateHash: z.string().min(8).max(128).optional().describe(
+    39→    39→    'Optional optimistic-concurrency guard: the tool fails with stale_document when the document hash no longer matches. Take stateHash from any read tool.'
+    40→    40→  ),
+    41→    41→};
+    42→    42→
+    43→    43→export interface ToolDef {
+    44→    44→  name: string;
+    45→    45→  title: string;
+    46→    46→  description: string;
+    47→    47→  tier: Tier;
+    48→    48→  /** false = handled inside the MCP server (no editor round-trip). */
+    49→    49→  relay: boolean;
+    50→    50→  inputSchema: Record<string, z.ZodType>;
+    51→    51→}
+    52→    52→
+    53→    53→export const TOOL_CATALOG: ToolDef[] = [
+    54→    54→  // ------------------------------------------------------------------ L0 read
+    55→    55→  {
+    56→    56→    name: 'get_project_state',
+    57→    57→    title: 'Get project state',
+    58→    58→    description:
+    59→    59→      'Read the ACTIVE PixelForge project: name, canvas size, palette, clips (layers, frames, durations), ' +
+    60→    60→      'trash count, dirty flag and the document stateHash. Call this first; ids and the stateHash it returns ' +
+    61→    61→      'feed every other tool.',
+    62→    62→    tier: 'L0',
+    63→    63→    relay: true,
+    64→    64→    inputSchema: {},
+    65→    65→  },
+    66→    66→  {
+    67→    67→    name: 'list_projects',
+    68→    68→    title: 'List saved projects',
+    69→    69→    description:
+    70→    70→      'List projects persisted by the app (id, name, size, timestamps). Use open_project to switch to one of them.',
+    71→    71→    tier: 'L0',
+    72→    72→    relay: true,
+    73→    73→    inputSchema: {},
+    74→    74→  },
+    75→    75→  {
+    76→    76→    name: 'get_clip',
+    77→    77→    title: 'Get clip details',
+    78→    78→    description:
+    79→    79→      'Read one animation clip: layer stack (ids, names, visibility, opacity, linked), every frame with its ' +
+    80→    80→      'duration override and which layers have pixels on it, plus tags and loop settings.',
+    81→    81→    tier: 'L0',
+    82→    82→    relay: true,
+    83→    83→    inputSchema: { ...clipRef },
+    84→    84→  },
+    85→    85→  {
+    86→    86→    name: 'get_frame_png',
+    87→    87→    title: 'Get frame as PNG',
+    88→    88→    description:
+    89→    89→      'Render one frame (all visible layers composited) and return it as a base64 PNG data URL. ' +
+    90→    90→      'scale 0.5/0.25 downsamples with nearest-neighbor (no smoothing).',
+    91→    91→    tier: 'L0',
+    92→    92→    relay: true,
+    93→    93→    inputSchema: {
+    94→    94→      ...clipRef,
+    95→    95→      ...frameRef,
+    96→    96→      scale: z.union([z.literal(1), z.literal(0.5), z.literal(0.25)]).optional().describe('Output scale. Default 1 (native size).'),
+    97→    97→    },
+    98→    98→  },
+    99→    99→  {
+   100→   100→    name: 'get_palette',
+   101→   101→    title: 'Get palette',
+   102→   102→    description: 'Read the project palette (ordered hex colors) and the palette-enforcement setting.',
+   103→   103→    tier: 'L0',
+   104→   104→    relay: true,
+   105→   105→    inputSchema: {},
+   106→   106→  },
+   107→   107→  {
+   108→   108→    name: 'preview_animation',
+   109→   109→    title: 'Preview animation',
+   110→   110→    description:
+   111→   111→      'Render every frame of a clip (composited PNGs) plus the exact playback schedule the editor uses ' +
+   112→   112→      '(loop mode, per-frame durations, cycle length). Frames are capped by maxFrames to bound the response.',
+   113→   113→    tier: 'L0',
+   114→   114→    relay: true,
+   115→   115→    inputSchema: {
+   116→   116→      ...clipRef,
+   117→   117→      maxFrames: z.number().int().min(1).max(64).optional().describe('Maximum frames to render. Default 32.'),
+   118→   118→    },
+   119→   119→  },
+   120→   120→  {
+   121→   121→    name: 'subscribe_events',
+   122→   122→    title: 'Subscribe to editor events',
+   123→   123→    description:
+   124→   124→      'Returns the current stateHash and instructions for receiving real-time "projectChanged" MCP notifications ' +
+   125→   125→      '(custom method notifications/pixelforge/projectChanged with {stateHash, name, dirty}). Use it to detect ' +
+   126→   126→      'document changes instead of blind re-polling.',
+   127→   127→    tier: 'L0',
+   128→   128→    relay: true,
+   129→   129→    inputSchema: {},
+   130→   130→  },
+   131→   131→  {
+   132→   132→    name: 'get_operation_log',
+   133→   133→    title: 'Get MCP operation log',
+   134→   134→    description:
+   135→   135→      'Read the MCP audit log (server-side): which paired client called which tool, when, with hashed arguments, ' +
+   136→   136→      'the result code and duration. Newest first.',
+   137→   137→    tier: 'L0',
+   138→   138→    relay: false,
+   139→   139→    inputSchema: {
+   140→   140→      limit: z.number().int().min(1).max(200).optional().describe('Maximum entries. Default 20.'),
+   141→   141→    },
+   142→   142→  },
+   143→   143→
+   144→   144→  // ---------------------------------------------------------- L1 safe writes
+   145→   145→  {
+   146→   146→    name: 'create_project',
+   147→   147→    title: 'Create a new project',
+   148→   148→    description:
+   149→   149→      'Replace the active document with a NEW empty project (one clip, one frame). REJECTED with dirty_project ' +
+   150→   150→      'while the current project has unsaved changes — ask the user to save (Ctrl+S) first; work is never discarded.',
+   151→   151→    tier: 'L1',
+   152→   152→    relay: true,
+   153→   153→    inputSchema: {
+   154→   154→      name: z.string().trim().min(1).max(120).describe('Project name.'),
+   155→   155→      width: z.number().int().min(16).max(256).describe('Canvas width in pixels (16–256).'),
+   156→   156→      height: z.number().int().min(16).max(256).describe('Canvas height in pixels (16–256).'),
+   157→   157→      fps: z.number().int().min(1).max(60).optional().describe('Frames per second for the first clip. Default 8.'),
+   158→   158→      palette: z.array(hexColor).min(1).max(256).optional().describe('Initial palette. Default: the app palette.'),
+   159→   159→      ...staleGuard,
+   160→   160→    },
+   161→   161→  },
+   162→   162→  {
+   163→   163→    name: 'open_project',
+   164→   164→    title: 'Open a saved project',
+   165→   165→    description:
+   166→   166→      'Open a persisted project (from list_projects) and make it the active document. REJECTED with dirty_project ' +
+   167→   167→      'while the current project has unsaved changes — the user saves manually; nothing is discarded.',
+   168→   168→    tier: 'L1',
+   169→   169→    relay: true,
+   170→   170→    inputSchema: {
+   171→   171→      projectId: z.string().min(1).describe('Project row id from list_projects.'),
+   172→   172→      ...staleGuard,
+   173→   173→    },
+   174→   174→  },
+   175→   175→  {
+   176→   176→    name: 'add_frame',
+   177→   177→    title: 'Add frame',
+   178→   178→    description:
+   179→   179→      'Append a frame to a clip (or insert after afterIndex). Empty by default; copyContent duplicates the ' +
+   180→   180→      'pixels of the frame at afterIndex (the previous frame when omitted).',
+   181→   181→    tier: 'L1',
+   182→   182→    relay: true,
+   183→   183→    inputSchema: {
+   184→   184→      ...clipRef,
+   185→   185→      afterIndex: z.number().int().min(-1).max(4095).optional().describe('Insert after this frame index. Default: append at the end.'),
+   186→   186→      copyContent: z.boolean().optional().describe('Duplicate the referenced frame instead of adding an empty one.'),
+   187→   187→      ...staleGuard,
+   188→   188→    },
+   189→   189→  },
+   190→   190→  {
+   191→   191→    name: 'duplicate_frame',
+   192→   192→    title: 'Duplicate frame',
+   193→   193→    description: 'Insert an exact copy of a frame right after it (undoable, trash-free).',
+   194→   194→    tier: 'L1',
+   195→   195→    relay: true,
+   196→   196→    inputSchema: {
+   197→   197→      ...clipRef,
+   198→   198→      frameIndex: z.number().int().min(0).max(4095).optional().describe('Frame to duplicate. Default: the active frame.'),
+   199→   199→      ...staleGuard,
+   200→   200→    },
+   201→   201→  },
+   202→   202→  {
+   203→   203→    name: 'reorder_frames',
+   204→   204→    title: 'Reorder frames',
+   205→   205→    description: 'Move a frame from index `from` to index `to` within a clip.',
+   206→   206→    tier: 'L1',
+   207→   207→    relay: true,
+   208→   208→    inputSchema: {
+   209→   209→      ...clipRef,
+   210→   210→      from: z.number().int().min(0).max(4095).describe('Current frame index.'),
+   211→   211→      to: z.number().int().min(0).max(4095).describe('New frame index.'),
+   212→   212→      ...staleGuard,
+   213→   213→    },
+   214→   214→  },
+   215→   215→  {
+   216→   216→    name: 'delete_frame',
+   217→   217→    title: 'Delete frame',
+   218→   218→    description:
+   219→   219→      'Remove a frame from a clip. TRASH-BACKED: the frame goes to the project trash (recoverable via ' +
+   220→   220→      'restore_from_trash; undo also works). A clip always keeps at least one frame.',
+   221→   221→    tier: 'L1',
+   222→   222→    relay: true,
+   223→   223→    inputSchema: {
+   224→   224→      ...clipRef,
+   225→   225→      frameIndex: z.number().int().min(0).max(4095).optional().describe('Frame to delete. Default: the active frame.'),
+   226→   226→      ...staleGuard,
+   227→   227→    },
+   228→   228→  },
+   229→   229→  {
+   230→   230→    name: 'restore_from_trash',
+   231→   231→    title: 'Restore from trash',
+   232→   232→    description: 'Restore a previously deleted frame/layer/clip from the project trash (see trash entries in get_project_state).',
+   233→   233→    tier: 'L1',
+   234→   234→    relay: true,
+   235→   235→    inputSchema: {
+   236→   236→      entryId: z.string().min(1).describe('Trash entry id.'),
+   237→   237→      ...staleGuard,
+   238→   238→    },
+   239→   239→  },
+   240→   240→  {
+   241→   241→    name: 'set_pixels',
+   242→   242→    title: 'Set pixels',
+   243→   243→    description:
+   244→   244→      'Paint up to 2000 pixels in one undoable step. Each pixel is {x, y} with an optional per-pixel color; ' +
+   245→   245→      'the top-level color is the fallback. Coordinates outside the canvas are rejected per-pixel.',
+   246→   246→    tier: 'L1',
+   247→   247→    relay: true,
+   248→   248→    inputSchema: {
+   249→   249→      ...clipRef,
+   250→   250→      ...frameRef,
+   251→   251→      ...layerRef,
+   252→   252→      color: hexColor.optional().describe('Fallback color for pixels without their own color.'),
+   253→   253→      pixels: z
+   254→   254→        .array(z.object({ x: z.number().int(), y: z.number().int(), color: hexColor.optional() }))
+   255→   255→        .min(1)
+   256→   256→        .max(2000)
+   257→   257→        .describe('Pixels to paint (bounds-checked).'),
+   258→   258→      ...staleGuard,
+   259→   259→    },
+   260→   260→  },
+   261→   261→  {
+   262→   262→    name: 'fill_rect',
+   263→   263→    title: 'Fill rectangle',
+   264→   264→    description: 'Draw a filled (default) or outlined rectangle between two corner points, in one undoable step.',
+   265→   265→    tier: 'L1',
+   266→   266→    relay: true,
+   267→   267→    inputSchema: {
+   268→   268→      ...clipRef,
+   269→   269→      ...frameRef,
+   270→   270→      ...layerRef,
+   271→   271→      from: z.object({ x: z.number().int(), y: z.number().int() }).describe('First corner.'),
+   272→   272→      to: z.object({ x: z.number().int(), y: z.number().int() }).describe('Opposite corner.'),
+   273→   273→      color: hexColor.describe('Rectangle color.'),
+   274→   274→      filled: z.boolean().optional().describe('true (default) = filled; false = outline only.'),
+   275→   275→      ...staleGuard,
+   276→   276→    },
+   277→   277→  },
+   278→   278→  {
+   279→   279→    name: 'replace_color',
+   280→   280→    title: 'Replace color',
+   281→   281→    description:
+   282→   282→      'Replace every pixel of one color on the target cel with another color (exact match on RGBA). Undoable.',
+   283→   283→    tier: 'L1',
+   284→   284→    relay: true,
+   285→   285→    inputSchema: {
+   286→   286→      ...clipRef,
+   287→   287→      ...frameRef,
+   288→   288→      ...layerRef,
+   289→   289→      from: hexColor.describe('Color to find.'),
+   290→   290→      to: hexColor.describe('Replacement color.'),
+   291→   291→      ...staleGuard,
+   292→   292→    },
+   293→   293→  },
+   294→   294→  {
+   295→   295→    name: 'flip_frame',
+   296→   296→    title: 'Flip frame',
+   297→   297→    description: 'Mirror the target cel horizontally or vertically (optionally within a rect). Undoable.',
+   298→   298→    tier: 'L1',
+   299→   299→    relay: true,
+   300→   300→    inputSchema: {
+   301→   301→      ...clipRef,
+   302→   302→      ...frameRef,
+   303→   303→      ...layerRef,
+   304→   304→      axis: z.enum(['horizontal', 'vertical']).describe('Mirror axis.'),
+   305→   305→      rect: z.object({ x: z.number().int(), y: z.number().int(), w: z.number().int().min(1), h: z.number().int().min(1) })
+   306→   306→        .optional()
+   307→   307→        .describe('Restrict the flip to this region. Default: whole cel.'),
+   308→   308→      ...staleGuard,
+   309→   309→    },
+   310→   310→  },
+   311→   311→  {
+   312→   312→    name: 'rotate_frame',
+   313→   313→    title: 'Rotate frame',
+   314→   314→    description: 'Rotate the target cel 90° clockwise or counter-clockwise (optionally within a square rect). Undoable.',
+   315→   315→    tier: 'L1',
+   316→   316→    relay: true,
+   317→   317→    inputSchema: {
+   318→   318→      ...clipRef,
+   319→   319→      ...frameRef,
+   320→   320→      ...layerRef,
+   321→   321→      direction: z.enum(['cw', 'ccw']).describe('Rotation direction.'),
+   322→   322→      rect: z.object({ x: z.number().int(), y: z.number().int(), w: z.number().int().min(1), h: z.number().int().min(1) })
+   323→   323→        .optional()
+   324→   324→        .describe('Restrict the rotation to this region. Default: whole cel.'),
+   325→   325→      ...staleGuard,
+   326→   326→    },
+   327→   327→  },
+   328→   328→  {
+   329→   329→    name: 'shift_frame',
+   330→   330→    title: 'Shift frame',
+   331→   331→    description: 'Move the target cel content by dx/dy pixels (wraps nothing: vacated pixels become transparent). Undoable.',
+   332→   332→    tier: 'L1',
+   333→   333→    relay: true,
+   334→   334→    inputSchema: {
+   335→   335→      ...clipRef,
+   336→   336→      ...frameRef,
+   337→   337→      ...layerRef,
+   338→   338→      dx: z.number().int().min(-4096).max(4096).describe('Horizontal offset.'),
+   339→   339→      dy: z.number().int().min(-4096).max(4096).describe('Vertical offset.'),
+   340→   340→      ...staleGuard,
+   341→   341→    },
+   342→   342→  },
+   343→   343→  {
+   344→   344→    name: 'add_clip',
+   345→   345→    title: 'Add clip',
+   346→   346→    description: 'Create a new animation clip with 1..64 empty frames and its own layer stack.',
+   347→   347→    tier: 'L1',
+   348→   348→    relay: true,
+   349→   349→    inputSchema: {
+   350→   350→      name: z.string().trim().min(1).max(60).describe('Clip name (must be unique).'),
+   351→   351→      fps: z.number().int().min(1).max(60).optional().describe('Clip fps. Default 8.'),
+   352→   352→      frameCount: z.number().int().min(1).max(64).optional().describe('Number of empty frames to create. Default 1.'),
+   353→   353→      ...staleGuard,
+   354→   354→    },
+   355→   355→  },
+   356→   356→  {
+   357→   357→    name: 'set_clip_props',
+   358→   358→    title: 'Set clip properties',
+   359→   359→    description: 'Rename a clip or change its playback: fps (1–60), loop on/off, loop mode (forward/reverse/pingpong).',
+   360→   360→    tier: 'L1',
+   361→   361→    relay: true,
+   362→   362→    inputSchema: {
+   363→   363→      ...clipRef,
+   364→   364→      name: z.string().trim().min(1).max(120).optional(),
+   365→   365→      fps: z.number().int().min(1).max(60).optional(),
+   366→   366→      loop: z.boolean().optional().describe('false = play once through and stop.'),
+   367→   367→      loopMode: z.enum(['forward', 'reverse', 'pingpong']).optional(),
+   368→   368→      ...staleGuard,
+   369→   369→    },
+   370→   370→  },
+   371→   371→  {
+   372→   372→    name: 'delete_clip',
+   373→   373→    title: 'Delete clip',
+   374→   374→    description: 'Remove a clip. TRASH-BACKED (restore_from_trash / undo recover it). A project keeps at least one clip.',
+   375→   375→    tier: 'L1',
+   376→   376→    relay: true,
+   377→   377→    inputSchema: {
+   378→   378→      ...clipRef,
+   379→   379→      ...staleGuard,
+   380→   380→    },
+   381→   381→  },
+   382→   382→  {
+   383→   383→    name: 'add_layer',
+   384→   384→    title: 'Add layer',
+   385→   385→    description: 'Append an empty layer to the top of a clip\'s stack.',
+   386→   386→    tier: 'L1',
+   387→   387→    relay: true,
+   388→   388→    inputSchema: {
+   389→   389→      ...clipRef,
+   390→   390→      name: z.string().trim().min(1).max(120).optional().describe('Layer name. Default: "layer N".'),
+   391→   391→      ...staleGuard,
+   392→   392→    },
+   393→   393→  },
+   394→   394→  {
+   395→   395→    name: 'duplicate_layer',
+   396→   396→    title: 'Duplicate layer',
+   397→   397→    description: 'Copy a layer (including all its cels) and insert the copy directly above it.',
+   398→   398→    tier: 'L1',
+   399→   399→    relay: true,
+   400→   400→    inputSchema: {
+   401→   401→      ...clipRef,
+   402→   402→      ...layerRef,
+   403→   403→      ...staleGuard,
+   404→   404→    },
+   405→   405→  },
+   406→   406→  {
+   407→   407→    name: 'delete_layer',
+   408→   408→    title: 'Delete layer',
+   409→   409→    description: 'Remove a layer and its cels. TRASH-BACKED (restore_from_trash / undo recover it). A clip keeps at least one layer.',
+   410→   410→    tier: 'L1',
+   411→   411→    relay: true,
+   412→   412→    inputSchema: {
+   413→   413→      ...clipRef,
+   414→   414→      ...layerRef,
+   415→   415→      ...staleGuard,
+   416→   416→    },
+   417→   417→  },
+   418→   418→  {
+   419→   419→    name: 'set_layer_props',
+   420→   420→    title: 'Set layer properties',
+   421→   421→    description: 'Rename a layer, toggle visibility, or set opacity (0–1).',
+   422→   422→    tier: 'L1',
+   423→   423→    relay: true,
+   424→   424→    inputSchema: {
+   425→   425→      ...clipRef,
+   426→   426→      ...layerRef,
+   427→   427→      name: z.string().trim().min(1).max(120).optional(),
+   428→   428→      visible: z.boolean().optional(),
+   429→   429→      opacity: z.number().min(0).max(1).optional(),
+   430→   430→      ...staleGuard,
+   431→   431→    },
+   432→   432→  },
+   433→   433→  {
+   434→   434→    name: 'reorder_layers',
+   435→   435→    title: 'Reorder layers',
+   436→   436→    description: 'Move a layer one position up (towards top) or down (towards bottom) in the stack.',
+   437→   437→    tier: 'L1',
+   438→   438→    relay: true,
+   439→   439→    inputSchema: {
+   440→   440→      ...clipRef,
+   441→   441→      ...layerRef,
+   442→   442→      direction: z.enum(['up', 'down']).describe('up = towards the top of the stack, down = towards the bottom.'),
+   443→   443→      ...staleGuard,
+   444→   444→    },
+   445→   445→  },
+   446→   446→  {
+   447→   447→    name: 'merge_down',
+   448→   448→    title: 'Merge layer down',
+   449→   449→    description: 'Composite a layer onto the one below it and remove the top layer. Undoable (snapshot history).',
+   450→   450→    tier: 'L1',
+   451→   451→    relay: true,
+   452→   452→    inputSchema: {
+   453→   453→      ...clipRef,
+   454→   454→      ...layerRef,
+   455→   455→      ...staleGuard,
+   456→   456→    },
+   457→   457→  },
+   458→   458→  {
+   459→   459→    name: 'add_palette_color',
+   460→   460→    title: 'Add palette color',
+   461→   461→    description: 'Append a hex color to the project palette (no-op when already present).',
+   462→   462→    tier: 'L1',
+   463→   463→    relay: true,
+   464→   464→    inputSchema: {
+   465→   465→      hex: hexColor.describe('Color to add.'),
+   466→   466→      ...staleGuard,
+   467→   467→    },
+   468→   468→  },
+   469→   469→  {
+   470→   470→    name: 'set_palette',
+   471→   471→    title: 'Set palette',
+   472→   472→    description: 'Replace the whole project palette in one undoable step (1–256 colors).',
+   473→   473→    tier: 'L1',
+   474→   474→    relay: true,
+   475→   475→    inputSchema: {
+   476→   476→      colors: z.array(hexColor).min(1).max(256).describe('The new palette, bottom → top order.'),
+   477→   477→      ...staleGuard,
+   478→   478→    },
+   479→   479→  },
+   480→   480→  {
+   481→   481→    name: 'import_image_as_layer',
+   482→   482→    title: 'Import image as layer',
+   483→   483→    description:
+   484→   484→      'Decode a base64 PNG (≤ 2 MB) and import it as a NEW layer on the target frame. The image dimensions ' +
+   485→   485→      'must match the canvas exactly — resize externally first. The import is one undoable step and never ' +
+   486→   486→      'replaces existing layers.',
+   487→   487→    tier: 'L1',
+   488→   488→    relay: true,
+   489→   489→    inputSchema: {
+   490→   490→      ...clipRef,
+   491→   491→      ...frameRef,
+   492→   492→      name: z.string().trim().min(1).max(120).optional().describe('Name for the new layer.'),
+   493→   493→      pngBase64: z.string().min(8).max(2_800_000).describe('Base64-encoded PNG (raw base64 or a data URL).'),
+   494→   494→      ...staleGuard,
+   495→   495→    },
+   496→   496→  },
+   497→   497→
+   498→   498→  // ------------------------------------------------- AI candidates (Task 9)
+   499→   499→  {
+   500→   500→    name: 'get_candidates',
+   501→   501→    title: 'Get AI candidates',
+   502→   502→    description:
+   503→   503→      'List the AI sprite candidates in the review cache with full provenance (prompt, provider, model, seed, ' +
+   504→   504→      'duration, cost ESTIMATE) and a small normalized preview PNG. Paid generation itself is NOT exposed as a ' +
+   505→   505→      'tool — it stays in the editor UI until the Task 11 approval center (v3.1 §5.2 L3).',
+   506→   506→    tier: 'L0',
+   507→   507→    relay: true,
+   508→   508→    inputSchema: {
+   509→   509→      limit: z.number().int().min(1).max(8).optional().describe('Max candidates to return (default 8).'),
+   510→   510→      includeImages: z.boolean().optional().describe('Also include the ORIGINAL generated image data URL when small enough.'),
+   511→   511→    },
+   512→   512→  },
+   513→   513→  {
+   514→   514→    name: 'accept_candidate',
+   515→   515→    title: 'Accept AI candidate',
+   516→   516→    description:
+   517→   517→      'Accept an AI candidate from the review cache: import its NORMALIZED pixels as a NEW layer on the target ' +
+   518→   518→      'frame (mode "layer") or as a NEW frame in the target clip (mode "frame"). One undoable transaction — the ' +
+   519→   519→      "candidate never overwrites existing artwork. Read the candidates with get_candidates first.",
+   520→   520→    tier: 'L1',
+   521→   521→    relay: true,
+   522→   522→    inputSchema: {
+   523→   523→      candidateId: z.string().min(1).max(128).describe('Candidate id from get_candidates.'),
+   524→   524→      mode: z.enum(['layer', 'frame']).describe('Import as a new layer on the target frame, or as a new frame in the clip.'),
+   525→   525→      ...clipRef,
+   526→   526→      ...frameRef,
+   527→   527→      ...layerRef,
+   528→   528→      ...staleGuard,
+   529→   529→    },
+   530→   530→  },
+   531→   531→  {
+   532→   532→    name: 'reject_candidate',
+   533→   533→    title: 'Reject AI candidate',
+   534→   534→    description: 'Reject an AI candidate and remove it from the review cache. The document is untouched (not undoable — nothing changed).',
+   535→   535→    tier: 'L1',
+   536→   536→    relay: true,
+   537→   537→    inputSchema: {
+   538→   538→      candidateId: z.string().min(1).max(128).describe('Candidate id from get_candidates.'),
+   539→   539→    },
+   540→   540→  },
+   541→   541→  {
+   542→   542→    name: 'apply_normalize',
+   543→   543→    title: 'Apply normalize v2',
+   544→   544→    description:
+   545→   545→      'Re-run the deterministic normalize-v2 pipeline (trim → dominant-color downscale → despeckle → background ' +
+   546→   546→      'removal → OKLab quantize → fringe cleanup) on an AI candidate with adjusted parameters. Returns the new ' +
+   547→   547→      'preview PNG + pipeline stats. Deterministic: identical inputs always give identical output.',
+   548→   548→    tier: 'L1',
+   549→   549→    relay: true,
+   550→   550→    inputSchema: {
+   551→   551→      candidateId: z.string().min(1).max(128).describe('Candidate id from get_candidates.'),
+   552→   552→      width: z.number().int().min(8).max(512).optional().describe('Output width (default: canvas width).'),
+   553→   553→      height: z.number().int().min(8).max(512).optional().describe('Output height (default: canvas height).'),
+   554→   554→      removeBg: z.boolean().optional().describe('Flood background removal (default true).'),
+   555→   555→      bgTolerance: z.number().int().min(0).max(255).optional().describe('Background tolerance (default 48).'),
+   556→   556→      paletteMode: z.enum(['project', 'auto', 'off']).optional().describe('Palette strategy (default "auto" = median cut).'),
+   557→   557→      maxColors: z.number().int().min(2).max(64).optional().describe('Max colors for the auto palette (default 16).'),
+   558→   558→      outlineCleanup: z.boolean().optional().describe('Clear the AA fringe ring adjacent to transparency (default true).'),
+   559→   559→      palette: z.array(z.string()).max(256).optional().describe('Override palette (hex colors); default is the project palette.'),
+   560→   560→    },
+   561→   561→  },
+   562→   562→
+   563→   563→  {
+   564→   564→    name: 'suggest_motion_preset',
+   565→   565→    title: 'Suggest motion preset',
+   566→   566→    description:
+   567→   567→      'Propose a motion preset (Idle/Walk/Run/Attack/Jump) + parameters from a natural-language prompt. ' +
+   568→   568→      'Pure deterministic keyword helper — no model call, no cost, no document access (v3.1 §5.3 helper, L0).',
+   569→   569→    tier: 'L0',
+   570→   570→    relay: true,
+   571→   571→    inputSchema: {
+   572→   572→      prompt: z.string().min(1).max(500).describe('What the animation should do, e.g. "make the hero attack with a sword".'),
+   573→   573→    },
+   574→   574→  },
+   575→   575→  {
+   576→   576→    name: 'set_parts',
+   577→   577→    title: 'Set motion parts',
+   578→   578→    description:
+   579→   579→      'Tag body-part regions on a clip for the motion presets (v3.1 §4.1): each part is a named rectangle on a layer ' +
+   580→   580→      '(head, body, armL, armR, legL, legR, hair, custom). Parts are REGIONS, never cuts; a part without a rect spans ' +
+   581→   581→      'its whole layer; overlapping pixels are owned by the highest-z part (warned, never blocked). Replaces the clip\'s ' +
+   582→   582→      'whole parts array in ONE undoable step.',
+   583→   583→    tier: 'L1',
+   584→   584→    relay: true,
+   585→   585→    inputSchema: {
+   586→   586→      parts: z
+   587→   587→        .array(
+   588→   588→          z.object({
+   589→   589→            name: z.string().min(1).max(40).describe('Part name = motion role key, e.g. "body", "head", "armL" (case-insensitive, unique).'),
+   590→   590→            layerId: z.string().min(1).optional().describe('Layer id for this part (from get_clip). Defaults to the active layer.'),
+   591→   591→            layerName: z.string().min(1).max(120).optional().describe('Layer by exact name (used when layerId is omitted).'),
+   592→   592→            rect: z
+   593→   593→              .object({
+   594→   594→                x: z.number().int().min(0).max(4095),
+   595→   595→                y: z.number().int().min(0).max(4095),
+   596→   596→                w: z.number().int().min(1).max(4096),
+   597→   597→                h: z.number().int().min(1).max(4096),
+   598→   598→              })
+   599→   599→              .optional()
+   600→   600→              .describe('Region rectangle in canvas pixels (must be inside the canvas). Omit for whole-layer parts.'),
+   601→   601→            anchorFrameIndex: z.number().int().min(0).max(4095).optional().describe('Reference frame index (0-based; default frame 1).'),
+   602→   602→            z: z.number().int().min(-99).max(99).optional().describe('Paint order override; higher z owns overlaps. Default = array index.'),
+   603→   603→          })
+   604→   604→        )
+   605→   605→        .min(0)
+   606→   606→        .max(32)
+   607→   607→        .describe('The complete parts array for the clip (empty array clears all parts).'),
+   608→   608→      ...clipRef,
+   609→   609→      ...staleGuard,
+   610→   610→    },
+   611→   611→  },
+   612→   612→  {
+   613→   613→    name: 'apply_motion_preset',
+   614→   614→    title: 'Apply motion preset',
+   615→   615→    description:
+   616→   616→      'Apply a deterministic motion preset (v3.1 §4.1.1): idle/walk/run/attack/jump curves mapped per tagged part, ' +
+   617→   617→      'integer-pixel offsets, alpha ≥128 binary rule, anchor-frame alignment, ampScale = clipHeight/32. Commits ATOMICALLY ' +
+   618→   618→      'as one undoable command — to a NEW clip (sized exactly to the preset) or, with overwrite:true, to the target clip\'s ' +
+   619→   619→      'frames 0..n−1 (extra frames untouched, missing frames become holds). Absent parts are skipped per role and listed ' +
+   620→   620→      'in the report (C27). Returns the apply report, QA issues and a frame-1 preview PNG. $0 — no AI involved.',
+   621→   621→    tier: 'L1',
+   622→   622→    relay: true,
+   623→   623→    inputSchema: {
+   624→   624→      preset: z.enum(['idle', 'walk', 'run', 'attack', 'jump']).describe('Motion preset id.'),
+   625→   625→      sourceClipId: z.string().min(1).optional().describe('Clip providing parts + anchor frame (default: active clip).'),
+   626→   626→      sourceClipName: z.string().min(1).max(60).optional().describe('Source clip by exact name (used when sourceClipId is omitted).'),
+   627→   627→      amplitude: z.number().min(0.25).max(3).optional().describe('Curve intensity multiplier before R10 canvas scaling (default 1).'),
+   628→   628→      frameCount: z.number().int().min(1).max(64).optional().describe('Frame count (preset-bounded: idle 4 · walk 4/6/8 · run 6 · attack 4–6 · jump 4–8).'),
+   629→   629→      gapFill: z.enum(['none', 'edge-extend']).optional().describe('Vacated-pixel handling (R4; default "edge-extend" = seam holes refilled; "none" = honest transparent gaps).'),
+   630→   630→      smear: z.boolean().optional().describe('attack only: add the 1-px smear trail on the swing frame.'),
+   631→   631→      anchorFrameIndex: z.number().int().min(0).max(4095).optional().describe('Anchor frame index (0-based; default 0 = frame 1, R5).'),
+   632→   632→      overwrite: z.boolean().optional().describe('true = overwrite the target clip frames (requires targetClipId, defaults to the source clip). Omit = create a NEW clip.'),
+   633→   633→      targetClipId: z.string().min(1).optional().describe('Existing target clip id when overwrite:true (default: the source clip).'),
+   634→   634→      targetName: z.string().min(1).max(120).optional().describe('Name for the new clip (default "<preset>-<n>").'),
+   635→   635→      ...staleGuard,
+   636→   636→    },
+   637→   637→  },
+   638→   638→
+   639→   639→  {
+   640→   640→    name: 'undo',
+   641→   641→    title: 'Undo',
+   642→   642→    description: 'Undo the most recent document change (manual or agent-made — one shared history).',
+   643→   643→    tier: 'L1',
+   644→   644→    relay: true,
+   645→   645→    inputSchema: {},
+   646→   646→  },
+   647→   647→  {
+   648→   648→    name: 'redo',
+   649→   649→    title: 'Redo',
+   650→   650→    description: 'Redo the most recently undone change.',
+   651→   651→    tier: 'L1',
+   652→   652→    relay: true,
+   653→   653→    inputSchema: {},
+   654→   654→  },
+   655→   655→
+   656→   656→  // --------------------------------------------------------------- pairing
+   657→   657→  {
+   658→   658→    name: 'pair_client',
+   659→   659→    title: 'Pair this client',
+   660→   660→    description:
+   661→   661→      'Exchange a one-time 6-word pairing code (Bearer) for a persistent client token. ' +
+   662→   662→      'Pass a friendly client name; the user chose your permission tier when generating the code. ' +
+   663→   663→      'STORE the returned token safely — it is shown once and grants your tier until revoked.',
+   664→   664→    tier: 'L0',
+   665→   665→    relay: false,
+   666→   666→    inputSchema: {
+   667→   667→      name: z.string().trim().min(1).max(60).describe('Display name for this client (shown to the user).'),
+   668→   668→    },
+   669→   669→  },
+   670→   670→];
+   671→   671→
+   672→   672→/** Tools the pairing-token identity may call before it becomes a client. */
+   673→   673→export const PAIRING_ALLOWED_TOOLS = new Set(['pair_client']);
+   674→   674→

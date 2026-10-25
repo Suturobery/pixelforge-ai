@@ -20,9 +20,12 @@
  *                     stays bit-identical (R9) and is flagged by QA instead.
  *  R4  bounds/gaps  — integer offsets; targets outside the canvas are
  *                     dropped (no wrap). Vacated pixels: gapFill 'none'
- *                     leaves them transparent; 'edge-extend' repeats the
- *                     trailing boundary pixels until the hole is closed
- *                     (C26 — fills 1–3 px strips at reference amplitudes).
+ *                     leaves them transparent; 'edge-extend' (the default
+ *                     since the Phase-1 Task 10 QA correction — with 'none'
+ *                     bob/lean/squash frames opened visible seam holes and
+ *                     detached limbs) repeats the trailing boundary pixels
+ *                     until the hole is closed (C26 — fills 1–3 px strips at
+ *                     reference amplitudes).
  *  R5  alignment    — every frame derives from ONE anchor frame (default
  *                     frame 1 = index 0); the same absolute regions and
  *                     per-frame offsets are used for every output frame.

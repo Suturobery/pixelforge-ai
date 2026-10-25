@@ -11,6 +11,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   createProject,
+  MOTION_PARAMS_DEFAULTS,
   MOTION_PRESETS,
   planMotion,
   scaledOffset,
@@ -168,9 +169,11 @@ describe('R1/R2 overlap z-order', () => {
       part('body', w.layerId, { x: 8, y: 6, w: 16, h: 14 }, 0, w.frameId),
       part('armL', w.layerId, { x: 10, y: 10, w: 6, h: 6 }, 1, w.frameId),
     ];
-    const p = plan(w, 'walk');
+    // gapFill pinned to 'none': this suite tests z-order ownership, not gap
+    // fill (default is 'edge-extend' since the Phase-1 QA correction — see
+    // 'Phase-1 Task 10 QA' describe below).
+    const p = plan(w, 'walk', { gapFill: 'none' });
     const f0 = p.frames[0].cels[w.layerId];
-    // armL walk frame 0: dx −3, dy 0 → red lands at (9,12)
     expect(px(f0, 32, 9, 12)).toEqual([255, 0, 0, 255]);
     expect(px(f0, 32, 12, 12)[3]).toBe(0); // cut, no residue, body did NOT move it
     // body bob frame 0: dy 0 → greens untouched
@@ -213,7 +216,9 @@ describe('R3 transparency threshold', () => {
       paintRect(buf, s, { x: 30, y: 30, w: 1, h: 1 }, SEMI); // OUTSIDE the part rect
     });
     w.clip.parts = [part('body', w.layerId, { x: 0, y: 0, w: 16, h: 16 }, 0, w.frameId)];
-    const p = plan(w, 'idle');
+    // gapFill 'none' pinned: alpha semantics, not gap fill (default is
+    // 'edge-extend' since the Phase-1 QA correction — see Phase-1 suite)
+    const p = plan(w, 'idle', { gapFill: 'none' });
     const f1 = p.frames[1].cels[w.layerId]; // dy −1
     expect(px(f1, 32, 4, 3)).toEqual([10, 20, 30, 255]); // moved + binary
     expect(px(f1, 32, 4, 4)[3]).toBe(0); // old spot cleared
@@ -380,8 +385,10 @@ describe('preset-specific semantics', () => {
   test('attack: armL arc raise→wind-up→swing→recover; smear adds a 1px trail on the swing frame', () => {
     const w = withCel(world(32, 32), (buf, s) => paintRect(buf, s, { x: 12, y: 12, w: 4, h: 4 }, RED));
     w.clip.parts = [part('armL', w.layerId, { x: 12, y: 12, w: 4, h: 4 }, 0, w.frameId)];
-    const plain = plan(w, 'attack', { smear: false });
-    const smeared = plan(w, 'attack', { smear: true });
+    // gapFill 'none' pinned: the smear trail must come from smear alone, not
+    // gap fill (default is 'edge-extend' since the Phase-1 QA correction)
+    const plain = plan(w, 'attack', { smear: false, gapFill: 'none' });
+    const smeared = plan(w, 'attack', { smear: true, gapFill: 'none' });
     // swing frame (index 2): dx +2, dy +1 → block at cols 14–17, rows 13–16
     const f2 = plain.frames[2].cels[w.layerId];
     expect(px(f2, 32, 14, 13)).toEqual([255, 0, 0, 255]);
@@ -398,7 +405,9 @@ describe('preset-specific semantics', () => {
   test('jump: preparation squash drops top rows ground-anchored; apex rises 4px; landing mirrors prep', () => {
     const w = withCel(world(32, 32), (buf, s) => paintRect(buf, s, { x: 10, y: 10, w: 12, h: 12 }, RED));
     w.clip.parts = [part('body', w.layerId, { x: 10, y: 10, w: 12, h: 12 }, 0, w.frameId)];
-    const p = plan(w, 'jump');
+    // gapFill 'none' pinned: squash geometry, not gap fill (default is
+    // 'edge-extend' since the Phase-1 QA correction — see Phase-1 suite)
+    const p = plan(w, 'jump', { gapFill: 'none' });
     expect(p.frames.length).toBe(6);
     const f0 = p.frames[0].cels[w.layerId]; // dy +1, squash 2 → rows 10–14 empty, block at 15–24 (12−2=10 rows)
     expect(px(f0, 32, 10, 10)[3]).toBe(0);
@@ -421,6 +430,73 @@ describe('preset-specific semantics', () => {
     expect(p.frames.length).toBe(4);
     const apex = p.frames[1].cels[w.layerId]; // canonical pose 2 (dy −4)
     expect(px(apex, 32, 10, 6)).toEqual([255, 0, 0, 255]);
+  });
+
+  // -- Phase-1 Task 10 QA (worklog phase1-1): default gapFill correction -----
+  //
+  // Visual audit (artifacts/task10-core, 34 compositions, 16/32/64 × side/
+  // front) confirmed that with gapFill 'none' every bob/lean/squash frame
+  // opened 1–3px transparent holes at part seams (hair↔face on idle lag and
+  // run lean, a 2px torso gap detaching the far arm on walk dx −3, and a 3px
+  // band through the head on jump squash). The default is now 'edge-extend'
+  // (R4/C26); 'none' stays available and is pinned in the semantics suites
+  // above so z-order / alpha / smear / squash tests stay isolated from fill.
+  describe('Phase-1 Task 10 QA: default gapFill = edge-extend', () => {
+    test('MOTION_PARAMS_DEFAULTS.gapFill is edge-extend (justified golden update)', () => {
+      expect(MOTION_PARAMS_DEFAULTS.gapFill).toBe('edge-extend');
+    });
+
+    test('idle hair-lag: no transparent seam opens between hair and face (default params)', () => {
+      const w = withCel(world(32, 32), (buf, s) => {
+        paintRect(buf, s, { x: 10, y: 4, w: 12, h: 4 }, GREEN); // hair rows 4–7
+        paintRect(buf, s, { x: 11, y: 8, w: 10, h: 4 }, RED); // head rows 8–11
+      });
+      w.clip.parts = [
+        part('head', w.layerId, { x: 11, y: 8, w: 10, h: 4 }, 0, w.frameId),
+        part('hair', w.layerId, { x: 10, y: 4, w: 12, h: 4 }, 1, w.frameId),
+      ];
+      // frame 2: head/body dy −2, hair dy −1 → with 'none' rows 10–11 were a
+      // transparent band splitting the face from the hair
+      const def = plan(w, 'idle');
+      const f2 = def.frames[2].cels[w.layerId];
+      expect(px(f2, 32, 12, 7)[3]).toBe(255); // hair vacated row refilled
+      expect(px(f2, 32, 12, 10)[3]).toBe(255); // head vacated rows refilled
+      expect(px(f2, 32, 12, 11)[3]).toBe(255);
+      // explicit 'none' keeps the honest-gap behavior (contrast guard)
+      const none = plan(w, 'idle', { gapFill: 'none' });
+      const n2 = none.frames[2].cels[w.layerId];
+      expect(px(n2, 32, 12, 10)[3]).toBe(0); // head vacated rows stay transparent
+    });
+
+    test('walk far-arm dx −3: vacated columns refill — arm stays attached to the torso', () => {
+      const w = withCel(world(32, 32), (buf, s) => {
+        paintRect(buf, s, { x: 12, y: 12, w: 8, h: 8 }, GREEN); // body x12–19
+        paintRect(buf, s, { x: 9, y: 12, w: 3, h: 8 }, RED); // armL x9–11
+      });
+      w.clip.parts = [
+        part('body', w.layerId, { x: 12, y: 12, w: 8, h: 8 }, 0, w.frameId),
+        part('armL', w.layerId, { x: 9, y: 12, w: 3, h: 8 }, 1, w.frameId),
+      ];
+      // frame 0: armL dx −3 → pasted x6–8; with 'none' x9–11 was a 3px gap
+      const def = plan(w, 'walk');
+      const f0 = def.frames[0].cels[w.layerId];
+      expect(px(f0, 32, 9, 14)[3]).toBe(255); // refilled from trailing edge
+      expect(px(f0, 32, 11, 14)[3]).toBe(255);
+      const none = plan(w, 'walk', { gapFill: 'none' });
+      const n0 = none.frames[0].cels[w.layerId];
+      expect(px(n0, 32, 10, 14)[3]).toBe(0); // honest gap (arm detached) preserved
+    });
+
+    test('jump squash: the dropped-top band refills — head no longer splits (default params)', () => {
+      const w = withCel(world(32, 32), (buf, s) => paintRect(buf, s, { x: 10, y: 10, w: 12, h: 12 }, RED));
+      w.clip.parts = [part('body', w.layerId, { x: 10, y: 10, w: 12, h: 12 }, 0, w.frameId)];
+      const p = plan(w, 'jump');
+      const f0 = p.frames[0].cels[w.layerId]; // dy +1, squash 2
+      // squash drops the top 2 owned rows and pastes lower; edge-extend
+      // marches up from the pasted top row to close the vacated band
+      expect(px(f0, 32, 12, 13)[3]).toBe(255); // band refilled above the paste
+      expect(px(f0, 32, 12, 15)).toEqual([255, 0, 0, 255]); // ground-anchored paste intact
+    });
   });
 
   test('run: walk amplitude ×1.5 (dx ±3 → ±5), forward lean +1, body arc', () => {

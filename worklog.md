@@ -126,3 +126,69 @@ Stage Summary:
 - Recovery is substantially COMPLETE and verified: all P0 + Task 9 + Task 10 code and tests are present; 317 core + 46 desktop tests pass clean on the recovered source
 - Gaps are infrastructure-only (CI workflow/scripts missing from copy, two dependency trees uninstalled, v3.1 plan md lost) — no feature code lost beyond the two dead Motion Lab files
 - No code modified during this audit (read-only + this worklog entry); awaiting user approval for the recommended restore/install/backup actions
+
+---
+Task ID: aimcp-fix-1
+Agent: Z.ai Code (main)
+Task: User: "from the setting fix if theres a error or missing or bugs from the AI and MCP" — audit Settings AI + MCP surfaces, find and fix errors/missing pieces/bugs
+
+Work Log:
+- Audited Settings UI (settings-dialog.tsx, mcp-settings.tsx), libs (settings.ts, mcp-bridge.ts, api-guard.ts, api-error.ts), and api routes; confirmed /api/mcp/{run,tools,ops} are INTENTIONAL 410 retirements (not bugs)
+- BUG #1 (missing endpoint): ProviderCard "Test connection" POSTs /api/ai/test — route did not exist → every test 404ed. FIXED: created src/app/api/ai/test/route.ts — free probes only (zai → SDK session create, no remote call; openai/custom → GET {base}/models Bearer; anthropic → GET {base}/models x-api-key + anthropic-version), guardStateChange tripwire, structured {code,message,hint} errors for describeApiErrorInline, 8s timeout, keys never logged/echoed
+- BUG #2 (lost init): initMcpBridge() was defined but NEVER called anywhere (lost in the restore-era page.tsx rebuild) → editor link permanently "disconnected", pairing button dead, MCP clients would get editor_not_connected. FIXED: page.tsx mount effect now calls initMcpBridge() + hydrateDesktopSettings() + startDesktopSettingsSync() (web-safe no-ops for the desktop pair)
+- BUG #3 (env): mini-services/mcp-server deps never installed + service not running. FIXED: bun install --frozen-lockfile (96 pkgs) + booted as background mini-service (bun --hot, 127.0.0.1:3030, data dir db/)
+- VERIFIED contract baseline: mcp-server bun test → 28 pass / 0 fail (matches historical 28/28); bunx tsc -p tsconfig.json clean
+- VERIFIED new endpoint (curl): 403 MISSING_AGENT_HEADER without tripwire header; zai → {"ok":true,"note":"Built-in Z.AI engine ready"}; unreachable custom → NETWORK_ERROR with hint; bad kind → BAD_REQUEST
+- Browser E2E (agent-browser 1440×900, artifacts/aimcp-1/): bridge status "connected" via window.__pfMcp probe; Settings → MCP tab: "editor link: connected", server "accepting tools"; Generate pairing code → real 6-word code "mustard-mirage-gravel-kayak-plateau-yodel" + 15:00 countdown → Cancel returns UI to generate state; live tool execution window.__pfMcp.executeMcpTool('get_project_state') returned the REAL editor state (32×32, palette, clips) — full renderer→bridge→CommandBus chain alive
+- Browser E2E AI tab: Z.AI "Test connection" → "✓ Built-in Z.AI engine ready · 4 ms"; Custom endpoint (no server) → red "✗ Could not reach http://localhost:11434/v1 — fetch failed" (was a raw 404 crash before); verified Z.AI card shows "engine" badge and other providers' Use correctly gated on keys; cleared dummy test key from the E2E browser profile
+- Regression gates: tsc src 0 errors, bun run lint PASS, packages/core 317/0 fail, page console + page errors ZERO, dev.log tail clean (the historical "palette.replaceAll already registered" Fast Refresh lines are from the prior session, pre-fix)
+- Evidence: artifacts/aimcp-1/{mcp-pairing-code.png, mcp-pairing-generated.png, ai-zai-test-ok.png, ai-custom-test-error.png}
+
+Stage Summary:
+- Settings AI + MCP are now fully functional: provider connection testing works for all dialects, MCP editor link connects, pairing generates/cancels, and the real MCP tool executor runs against the live CommandBus
+- MCP contract baseline restored to verifiable state (28/28); zero regressions in core/tests/lint/browser
+- Remaining (not bugs, next-step options): restore missing CI files from snapshot, npm ci for desktop, Task 10 motion visual audit, Task 11 approval center (generate_sprite stays unregistered)
+
+---
+Task ID: phase0-1
+Agent: Z.ai Code (main)
+Task: PHASE 0 — Recovery Protection & Baseline Verification (user authorized full P1 roadmap Phase 0–7)
+
+Work Log:
+- Git: main, tree CLEAN, 13 commits (4 automated UUID commits post-audit: artifacts + aimcp-fix-1 src/page.tsx wiring + palette.replaceAll builtin); tag pre-phase0-baseline created; still NO remote
+- DURABLE BACKUP: /home/z/backup-pixelforge/pre-phase0 (83 MB, rsync full tree minus node_modules/.next/.git) — outside /tmp, survives snapshot cleanup
+- Data: db/custom.db intact — 3 user projects (2 original + 1 from aimcp E2E session); .env untouched; zero destructive ops
+- Restored 5 missing CI files byte-identical from /tmp snapshot (cmp-verified): .github/workflows/ci.yml, scripts/{ci-local.sh,smoke-stack.sh,seed-sample.ts,bench-open.ts}
+- Restored 12 missing root package.json scripts per docs/development.md: core:test/core:typecheck/core:test:typecheck, desktop:test/desktop:typecheck/desktop:dev, mcp:test/mcp:typecheck/mcp:dev, seed:sample, bench:open, ci:local, ci:smoke
+- Plan: PixelForge_AI_Project_Plan_v3.1.md confirmed LOST everywhere; extracted original authoritative plan from upload docx → docs/PixelForge_AI_Project_Plan_extracted.md (299 lines, provenance header, verbatim); this roadmap message = P1 task spec
+- Deps: apps/desktop npm ci OK (21 pkgs, lockfile-frozen); mcp-server deps already installed from aimcp-fix-1; MCP service healthy :3030
+- TESTS ALL GREEN: core 317/317 (73,701 expect), desktop 46/46, MCP contract 28/28, all 4 typecheck gates exit 0, lint exit 0, bun run ci:local → LOCAL-CI-OK (8/8 checks)
+- Runtime (agent-browser 1440×900, artifacts/phase0/studio-baseline.png): studio renders dark theme, AI panel (prompt/size/candidates/seed/engine badge), NORMALIZE V2 PIPELINE (bg removal/tolerance/palette/outline), Layers+AI+Agent tabs, timeline+preview; MCP bridge probe OK; page console errors = 0; motion presets confirmed in src/lib/pixelforge/presets.ts (5 × V1/V2 × side/front)
+
+Stage Summary:
+- Baseline restored & verified: every historical suite passes on the recovered source with restored infra; backup + tag protect the working state
+- AI & MCP from prior authorization already fixed (aimcp-fix-1: /api/ai/test route, bridge init wiring, contract 28/28)
+- Ready for Phase 1 (Task 10 Motion Accuracy) with R1–R10 behavior as the preserved spec
+
+---
+Task ID: phase1-1
+Agent: Z.ai Code (main)
+Task: PHASE 1 — Task 10 QA Motion Accuracy: visual audit of all 5 presets, defect correction, QA reporting improvements, MotionPanel mount, timeline QA highlighting
+
+Work Log:
+- NEW HARNESS: scripts/motion-audit-core.ts drives the AUTHORITATIVE core composer (planMotion — same code path as panel/CommandBus/MCP) with deterministic humanoid fixtures (side+front × 16/32/64, 7 z-ordered rect parts) → artifacts/task10-core/: 34 compositions (sheets ×4/×8 scale, GIFs, report.json) + planted-foot/slide/seam metrics
+- AUDIT FINDINGS (visual, confirmed): D1 1–3px transparency holes at part seams (idle hair-lag row 7 hole, run lean column gap, walk dy+1 body seam) · D2 detached far arm (walk dx−3 opens 2–3px gap from torso) · D3 jump squash frames show a 3px transparent band through the head (hollow-ring look) · D4 walk6/8 + run frames lift BOTH feet (curve-table gait; run flight = normal) · D5 planted feet slide 2–7px (R1 translation-only model) · D6 'overlap' QA warned on every adjacent-part rig (noise)
+- FIX (justified correction, spec-internal R4/C26): MOTION_PARAMS_DEFAULTS.gapFill 'none' → 'edge-extend' (composer vacated-pixel refill) + resolveParams fallback + suggest.ts + MCP catalog description + composer header + panel labels ("edge-extend (recommended)" / "none (leave gaps)"). Heals D1/D2/D3; 'none' stays selectable
+- GOLDEN DISCIPLINE: 4 tests that pinned vacated-pixel transparency (z-order/alpha/smear/squash semantics) now pass explicit gapFill:'none' (intent-isolated); 4 NEW golden guards added ("Phase-1 Task 10 QA: default gapFill = edge-extend" — default assertion + idle seam refill + walk arm attachment + jump squash band refill, each with a 'none' contrast check). No fixture silently regenerated
+- NEW QA in core (deterministic, analytic — no pixel scanning): footContactIssues() in packages/core/src/motion/qa.ts → foot_slide (info; planted-leg horizontal shift, R1 consequence, frames listed) + both_feet_lift (walk6/8 = warning "subtle hop"; run = info "flight phase normal"); overlap demoted warning→info (R2 z-ownership is designed behavior, message unchanged); footContactIssues exported from core index
+- MOTIONPANEL MOUNTED (was recovered-but-unmounted, 755 lines): RightTab +'motion' (store), RIGHT_TABS entry (PersonStanding icon), page.tsx renders <MotionPanel/> — part tagging feedback (color-coded chips + rect overlay), anchor selector (R5), preset picker, params incl. gapFill default, QA issue list, skipped-roles C27 note, Accept/Discard
+- TIMELINE QA HIGHLIGHTING (net-new): store motionPreviewIssues + setMotionPreviewIssues; MotionPanel mirrors plan issues live (cleared on accept/unmount); timeline.tsx computes committed-clip QA (analyzeClipMotion when clip.parts>0, memoized) UNION preview issues → per-frame badges: amber TriangleAlert (warnings) / dim dot (info) + tooltip listing codes+messages; verified badge aria-label "Frame 1 motion QA: foot_slide"
+- Browser E2E (artifacts/phase1/): motion-tab.png (panel mounted, edge-extend default), sprite-drawn → set_parts via MCP (4 parts, overlap report "3 overlaps — highest z owns") → walk preview (walk-qa-list2.png: QA list with foot_slide frames 1,3 + skipped roles armL/armR) → timeline badge confirmed → Accept → walk-1 clip 4 frames (walk-clip-frames.png) → undo removed it, redo restored → Save → reload → Open → walk-1 + parts restored. 0 console errors
+- Post-fix audit re-run: FLOATING only on run (flight, correct) + walk6/8 (now user-visible via both_feet_lift warning); front-32 attack6 flicker flag GONE; all seam metrics healed
+- Gates: core 326/326 (+9 vs 317 baseline: 4 gapFill guards + 5 gait QA), desktop 46/46, MCP contract 28/28, lint 0, all 4 typechecks 0; MCP tools-catalog gapFill description updated (contract still green)
+
+Stage Summary:
+- All five presets pass deterministic regression tests (326/326); visual QA documented for 16/32/64 × side/front; confirmed hole/detachment/squash defects CORRECTED at the composer level with regression guards; spec-inherent gait characteristics (foot slide, walk6/8 double-lift, run flight) now REPORTED in panel + timeline + MCP payloads as "requires manual editing"
+- R1–R10 behavior preserved — the only math-adjacent change is the default gapFill mode (an R4 option already spec'd by C26), documented in code + worklog
+- Undo/redo, MCP motion tools (set_parts live), persistence (save/reload/open round-trip), source-sprite non-mutation (golden-tested) all verified
+- Artifacts: artifacts/task10-core/ (34 sheets + GIFs + report.json), artifacts/phase1/ (7 E2E screenshots)

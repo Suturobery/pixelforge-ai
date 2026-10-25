@@ -11,11 +11,12 @@
 
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useEditor, getActiveClip } from '@/lib/pixelforge/store'
 import { useAppSettings } from '@/lib/pixelforge/settings'
 import { editorPlayback } from '@/lib/pixelforge/playback-controller'
 import { renderFrameScaled } from '@/lib/pixelforge/render'
+import { analyzeClipMotion, type QAIssue } from '@pixelforge/core'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -37,6 +38,7 @@ import {
   Plus,
   Copy,
   Trash2,
+  TriangleAlert,
   ArrowLeft,
   ArrowRight,
   Ghost,
@@ -74,6 +76,7 @@ function FrameThumb({
   index,
   active,
   dropBefore,
+  qaNotes,
   w,
   h,
   tick,
@@ -89,6 +92,8 @@ function FrameThumb({
   index: number
   active: boolean
   dropBefore: boolean
+  /** Phase-1 Task 10 QA: issues scoped to this frame (may be undefined). */
+  qaNotes?: QAIssue[]
   w: number
   h: number
   tick: number
@@ -108,6 +113,9 @@ function FrameThumb({
     renderFrameScaled(canvas, clip, frame, w, h)
   }, [clip, frame, w, h, tick])
   const ms = frame.durationMs
+  const qaWarnings = qaNotes?.filter((n) => n.level === 'warning') ?? []
+  const qaInfos = qaNotes?.filter((n) => n.level === 'info') ?? []
+  const hasQaNotes = (qaNotes?.length ?? 0) > 0
   return (
     <div
       className={`relative shrink-0 ${dropBefore ? 'before:absolute before:inset-y-0 before:-left-1.5 before:z-10 before:w-1 before:rounded-full before:bg-teal-400' : ''}`}
@@ -137,6 +145,33 @@ function FrameThumb({
       >
         <canvas ref={ref} width={56} height={56} className="pixelforge-checker h-11 w-11 rounded-sm sm:h-14 sm:w-14" aria-hidden />
         <span className="absolute bottom-0.5 right-1 font-mono text-[9px] text-zinc-400">{index + 1}</span>
+        {hasQaNotes && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span
+                className={`absolute -top-1.5 -left-0.5 flex h-4 w-4 items-center justify-center rounded-full border leading-none ${
+                  qaWarnings.length > 0
+                    ? 'border-amber-500/60 bg-amber-500/20 text-amber-300'
+                    : 'border-zinc-600 bg-zinc-800 text-zinc-400'
+                }`}
+                aria-label={`Frame ${index + 1} motion QA: ${qaNotes!.map((n) => n.code).join(', ')}`}
+              >
+                {qaWarnings.length > 0 ? (
+                  <TriangleAlert className="h-2.5 w-2.5" aria-hidden />
+                ) : (
+                  <span className="h-1.5 w-1.5 rounded-full bg-current" aria-hidden />
+                )}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="max-w-64 space-y-1 p-2">
+              {qaNotes!.map((n, k) => (
+                <p key={k} className={`font-mono text-[10px] leading-snug ${n.level === 'warning' ? 'text-amber-300' : 'text-zinc-400'}`}>
+                  <span className="uppercase">{n.code}</span> — {n.message}
+                </p>
+              ))}
+            </TooltipContent>
+          </Tooltip>
+        )}
       </button>
       {/* duration badge → popover editor (Task 6 §2) */}
       <Popover open={durOpen} onOpenChange={setDurOpen}>
@@ -475,6 +510,28 @@ export function Timeline() {
   const clip = getActiveClip(useEditor.getState())
   const frameIndex = Math.min(activeFrameIndex, clip.frames.length - 1)
 
+  // -- Phase-1 Task 10 QA: per-frame issue badges ---------------------------
+  // (a) committed-clip QA (flicker / loop / artifacts — only meaningful when
+  //     the clip carries motion parts) + (b) live plan-preview issues
+  //     mirrored from the Motion Composer panel (foot contact, overlaps…).
+  const motionPreviewIssues = useEditor((s) => s.motionPreviewIssues)
+  const clipQaIssues = useMemo(
+    () => (clip.parts.length > 0 ? analyzeClipMotion(project, clip) : []),
+    [project, clip]
+  )
+  const qaByFrame = useMemo(() => {
+    const m = new Map<number, QAIssue[]>()
+    for (const issue of [...clipQaIssues, ...(motionPreviewIssues ?? [])]) {
+      for (const fi of issue.frameIndexes ?? []) {
+        if (fi < 0 || fi >= clip.frames.length) continue
+        const list = m.get(fi)
+        if (list) list.push(issue)
+        else m.set(fi, [issue])
+      }
+    }
+    return m
+  }, [clipQaIssues, motionPreviewIssues, clip.frames.length])
+
   // keep the active thumb visible while playing / scrubbing
   useEffect(() => {
     const strip = stripRef.current
@@ -778,6 +835,7 @@ export function Timeline() {
                     index={i}
                     active={i === frameIndex}
                     dropBefore={dropTarget === i && dragFromRef.current !== i}
+                    qaNotes={qaByFrame.get(i)}
                     w={project.width}
                     h={project.height}
                     tick={renderTick}

@@ -79,7 +79,9 @@ describe('analyzeMotionPlan', () => {
     const issues = analyzeMotionPlan(project, clip, p);
     const overlap = issues.find((i) => i.code === 'overlap');
     expect(overlap).toBeDefined();
-    expect(overlap?.level).toBe('warning');
+    // Phase-1 Task 10 QA: informational — adjacent rig parts intersect by
+    // design and R2 z-order resolves ownership; a warning here was noise.
+    expect(overlap?.level).toBe('info');
     expect(overlap?.message).toContain('"head"');
     expect(overlap?.message).toContain('owns the shared pixels');
   });
@@ -180,6 +182,87 @@ describe('analyzeMotionPlan', () => {
     const note = issues.find((i) => i.code === 'play_once');
     expect(note?.level).toBe('info');
     expect(issues.some((i) => i.code === 'loop_jump')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// footContactIssues — Phase-1 Task 10 QA (gait characteristics, analytic)
+// ---------------------------------------------------------------------------
+
+describe('footContactIssues (walk/run gait QA)', () => {
+  /** humanoid fixture with legL/legR (+body) tagged; opaque leg pixels on the anchor. */
+  function walker(height = 32) {
+    const project = createProject({ name: 'gait', width: 32, height });
+    const clip = project.clips[0];
+    const layerId = clip.layers[0].id;
+    const frameId = clip.frames[0].id;
+    const buf = new Uint8ClampedArray(32 * height * 4);
+    paintRect(buf, 32, { x: 10, y: 10, w: 8, h: 10 }, RED); // body
+    paintRect(buf, 32, { x: 10, y: 20, w: 3, h: 10 }, RED); // legL (bottom row 29)
+    paintRect(buf, 32, { x: 15, y: 20, w: 3, h: 10 }, RED); // legR (bottom row 29)
+    clip.frames[0].cels[layerId] = { buffer: buf, linked: false };
+    clip.parts = [
+      { id: 'pb', name: 'body', layerId, rect: { x: 10, y: 10, w: 8, h: 10 }, anchorFrameId: frameId, z: 0 },
+      { id: 'pl', name: 'legL', layerId, rect: { x: 10, y: 20, w: 3, h: 10 }, anchorFrameId: frameId, z: 1 },
+      { id: 'pr', name: 'legR', layerId, rect: { x: 15, y: 20, w: 3, h: 10 }, anchorFrameId: frameId, z: 2 },
+    ];
+    return { project, clip };
+  }
+
+  test('walk 4-frame: one leg always planted → no both_feet_lift, but foot_slide reported', () => {
+    const { project, clip } = walker();
+    const p = planMotion(project, clip, { preset: 'walk' });
+    const issues = analyzeMotionPlan(project, clip, p);
+    expect(issues.some((i) => i.code === 'both_feet_lift')).toBe(false);
+    const slide = issues.find((i) => i.code === 'foot_slide');
+    expect(slide).toBeDefined();
+    expect(slide?.level).toBe('info');
+    expect(slide?.message).toContain('translation-only parts cannot pivot');
+    expect(slide?.frameIndexes?.length).toBeGreaterThan(0);
+  });
+
+  test('walk 6-frame: the curve table lifts both legs mid-stride → warning with frame indexes', () => {
+    const { project, clip } = walker();
+    const p = planMotion(project, clip, { preset: 'walk', params: { frameCount: 6 } });
+    const issues = analyzeMotionPlan(project, clip, p);
+    const lift = issues.find((i) => i.code === 'both_feet_lift');
+    expect(lift).toBeDefined();
+    expect(lift?.level).toBe('warning');
+    // walk6 both-lift frames are indexes 1 and 4 → 1-based 2 and 5
+    expect(lift?.frameIndexes).toEqual([1, 4]);
+    expect(lift?.message).toContain('subtle hop');
+  });
+
+  test('run: flight phase reported as informational (normal for a run cycle)', () => {
+    const { project, clip } = walker();
+    const p = planMotion(project, clip, { preset: 'run' });
+    const issues = analyzeMotionPlan(project, clip, p);
+    const lift = issues.find((i) => i.code === 'both_feet_lift');
+    expect(lift).toBeDefined();
+    expect(lift?.level).toBe('info');
+    expect(lift?.message).toContain('flight phase is normal');
+  });
+
+  test('idle/attack/jump plans and untagged legs produce no foot-contact issues', () => {
+    const { project, clip } = walker();
+    for (const preset of ['idle', 'attack', 'jump'] as const) {
+      const p = planMotion(project, clip, { preset });
+      const issues = analyzeMotionPlan(project, clip, p);
+      expect(issues.some((i) => i.code === 'foot_slide' || i.code === 'both_feet_lift')).toBe(false);
+    }
+    // legs present as curves but NOT tagged on the clip → skipped (C27)
+    const bare = createProject({ name: 'bare', width: 32, height: 32 });
+    const bareClip = bare.clips[0];
+    const p = planMotion(bare, bareClip, { preset: 'walk' });
+    expect(analyzeMotionPlan(bare, bareClip, p).some((i) => i.code === 'foot_slide' || i.code === 'both_feet_lift')).toBe(false);
+  });
+
+  test('foot contact analysis is deterministic (two runs equal)', () => {
+    const { project, clip } = walker();
+    const p = planMotion(project, clip, { preset: 'walk', params: { frameCount: 8 } });
+    const a = analyzeMotionPlan(project, clip, p);
+    const b = analyzeMotionPlan(project, clip, p);
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b));
   });
 });
 

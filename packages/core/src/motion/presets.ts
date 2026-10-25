@@ -271,7 +271,7 @@ export function resolveParams(
     frameCount: preset.frameCounts.includes(frameCount)
       ? frameCount
       : preset.defaultFrameCount,
-    gapFill: partial.gapFill ?? 'none',
+    gapFill: partial.gapFill ?? 'edge-extend',
     smear: partial.smear ?? false,
   };
 }

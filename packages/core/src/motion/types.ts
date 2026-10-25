@@ -32,7 +32,12 @@ export interface MotionParams {
 export const MOTION_PARAMS_DEFAULTS: MotionParams = {
   amplitude: 1,
   frameCount: 0, // 0 = preset default (resolved per preset)
-  gapFill: 'none',
+  // Phase-1 Task 10 QA correction: 'edge-extend' is the default because with
+  // 'none' every bob/lean/squash frame opened 1–3px transparent holes at part
+  // seams (hair↔face, arm↔torso, jump squash) and visibly detached limbs —
+  // confirmed defects in the visual audit (artifacts/task10-core). 'none'
+  // remains selectable for honest-gap workflows.
+  gapFill: 'edge-extend',
   smear: false,
 };
 

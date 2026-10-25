@@ -10,13 +10,29 @@
  *  - broken/detached parts    (part regions with no opaque pixels)
  *  - transparency artifacts   (non-binary alpha after composition)
  *  - out-of-bounds pixels     (R4 edge clipping — informational)
- *  - incorrect overlaps       (intersecting part rects on one layer)
+ *  - incorrect overlaps       (intersecting part rects on one layer —
+ *                               informational: R2 z-order resolves ownership
+ *                               by design, adjacent rig parts always touch)
  *  - invalid anchors/rects    (dangling anchorFrameId / out-of-bounds rects)
+ *  - foot contact (walk/run)  (Phase-1 Task 10 QA): planted-foot horizontal
+ *                               slide (R1 translation-only consequence) and
+ *                               both-feet-lift frames (curve-table gait),
+ *                               computed analytically from the preset curves
+ *                               — deterministic, no pixel scanning needed
  */
 
 import type { Clip, Project } from '../types/document';
 import { composeFrameRgba } from '../export/export';
-import { rectContains, rectsIntersect, type MotionPlan } from './types';
+import {
+  getPreset,
+} from './presets';
+import {
+  rectContains,
+  rectsIntersect,
+  scaledOffset,
+  type MotionPlan,
+  type PartOffset,
+} from './types';
 
 export type QALevel = 'info' | 'warning';
 
@@ -125,8 +141,11 @@ export function analyzeMotionPlan(
       if (rectsIntersect(a.rect, b.rect)) {
         const winner = a.z >= b.z ? a : b;
         const loser = a.z >= b.z ? b : a;
+        // Phase-1 Task 10 QA: informational, not a warning — adjacent rig
+        // parts (hair over head, arm beside torso) always intersect by
+        // design and R2 z-order resolves ownership deterministically.
         issues.push({
-          level: 'warning',
+          level: 'info',
           code: 'overlap',
           message: `Parts "${a.name}" and "${b.name}" overlap on one layer — "${winner.name}" (higher z) owns the shared pixels; "${loser.name}" never moves them.`,
         });
@@ -192,6 +211,92 @@ export function analyzeMotionPlan(
 
   // -- flicker / loop transitions -------------------------------------------
   issues.push(...flickerIssues(plan.frames.map((f) => stackBuffers(f.cels, w, h)), plan.report.preset, options));
+  // -- foot contact (walk/run gait characteristics — Phase-1 Task 10 QA) -----
+  issues.push(...footContactIssues(source, plan));
+  return issues;
+}
+
+/**
+ * Foot-contact analysis for walk/run plans (Phase-1 Task 10 QA).
+ *
+ * Deterministic and analytic: re-derives each leg's per-frame integer offset
+ * from the preset curves through the exact R10 mapping the composer uses, so
+ * no pixel scanning is required and results are golden-stable.
+ *
+ * Reports:
+ *  - foot_slide    (info): a planted leg (dy 0 after scaling) still shifts
+ *                  horizontally — inherent to R1 translation-only parts;
+ *                  refine contact frames manually for ground-perfect footing.
+ *  - both_feet_lift (info on run — flight phase is normal; warning on walk —
+ *                  the 6/8-frame tables lift both legs mid-stride, which reads
+ *                  as a subtle hop users may want to refine by hand).
+ */
+export function footContactIssues(source: Clip, plan: MotionPlan): QAIssue[] {
+  const issues: QAIssue[] = [];
+  const presetId = plan.report.preset;
+  if (presetId !== 'walk' && presetId !== 'run') return issues;
+  const preset = getPreset(presetId);
+  if (!preset) return issues;
+
+  const curves = preset.curvesFor(plan.report.params.frameCount);
+  const amp = plan.report.params.amplitude;
+  const ampScale = plan.report.ampScale;
+
+  const legCurves: (PartOffset[] | null)[] = (['legL', 'legR'] as const).map((role) => {
+    const curve = curves[role];
+    if (!curve || curve.length === 0) return null;
+    // roleKey semantics (composer C27): case/trim-insensitive match on BOTH sides
+    const tagged = source.parts.some((p) => p.name.trim().toLowerCase() === role.trim().toLowerCase());
+    return tagged ? curve : null;
+  });
+  if (!legCurves[0] && !legCurves[1]) return issues;
+
+  const frames = plan.report.frameCount;
+  const slideFrames = new Set<number>();
+  const liftFrames: number[] = [];
+  let maxSlide = 0;
+  for (let i = 0; i < frames; i++) {
+    const dy = legCurves.map((c) => (c ? scaledOffset(c[i % c.length].dy * amp, ampScale) : null));
+    const dx = legCurves.map((c) => (c ? scaledOffset(c[i % c.length].dx * amp, ampScale) : null));
+    if (
+      dy[0] !== null && dy[1] !== null &&
+      dy[0]! < 0 && dy[1]! < 0
+    ) {
+      liftFrames.push(i);
+    }
+    for (let l = 0; l < 2; l++) {
+      if (dy[l] === 0 && dx[l] !== null && Math.abs(dx[l]!) > 0) {
+        slideFrames.add(i);
+        if (Math.abs(dx[l]!) > maxSlide) maxSlide = Math.abs(dx[l]!);
+      }
+    }
+  }
+
+  if (maxSlide > 0) {
+    issues.push({
+      level: 'info',
+      code: 'foot_slide',
+      message: `Planted feet shift up to ${maxSlide}px horizontally on contact frames (${[...slideFrames].map((i) => i + 1).join(', ')}) — translation-only parts cannot pivot (R1). Refine those frames manually if ground-perfect footing matters.`,
+      frameIndexes: [...slideFrames],
+    });
+  }
+  if (liftFrames.length > 0) {
+    if (presetId === 'run') {
+      issues.push({
+        level: 'info',
+        code: 'both_feet_lift',
+        message: `Both feet leave the ground on frames ${liftFrames.map((i) => i + 1).join(', ')} — the flight phase is normal for a run cycle.`,
+        frameIndexes: [...liftFrames],
+      });
+    } else {
+      issues.push({
+        level: 'warning',
+        code: 'both_feet_lift',
+        message: `Both feet lift off the ground on frames ${liftFrames.map((i) => i + 1).join(', ')} — the preset curve table raises both legs mid-stride, which reads as a subtle hop. Refine those frames manually for a grounded gait.`,
+        frameIndexes: [...liftFrames],
+      });
+    }
+  }
   return issues;
 }
 

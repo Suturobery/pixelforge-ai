@@ -1,0 +1,1382 @@
+[
+  {
+    "fixture": "side-16",
+    "preset": "idle",
+    "frameCount": 4,
+    "ampScale": 0.5,
+    "plantedPerFrame": [
+      true,
+      true,
+      true,
+      true
+    ],
+    "maxBothLift": 0,
+    "maxPlantedSlideX": 0,
+    "groundPenetration": false,
+    "loopSeamPx": 0,
+    "legVanished": false,
+    "movedPixels": [
+      5,
+      16,
+      25,
+      25
+    ],
+    "qaIssues": [
+      {
+        "code": "overlap",
+        "message": "Parts \"hair\" and \"head\" overlap on one layer — \"hair\" (higher z) owns the shared pixels; \"head\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"armL\" overlap on one layer — \"body\" (higher z) owns the shared pixels; \"armL\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"armR\" overlap on one layer — \"armR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"legL\" overlap on one layer — \"body\" (higher z) owns the shared pixels; \"legL\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"legR\" overlap on one layer — \"legR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      }
+    ],
+    "skippedRoles": []
+  },
+  {
+    "fixture": "side-16",
+    "preset": "walk",
+    "frameCount": 4,
+    "ampScale": 0.5,
+    "plantedPerFrame": [
+      true,
+      true,
+      true,
+      true
+    ],
+    "maxBothLift": 0,
+    "maxPlantedSlideX": 2,
+    "groundPenetration": false,
+    "loopSeamPx": 1,
+    "legVanished": false,
+    "movedPixels": [
+      28,
+      22,
+      38,
+      12
+    ],
+    "qaIssues": [
+      {
+        "code": "overlap",
+        "message": "Parts \"hair\" and \"head\" overlap on one layer — \"hair\" (higher z) owns the shared pixels; \"head\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"armL\" overlap on one layer — \"body\" (higher z) owns the shared pixels; \"armL\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"armR\" overlap on one layer — \"armR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"legL\" overlap on one layer — \"body\" (higher z) owns the shared pixels; \"legL\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"legR\" overlap on one layer — \"legR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      }
+    ],
+    "skippedRoles": []
+  },
+  {
+    "fixture": "side-16",
+    "preset": "run",
+    "frameCount": 6,
+    "ampScale": 0.5,
+    "plantedPerFrame": [
+      true,
+      true,
+      true,
+      true,
+      false,
+      true
+    ],
+    "maxBothLift": 1,
+    "maxPlantedSlideX": 2,
+    "groundPenetration": false,
+    "loopSeamPx": 0,
+    "legVanished": false,
+    "movedPixels": [
+      37,
+      42,
+      55,
+      63,
+      46,
+      23
+    ],
+    "qaIssues": [
+      {
+        "code": "overlap",
+        "message": "Parts \"hair\" and \"head\" overlap on one layer — \"hair\" (higher z) owns the shared pixels; \"head\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"armL\" overlap on one layer — \"body\" (higher z) owns the shared pixels; \"armL\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"armR\" overlap on one layer — \"armR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"legL\" overlap on one layer — \"body\" (higher z) owns the shared pixels; \"legL\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"legR\" overlap on one layer — \"legR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      }
+    ],
+    "skippedRoles": []
+  },
+  {
+    "fixture": "side-16",
+    "preset": "attack",
+    "frameCount": 4,
+    "ampScale": 0.5,
+    "plantedPerFrame": [
+      true,
+      true,
+      true,
+      true
+    ],
+    "maxBothLift": 0,
+    "maxPlantedSlideX": 0,
+    "groundPenetration": false,
+    "loopSeamPx": 0,
+    "legVanished": false,
+    "movedPixels": [
+      2,
+      10,
+      5,
+      0
+    ],
+    "qaIssues": [
+      {
+        "code": "overlap",
+        "message": "Parts \"hair\" and \"head\" overlap on one layer — \"hair\" (higher z) owns the shared pixels; \"head\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"armL\" overlap on one layer — \"body\" (higher z) owns the shared pixels; \"armL\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"armR\" overlap on one layer — \"armR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"legL\" overlap on one layer — \"body\" (higher z) owns the shared pixels; \"legL\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"legR\" overlap on one layer — \"legR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      },
+      {
+        "code": "play_once",
+        "message": "This preset is play-once (attack/jump) — the loop-seam check is skipped. Set the clip to loop=false for correct playback."
+      }
+    ],
+    "skippedRoles": []
+  },
+  {
+    "fixture": "side-16",
+    "preset": "jump",
+    "frameCount": 6,
+    "ampScale": 0.5,
+    "plantedPerFrame": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "maxBothLift": 0,
+    "maxPlantedSlideX": 0,
+    "groundPenetration": false,
+    "loopSeamPx": 0,
+    "legVanished": false,
+    "movedPixels": [
+      32,
+      9,
+      32,
+      32,
+      20,
+      32
+    ],
+    "qaIssues": [
+      {
+        "code": "overlap",
+        "message": "Parts \"hair\" and \"head\" overlap on one layer — \"hair\" (higher z) owns the shared pixels; \"head\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"armL\" overlap on one layer — \"body\" (higher z) owns the shared pixels; \"armL\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"armR\" overlap on one layer — \"armR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"legL\" overlap on one layer — \"body\" (higher z) owns the shared pixels; \"legL\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"legR\" overlap on one layer — \"legR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      },
+      {
+        "code": "play_once",
+        "message": "This preset is play-once (attack/jump) — the loop-seam check is skipped. Set the clip to loop=false for correct playback."
+      }
+    ],
+    "skippedRoles": []
+  },
+  {
+    "fixture": "front-16",
+    "preset": "idle",
+    "frameCount": 4,
+    "ampScale": 0.5,
+    "plantedPerFrame": [
+      true,
+      true,
+      true,
+      true
+    ],
+    "maxBothLift": 0,
+    "maxPlantedSlideX": 0,
+    "groundPenetration": false,
+    "loopSeamPx": 0,
+    "legVanished": false,
+    "movedPixels": [
+      5,
+      15,
+      24,
+      24
+    ],
+    "qaIssues": [
+      {
+        "code": "overlap",
+        "message": "Parts \"hair\" and \"head\" overlap on one layer — \"hair\" (higher z) owns the shared pixels; \"head\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"legL\" overlap on one layer — \"body\" (higher z) owns the shared pixels; \"legL\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"legR\" overlap on one layer — \"legR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      }
+    ],
+    "skippedRoles": []
+  },
+  {
+    "fixture": "front-16",
+    "preset": "walk",
+    "frameCount": 4,
+    "ampScale": 0.5,
+    "plantedPerFrame": [
+      true,
+      true,
+      true,
+      true
+    ],
+    "maxBothLift": 0,
+    "maxPlantedSlideX": 3,
+    "groundPenetration": false,
+    "loopSeamPx": 1,
+    "legVanished": false,
+    "movedPixels": [
+      28,
+      23,
+      38,
+      13
+    ],
+    "qaIssues": [
+      {
+        "code": "overlap",
+        "message": "Parts \"hair\" and \"head\" overlap on one layer — \"hair\" (higher z) owns the shared pixels; \"head\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"legL\" overlap on one layer — \"body\" (higher z) owns the shared pixels; \"legL\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"legR\" overlap on one layer — \"legR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      }
+    ],
+    "skippedRoles": []
+  },
+  {
+    "fixture": "front-16",
+    "preset": "run",
+    "frameCount": 6,
+    "ampScale": 0.5,
+    "plantedPerFrame": [
+      true,
+      false,
+      true,
+      true,
+      false,
+      true
+    ],
+    "maxBothLift": 1,
+    "maxPlantedSlideX": 3,
+    "groundPenetration": false,
+    "loopSeamPx": 0,
+    "legVanished": false,
+    "movedPixels": [
+      37,
+      49,
+      57,
+      67,
+      48,
+      26
+    ],
+    "qaIssues": [
+      {
+        "code": "overlap",
+        "message": "Parts \"hair\" and \"head\" overlap on one layer — \"hair\" (higher z) owns the shared pixels; \"head\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"legL\" overlap on one layer — \"body\" (higher z) owns the shared pixels; \"legL\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"legR\" overlap on one layer — \"legR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      }
+    ],
+    "skippedRoles": []
+  },
+  {
+    "fixture": "front-16",
+    "preset": "attack",
+    "frameCount": 4,
+    "ampScale": 0.5,
+    "plantedPerFrame": [
+      true,
+      true,
+      true,
+      true
+    ],
+    "maxBothLift": 0,
+    "maxPlantedSlideX": 0,
+    "groundPenetration": false,
+    "loopSeamPx": 0,
+    "legVanished": false,
+    "movedPixels": [
+      2,
+      7,
+      7,
+      0
+    ],
+    "qaIssues": [
+      {
+        "code": "overlap",
+        "message": "Parts \"hair\" and \"head\" overlap on one layer — \"hair\" (higher z) owns the shared pixels; \"head\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"legL\" overlap on one layer — \"body\" (higher z) owns the shared pixels; \"legL\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"legR\" overlap on one layer — \"legR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      },
+      {
+        "code": "play_once",
+        "message": "This preset is play-once (attack/jump) — the loop-seam check is skipped. Set the clip to loop=false for correct playback."
+      }
+    ],
+    "skippedRoles": []
+  },
+  {
+    "fixture": "front-16",
+    "preset": "jump",
+    "frameCount": 6,
+    "ampScale": 0.5,
+    "plantedPerFrame": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "maxBothLift": 0,
+    "maxPlantedSlideX": 0,
+    "groundPenetration": false,
+    "loopSeamPx": 0,
+    "legVanished": false,
+    "movedPixels": [
+      31,
+      9,
+      30,
+      30,
+      19,
+      31
+    ],
+    "qaIssues": [
+      {
+        "code": "overlap",
+        "message": "Parts \"hair\" and \"head\" overlap on one layer — \"hair\" (higher z) owns the shared pixels; \"head\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"legL\" overlap on one layer — \"body\" (higher z) owns the shared pixels; \"legL\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"legR\" overlap on one layer — \"legR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      },
+      {
+        "code": "play_once",
+        "message": "This preset is play-once (attack/jump) — the loop-seam check is skipped. Set the clip to loop=false for correct playback."
+      }
+    ],
+    "skippedRoles": []
+  },
+  {
+    "fixture": "side-32",
+    "preset": "idle",
+    "frameCount": 4,
+    "ampScale": 1,
+    "plantedPerFrame": [
+      true,
+      true,
+      true,
+      true
+    ],
+    "maxBothLift": 0,
+    "maxPlantedSlideX": 0,
+    "groundPenetration": false,
+    "loopSeamPx": 0,
+    "legVanished": false,
+    "movedPixels": [
+      10,
+      26,
+      70,
+      62
+    ],
+    "qaIssues": [
+      {
+        "code": "overlap",
+        "message": "Parts \"hair\" and \"head\" overlap on one layer — \"hair\" (higher z) owns the shared pixels; \"head\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"armL\" overlap on one layer — \"body\" (higher z) owns the shared pixels; \"armL\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"armR\" overlap on one layer — \"armR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      }
+    ],
+    "skippedRoles": []
+  },
+  {
+    "fixture": "side-32",
+    "preset": "walk",
+    "frameCount": 4,
+    "ampScale": 1,
+    "plantedPerFrame": [
+      true,
+      true,
+      true,
+      true
+    ],
+    "maxBothLift": 0,
+    "maxPlantedSlideX": 4,
+    "groundPenetration": false,
+    "loopSeamPx": 1,
+    "legVanished": false,
+    "movedPixels": [
+      58,
+      32,
+      116,
+      24
+    ],
+    "qaIssues": [
+      {
+        "code": "overlap",
+        "message": "Parts \"hair\" and \"head\" overlap on one layer — \"hair\" (higher z) owns the shared pixels; \"head\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"armL\" overlap on one layer — \"body\" (higher z) owns the shared pixels; \"armL\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"armR\" overlap on one layer — \"armR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      }
+    ],
+    "skippedRoles": []
+  },
+  {
+    "fixture": "side-32",
+    "preset": "run",
+    "frameCount": 6,
+    "ampScale": 1,
+    "plantedPerFrame": [
+      true,
+      true,
+      true,
+      true,
+      false,
+      true
+    ],
+    "maxBothLift": 2,
+    "maxPlantedSlideX": 7,
+    "groundPenetration": false,
+    "loopSeamPx": 0,
+    "legVanished": false,
+    "movedPixels": [
+      108,
+      157,
+      166,
+      205,
+      155,
+      84
+    ],
+    "qaIssues": [
+      {
+        "code": "overlap",
+        "message": "Parts \"hair\" and \"head\" overlap on one layer — \"hair\" (higher z) owns the shared pixels; \"head\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"armL\" overlap on one layer — \"body\" (higher z) owns the shared pixels; \"armL\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"armR\" overlap on one layer — \"armR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      }
+    ],
+    "skippedRoles": []
+  },
+  {
+    "fixture": "side-32",
+    "preset": "attack",
+    "frameCount": 4,
+    "ampScale": 1,
+    "plantedPerFrame": [
+      true,
+      true,
+      true,
+      true
+    ],
+    "maxBothLift": 0,
+    "maxPlantedSlideX": 0,
+    "groundPenetration": false,
+    "loopSeamPx": 0,
+    "legVanished": false,
+    "movedPixels": [
+      6,
+      24,
+      18,
+      0
+    ],
+    "qaIssues": [
+      {
+        "code": "overlap",
+        "message": "Parts \"hair\" and \"head\" overlap on one layer — \"hair\" (higher z) owns the shared pixels; \"head\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"armL\" overlap on one layer — \"body\" (higher z) owns the shared pixels; \"armL\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"armR\" overlap on one layer — \"armR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      },
+      {
+        "code": "play_once",
+        "message": "This preset is play-once (attack/jump) — the loop-seam check is skipped. Set the clip to loop=false for correct playback."
+      }
+    ],
+    "skippedRoles": []
+  },
+  {
+    "fixture": "side-32",
+    "preset": "jump",
+    "frameCount": 6,
+    "ampScale": 1,
+    "plantedPerFrame": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "maxBothLift": 0,
+    "maxPlantedSlideX": 0,
+    "groundPenetration": false,
+    "loopSeamPx": 0,
+    "legVanished": false,
+    "movedPixels": [
+      94,
+      9,
+      96,
+      96,
+      60,
+      94
+    ],
+    "qaIssues": [
+      {
+        "code": "overlap",
+        "message": "Parts \"hair\" and \"head\" overlap on one layer — \"hair\" (higher z) owns the shared pixels; \"head\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"armL\" overlap on one layer — \"body\" (higher z) owns the shared pixels; \"armL\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"armR\" overlap on one layer — \"armR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      },
+      {
+        "code": "play_once",
+        "message": "This preset is play-once (attack/jump) — the loop-seam check is skipped. Set the clip to loop=false for correct playback."
+      }
+    ],
+    "skippedRoles": []
+  },
+  {
+    "fixture": "front-32",
+    "preset": "idle",
+    "frameCount": 4,
+    "ampScale": 1,
+    "plantedPerFrame": [
+      true,
+      true,
+      true,
+      true
+    ],
+    "maxBothLift": 0,
+    "maxPlantedSlideX": 0,
+    "groundPenetration": false,
+    "loopSeamPx": 0,
+    "legVanished": false,
+    "movedPixels": [
+      10,
+      26,
+      70,
+      62
+    ],
+    "qaIssues": [
+      {
+        "code": "overlap",
+        "message": "Parts \"hair\" and \"head\" overlap on one layer — \"hair\" (higher z) owns the shared pixels; \"head\" never moves them."
+      }
+    ],
+    "skippedRoles": []
+  },
+  {
+    "fixture": "front-32",
+    "preset": "walk",
+    "frameCount": 4,
+    "ampScale": 1,
+    "plantedPerFrame": [
+      true,
+      true,
+      true,
+      true
+    ],
+    "maxBothLift": 0,
+    "maxPlantedSlideX": 6,
+    "groundPenetration": false,
+    "loopSeamPx": 1,
+    "legVanished": false,
+    "movedPixels": [
+      77,
+      37,
+      110,
+      25
+    ],
+    "qaIssues": [
+      {
+        "code": "overlap",
+        "message": "Parts \"hair\" and \"head\" overlap on one layer — \"hair\" (higher z) owns the shared pixels; \"head\" never moves them."
+      }
+    ],
+    "skippedRoles": []
+  },
+  {
+    "fixture": "front-32",
+    "preset": "run",
+    "frameCount": 6,
+    "ampScale": 1,
+    "plantedPerFrame": [
+      true,
+      false,
+      true,
+      true,
+      false,
+      true
+    ],
+    "maxBothLift": 2,
+    "maxPlantedSlideX": 6,
+    "groundPenetration": false,
+    "loopSeamPx": 0,
+    "legVanished": false,
+    "movedPixels": [
+      143,
+      185,
+      182,
+      250,
+      173,
+      97
+    ],
+    "qaIssues": [
+      {
+        "code": "overlap",
+        "message": "Parts \"hair\" and \"head\" overlap on one layer — \"hair\" (higher z) owns the shared pixels; \"head\" never moves them."
+      }
+    ],
+    "skippedRoles": []
+  },
+  {
+    "fixture": "front-32",
+    "preset": "attack",
+    "frameCount": 4,
+    "ampScale": 1,
+    "plantedPerFrame": [
+      true,
+      true,
+      true,
+      true
+    ],
+    "maxBothLift": 0,
+    "maxPlantedSlideX": 0,
+    "groundPenetration": false,
+    "loopSeamPx": 0,
+    "legVanished": false,
+    "movedPixels": [
+      6,
+      18,
+      20,
+      0
+    ],
+    "qaIssues": [
+      {
+        "code": "overlap",
+        "message": "Parts \"hair\" and \"head\" overlap on one layer — \"hair\" (higher z) owns the shared pixels; \"head\" never moves them."
+      },
+      {
+        "code": "play_once",
+        "message": "This preset is play-once (attack/jump) — the loop-seam check is skipped. Set the clip to loop=false for correct playback."
+      }
+    ],
+    "skippedRoles": []
+  },
+  {
+    "fixture": "front-32",
+    "preset": "jump",
+    "frameCount": 6,
+    "ampScale": 1,
+    "plantedPerFrame": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "maxBothLift": 0,
+    "maxPlantedSlideX": 0,
+    "groundPenetration": false,
+    "loopSeamPx": 0,
+    "legVanished": false,
+    "movedPixels": [
+      98,
+      8,
+      96,
+      96,
+      60,
+      98
+    ],
+    "qaIssues": [
+      {
+        "code": "overlap",
+        "message": "Parts \"hair\" and \"head\" overlap on one layer — \"hair\" (higher z) owns the shared pixels; \"head\" never moves them."
+      },
+      {
+        "code": "play_once",
+        "message": "This preset is play-once (attack/jump) — the loop-seam check is skipped. Set the clip to loop=false for correct playback."
+      }
+    ],
+    "skippedRoles": []
+  },
+  {
+    "fixture": "side-64",
+    "preset": "idle",
+    "frameCount": 4,
+    "ampScale": 2,
+    "plantedPerFrame": [
+      true,
+      true,
+      true,
+      true
+    ],
+    "maxBothLift": 0,
+    "maxPlantedSlideX": 0,
+    "groundPenetration": false,
+    "loopSeamPx": 0,
+    "legVanished": false,
+    "movedPixels": [
+      40,
+      104,
+      280,
+      248
+    ],
+    "qaIssues": [
+      {
+        "code": "overlap",
+        "message": "Parts \"hair\" and \"head\" overlap on one layer — \"hair\" (higher z) owns the shared pixels; \"head\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"armL\" overlap on one layer — \"body\" (higher z) owns the shared pixels; \"armL\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"armR\" overlap on one layer — \"armR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      }
+    ],
+    "skippedRoles": []
+  },
+  {
+    "fixture": "side-64",
+    "preset": "walk",
+    "frameCount": 4,
+    "ampScale": 2,
+    "plantedPerFrame": [
+      true,
+      true,
+      true,
+      true
+    ],
+    "maxBothLift": 0,
+    "maxPlantedSlideX": 8,
+    "groundPenetration": false,
+    "loopSeamPx": 2,
+    "legVanished": false,
+    "movedPixels": [
+      232,
+      128,
+      464,
+      96
+    ],
+    "qaIssues": [
+      {
+        "code": "overlap",
+        "message": "Parts \"hair\" and \"head\" overlap on one layer — \"hair\" (higher z) owns the shared pixels; \"head\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"armL\" overlap on one layer — \"body\" (higher z) owns the shared pixels; \"armL\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"armR\" overlap on one layer — \"armR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      }
+    ],
+    "skippedRoles": []
+  },
+  {
+    "fixture": "side-64",
+    "preset": "run",
+    "frameCount": 6,
+    "ampScale": 2,
+    "plantedPerFrame": [
+      true,
+      true,
+      true,
+      true,
+      false,
+      true
+    ],
+    "maxBothLift": 3,
+    "maxPlantedSlideX": 14,
+    "groundPenetration": false,
+    "loopSeamPx": 0,
+    "legVanished": false,
+    "movedPixels": [
+      372,
+      497,
+      611,
+      815,
+      486,
+      277
+    ],
+    "qaIssues": [
+      {
+        "code": "overlap",
+        "message": "Parts \"hair\" and \"head\" overlap on one layer — \"hair\" (higher z) owns the shared pixels; \"head\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"armL\" overlap on one layer — \"body\" (higher z) owns the shared pixels; \"armL\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"armR\" overlap on one layer — \"armR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      }
+    ],
+    "skippedRoles": []
+  },
+  {
+    "fixture": "side-64",
+    "preset": "attack",
+    "frameCount": 4,
+    "ampScale": 2,
+    "plantedPerFrame": [
+      true,
+      true,
+      true,
+      true
+    ],
+    "maxBothLift": 0,
+    "maxPlantedSlideX": 0,
+    "groundPenetration": false,
+    "loopSeamPx": 0,
+    "legVanished": false,
+    "movedPixels": [
+      24,
+      96,
+      72,
+      0
+    ],
+    "qaIssues": [
+      {
+        "code": "overlap",
+        "message": "Parts \"hair\" and \"head\" overlap on one layer — \"hair\" (higher z) owns the shared pixels; \"head\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"armL\" overlap on one layer — \"body\" (higher z) owns the shared pixels; \"armL\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"armR\" overlap on one layer — \"armR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      },
+      {
+        "code": "play_once",
+        "message": "This preset is play-once (attack/jump) — the loop-seam check is skipped. Set the clip to loop=false for correct playback."
+      }
+    ],
+    "skippedRoles": []
+  },
+  {
+    "fixture": "side-64",
+    "preset": "jump",
+    "frameCount": 6,
+    "ampScale": 2,
+    "plantedPerFrame": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "maxBothLift": 0,
+    "maxPlantedSlideX": 0,
+    "groundPenetration": false,
+    "loopSeamPx": 0,
+    "legVanished": false,
+    "movedPixels": [
+      376,
+      36,
+      384,
+      384,
+      240,
+      376
+    ],
+    "qaIssues": [
+      {
+        "code": "overlap",
+        "message": "Parts \"hair\" and \"head\" overlap on one layer — \"hair\" (higher z) owns the shared pixels; \"head\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"armL\" overlap on one layer — \"body\" (higher z) owns the shared pixels; \"armL\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"armR\" overlap on one layer — \"armR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      },
+      {
+        "code": "play_once",
+        "message": "This preset is play-once (attack/jump) — the loop-seam check is skipped. Set the clip to loop=false for correct playback."
+      }
+    ],
+    "skippedRoles": []
+  },
+  {
+    "fixture": "front-64",
+    "preset": "idle",
+    "frameCount": 4,
+    "ampScale": 2,
+    "plantedPerFrame": [
+      true,
+      true,
+      true,
+      true
+    ],
+    "maxBothLift": 0,
+    "maxPlantedSlideX": 0,
+    "groundPenetration": false,
+    "loopSeamPx": 0,
+    "legVanished": false,
+    "movedPixels": [
+      40,
+      104,
+      280,
+      248
+    ],
+    "qaIssues": [
+      {
+        "code": "overlap",
+        "message": "Parts \"hair\" and \"head\" overlap on one layer — \"hair\" (higher z) owns the shared pixels; \"head\" never moves them."
+      }
+    ],
+    "skippedRoles": []
+  },
+  {
+    "fixture": "front-64",
+    "preset": "walk",
+    "frameCount": 4,
+    "ampScale": 2,
+    "plantedPerFrame": [
+      true,
+      true,
+      true,
+      true
+    ],
+    "maxBothLift": 0,
+    "maxPlantedSlideX": 12,
+    "groundPenetration": false,
+    "loopSeamPx": 2,
+    "legVanished": false,
+    "movedPixels": [
+      308,
+      148,
+      440,
+      100
+    ],
+    "qaIssues": [
+      {
+        "code": "overlap",
+        "message": "Parts \"hair\" and \"head\" overlap on one layer — \"hair\" (higher z) owns the shared pixels; \"head\" never moves them."
+      }
+    ],
+    "skippedRoles": []
+  },
+  {
+    "fixture": "front-64",
+    "preset": "run",
+    "frameCount": 6,
+    "ampScale": 2,
+    "plantedPerFrame": [
+      true,
+      false,
+      true,
+      true,
+      false,
+      true
+    ],
+    "maxBothLift": 3,
+    "maxPlantedSlideX": 12,
+    "groundPenetration": false,
+    "loopSeamPx": 0,
+    "legVanished": false,
+    "movedPixels": [
+      563,
+      590,
+      667,
+      1013,
+      538,
+      325
+    ],
+    "qaIssues": [
+      {
+        "code": "overlap",
+        "message": "Parts \"hair\" and \"head\" overlap on one layer — \"hair\" (higher z) owns the shared pixels; \"head\" never moves them."
+      }
+    ],
+    "skippedRoles": []
+  },
+  {
+    "fixture": "front-64",
+    "preset": "attack",
+    "frameCount": 4,
+    "ampScale": 2,
+    "plantedPerFrame": [
+      true,
+      true,
+      true,
+      true
+    ],
+    "maxBothLift": 0,
+    "maxPlantedSlideX": 0,
+    "groundPenetration": false,
+    "loopSeamPx": 0,
+    "legVanished": false,
+    "movedPixels": [
+      24,
+      72,
+      80,
+      0
+    ],
+    "qaIssues": [
+      {
+        "code": "overlap",
+        "message": "Parts \"hair\" and \"head\" overlap on one layer — \"hair\" (higher z) owns the shared pixels; \"head\" never moves them."
+      },
+      {
+        "code": "play_once",
+        "message": "This preset is play-once (attack/jump) — the loop-seam check is skipped. Set the clip to loop=false for correct playback."
+      }
+    ],
+    "skippedRoles": []
+  },
+  {
+    "fixture": "front-64",
+    "preset": "jump",
+    "frameCount": 6,
+    "ampScale": 2,
+    "plantedPerFrame": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "maxBothLift": 0,
+    "maxPlantedSlideX": 0,
+    "groundPenetration": false,
+    "loopSeamPx": 0,
+    "legVanished": false,
+    "movedPixels": [
+      392,
+      32,
+      384,
+      384,
+      240,
+      392
+    ],
+    "qaIssues": [
+      {
+        "code": "overlap",
+        "message": "Parts \"hair\" and \"head\" overlap on one layer — \"hair\" (higher z) owns the shared pixels; \"head\" never moves them."
+      },
+      {
+        "code": "play_once",
+        "message": "This preset is play-once (attack/jump) — the loop-seam check is skipped. Set the clip to loop=false for correct playback."
+      }
+    ],
+    "skippedRoles": []
+  },
+  {
+    "fixture": "side-32",
+    "preset": "walk",
+    "frameCount": 8,
+    "ampScale": 1,
+    "plantedPerFrame": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true
+    ],
+    "maxBothLift": 1,
+    "maxPlantedSlideX": 4,
+    "groundPenetration": false,
+    "loopSeamPx": 1,
+    "legVanished": false,
+    "movedPixels": [
+      57,
+      82,
+      11,
+      93,
+      113,
+      100,
+      11,
+      70
+    ],
+    "qaIssues": [
+      {
+        "code": "overlap",
+        "message": "Parts \"hair\" and \"head\" overlap on one layer — \"hair\" (higher z) owns the shared pixels; \"head\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"armL\" overlap on one layer — \"body\" (higher z) owns the shared pixels; \"armL\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"armR\" overlap on one layer — \"armR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      }
+    ],
+    "skippedRoles": []
+  },
+  {
+    "fixture": "side-16",
+    "preset": "walk",
+    "frameCount": 6,
+    "ampScale": 0.5,
+    "plantedPerFrame": [
+      true,
+      true,
+      true,
+      true,
+      false,
+      true
+    ],
+    "maxBothLift": 1,
+    "maxPlantedSlideX": 2,
+    "groundPenetration": false,
+    "loopSeamPx": 0,
+    "legVanished": false,
+    "movedPixels": [
+      27,
+      36,
+      23,
+      41,
+      26,
+      33
+    ],
+    "qaIssues": [
+      {
+        "code": "overlap",
+        "message": "Parts \"hair\" and \"head\" overlap on one layer — \"hair\" (higher z) owns the shared pixels; \"head\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"armL\" overlap on one layer — \"body\" (higher z) owns the shared pixels; \"armL\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"armR\" overlap on one layer — \"armR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"legL\" overlap on one layer — \"body\" (higher z) owns the shared pixels; \"legL\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"legR\" overlap on one layer — \"legR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      }
+    ],
+    "skippedRoles": []
+  },
+  {
+    "fixture": "front-32",
+    "preset": "attack",
+    "frameCount": 6,
+    "ampScale": 1,
+    "plantedPerFrame": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    "maxBothLift": 0,
+    "maxPlantedSlideX": 0,
+    "groundPenetration": false,
+    "loopSeamPx": 0,
+    "legVanished": false,
+    "movedPixels": [
+      6,
+      6,
+      18,
+      18,
+      20,
+      0
+    ],
+    "qaIssues": [
+      {
+        "code": "overlap",
+        "message": "Parts \"hair\" and \"head\" overlap on one layer — \"hair\" (higher z) owns the shared pixels; \"head\" never moves them."
+      },
+      {
+        "code": "play_once",
+        "message": "This preset is play-once (attack/jump) — the loop-seam check is skipped. Set the clip to loop=false for correct playback."
+      }
+    ],
+    "skippedRoles": []
+  },
+  {
+    "fixture": "side-16",
+    "preset": "jump",
+    "frameCount": 4,
+    "ampScale": 0.5,
+    "plantedPerFrame": [
+      true,
+      true,
+      true,
+      true
+    ],
+    "maxBothLift": 0,
+    "maxPlantedSlideX": 0,
+    "groundPenetration": false,
+    "loopSeamPx": 0,
+    "legVanished": false,
+    "movedPixels": [
+      32,
+      32,
+      32,
+      32
+    ],
+    "qaIssues": [
+      {
+        "code": "overlap",
+        "message": "Parts \"hair\" and \"head\" overlap on one layer — \"hair\" (higher z) owns the shared pixels; \"head\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"armL\" overlap on one layer — \"body\" (higher z) owns the shared pixels; \"armL\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"armR\" overlap on one layer — \"armR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"legL\" overlap on one layer — \"body\" (higher z) owns the shared pixels; \"legL\" never moves them."
+      },
+      {
+        "code": "overlap",
+        "message": "Parts \"body\" and \"legR\" overlap on one layer — \"legR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      },
+      {
+        "code": "play_once",
+        "message": "This preset is play-once (attack/jump) — the loop-seam check is skipped. Set the clip to loop=false for correct playback."
+      }
+    ],
+    "skippedRoles": []
+  }
+]

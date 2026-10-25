@@ -1,0 +1,756 @@
+     1→     1→// PixelForge AI — Motion Composer panel (Task 10, v3.1 §4.1).
+     2→     2→//
+     3→     3→// Deterministic part-based animation workflow:
+     4→     4→//   Select source clip + anchor frame → Tag parts (marquee or manual rect,
+     5→     5→//   regions never cuts) → Pick preset (Idle/Walk/Run/Attack/Jump) →
+     6→     6→//   Adjust parameters → Preview (pure plan, NEVER committed until Accept) →
+     7→     7→//   QA warnings → Accept (one undoable bus command) → edit frames as usual.
+     8→     8→//
+     9→     9→// The preview is the same pure composer the bus command runs — what you
+    10→    10→// accept is byte-identical to what you previewed. Nothing here mutates the
+    11→    11→// document except the two CommandBus actions (part.set / motion.apply).
+    12→    12→
+    13→    13→'use client'
+    14→    14→
+    15→    15→import {
+    16→    16→  analyzeMotionPlan,
+    17→    17→  composeFrameRgba,
+    18→    18→  MOTION_PARAMS_DEFAULTS,
+    19→    19→  MOTION_PRESETS,
+    20→    20→  PRESET_IDS,
+    21→    21→  planMotion,
+    22→    22→  roleKey,
+    23→    23→  type MotionParams,
+    24→    24→  type MotionPlan,
+    25→    25→  type MotionPresetId,
+    26→    26→  type PartRect,
+    27→    27→  type PresetDef,
+    28→    28→  type QAIssue,
+    29→    29→} from '@pixelforge/core'
+    30→    30→import { useEffect, useRef, useState } from 'react'
+    31→    31→import { getActiveClip, useEditor } from '@/lib/pixelforge/store'
+    32→    32→import { Button } from '@/components/ui/button'
+    33→    33→import { Input } from '@/components/ui/input'
+    34→    34→import { Label } from '@/components/ui/label'
+    35→    35→import { Switch } from '@/components/ui/switch'
+    36→    36→import { Slider } from '@/components/ui/slider'
+    37→    37→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+    38→    38→import { useToast } from '@/hooks/use-toast'
+    39→    39→import {
+    40→    40→  AlertTriangle,
+    41→    41→  Clapperboard,
+    42→    42→  Eraser,
+    43→    43→  Film,
+    44→    44→  Info,
+    45→    45→  Pause,
+    46→    46→  Play,
+    47→    47→  Plus,
+    48→    48→  Square,
+    49→    49→  Tag,
+    50→    50→  Trash2,
+    51→    51→} from 'lucide-react'
+    52→    52→
+    53→    53→/** Canonical role names offered for tagging (plan §4.1); custom names allowed. */
+    54→    54→const CANONICAL_ROLES = ['head', 'body', 'armL', 'armR', 'legL', 'legR', 'hair'] as const
+    55→    55→
+    56→    56→const PART_COLORS = ['#2ce8f5', '#a7f070', '#ffcd75', '#ef7d57', '#f4f4f4', '#73eff7', '#b13e53', '#38b764']
+    57→    57→
+    58→    58→interface DraftPart {
+    59→    59→  name: string
+    60→    60→  layerId: string
+    61→    61→  rect?: PartRect
+    62→    62→}
+    63→    63→
+    64→    64→/** Composited display buffer for one preview frame (plan + static layers). */
+    65→    65→function displayBuffer(
+    66→    66→  project: Parameters<typeof composeFrameRgba>[0],
+    67→    67→  clip: Parameters<typeof composeFrameRgba>[1],
+    68→    68→  anchorFrame: Parameters<typeof composeFrameRgba>[2],
+    69→    69→  plan: MotionPlan,
+    70→    70→  frameIndex: number
+    71→    71→): Uint8ClampedArray {
+    72→    72→  const cels = { ...anchorFrame.cels }
+    73→    73→  for (const [layerId, buf] of Object.entries(plan.frames[frameIndex].cels)) {
+    74→    74→    cels[layerId] = { buffer: buf, linked: false }
+    75→    75→  }
+    76→    76→  return composeFrameRgba(project, clip, { id: anchorFrame.id, durationMs: 0, cels })
+    77→    77→}
+    78→    78→
+    79→    79→export function MotionPanel() {
+    80→    80→  const project = useEditor((s) => s.project)
+    81→    81→  const activeClipId = useEditor((s) => s.activeClipId)
+    82→    82→  const selection = useEditor((s) => s.selection)
+    83→    83→  const setRightTab = useEditor((s) => s.setRightTab)
+    84→    84→  const setClipParts = useEditor((s) => s.setClipParts)
+    85→    85→  const applyMotionPreset = useEditor((s) => s.applyMotionPreset)
+    86→    86→  const docVersion = useEditor((s) => s.docVersion)
+    87→    87→  const { toast } = useToast()
+    88→    88→
+    89→    89→  const clip = getActiveClip({ project, activeClipId })
+    90→    90→  const layerId = clip.layers.at(-1)?.id ?? ''
+    91→    91→
+    92→    92→  // --- source / parts state ------------------------------------------------
+    93→    93→  const [anchorIndex, setAnchorIndex] = useState(0)
+    94→    94→  const [draftName, setDraftName] = useState('body')
+    95→    95→  const [draftRect, setDraftRect] = useState<PartRect>({ x: 8, y: 8, w: 16, h: 16 })
+    96→    96→  const [draftWholeLayer, setDraftWholeLayer] = useState(false)
+    97→    97→  const [dirtyDraft, setDirtyDraft] = useState(false)
+    98→    98→
+    99→    99→  // --- preview state (declared before the sync effect reads setPlan) --------
+   100→   100→  const [plan, setPlan] = useState<MotionPlan | null>(null)
+   101→   101→  const [issues, setIssues] = useState<QAIssue[]>([])
+   102→   102→  const [playing, setPlaying] = useState(false)
+   103→   103→  const [previewIdx, setPreviewIdx] = useState(0)
+   104→   104→  const [showOverlay, setShowOverlay] = useState(true)
+   105→   105→  const [targetMode, setTargetMode] = useState<'new' | 'overwrite'>('new')
+   106→   106→  const [newClipName, setNewClipName] = useState('idle-1')
+   107→   107→
+   108→   108→  // draft parts start as a copy of the committed clip parts; draft state is
+   109→   109→  // reset whenever the clip or the document changes (render-time adjustment —
+   110→   110→  // the React-endorsed pattern for derived-state resets, no sync effect)
+   111→   111→  const [draftParts, setDraftParts] = useState<DraftPart[]>([])
+   112→   112→  const syncKey = `${clip.id}:${docVersion}`
+   113→   113→  const [lastSyncKey, setLastSyncKey] = useState(syncKey)
+   114→   114→  if (lastSyncKey !== syncKey) {
+   115→   115→    setLastSyncKey(syncKey)
+   116→   116→    setDraftParts(clip.parts.map((p) => ({ name: p.name, layerId: p.layerId, ...(p.rect ? { rect: { ...p.rect } } : {}) })))
+   117→   117→    setDirtyDraft(false)
+   118→   118→    setAnchorIndex((i) => Math.min(i, clip.frames.length - 1))
+   119→   119→    setPlan(null)
+   120→   120→  }
+   121→   121→
+   122→   122→  // --- preset state ----------------------------------------------------------
+   123→   123→  const [presetId, setPresetId] = useState<MotionPresetId>('idle')
+   124→   124→  const preset: PresetDef = MOTION_PRESETS[presetId]
+   125→   125→  const [params, setParams] = useState<MotionParams>({ ...MOTION_PARAMS_DEFAULTS, frameCount: 4 })
+   126→   126→  // switching presets snaps frameCount back to the new preset's default
+   127→   127→  const [lastPresetId, setLastPresetId] = useState(presetId)
+   128→   128→  if (lastPresetId !== presetId) {
+   129→   129→    setLastPresetId(presetId)
+   130→   130→    setParams((p) => ({ ...p, frameCount: preset.defaultFrameCount }))
+   131→   131→  }
+   132→   132→
+   133→   133→  const sourceCanvasRef = useRef<HTMLCanvasElement | null>(null)
+   134→   134→  const previewCanvasRef = useRef<HTMLCanvasElement | null>(null)
+   135→   135→  const stripRefs = useRef<Array<HTMLCanvasElement | null>>([])
+   136→   136→
+   137→   137→  const anchorFrame = clip.frames[Math.min(anchorIndex, clip.frames.length - 1)]
+   138→   138→
+   139→   139→  // --- preview rendering -----------------------------------------------------
+   140→   140→  // plain function — the React Compiler memoizes; no hand-rolled dep arrays
+   141→   141→  const renderPlan = () => {
+   142→   142→    if (!anchorFrame) return
+   143→   143→    let p: MotionPlan
+   144→   144→    try {
+   145→   145→      p = planMotion(project, clip, { preset: presetId, params, anchorFrameIndex: anchorIndex })
+   146→   146→    } catch (err) {
+   147→   147→      toast({ title: 'Preview failed', description: err instanceof Error ? err.message : 'Composer error', variant: 'destructive' })
+   148→   148→      return
+   149→   149→    }
+   150→   150→    setPlan(p)
+   151→   151→    setIssues(analyzeMotionPlan(project, clip, p))
+   152→   152→    setPreviewIdx(0)
+   153→   153→    setPlaying(false)
+   154→   154→    // the suggested clip name follows the preset; the user can still edit it
+   155→   155→    // before accepting (every fresh preview resets it)
+   156→   156→    setNewClipName(`${presetId}-${project.clips.length}`)
+   157→   157→  }
+   158→   158→
+   159→   159→  // draw the source canvas (anchor composite + part rects overlay)
+   160→   160→  useEffect(() => {
+   161→   161→    const canvas = sourceCanvasRef.current
+   162→   162→    if (!canvas || !anchorFrame) return
+   163→   163→    canvas.width = project.width
+   164→   164→    canvas.height = project.height
+   165→   165→    const ctx = canvas.getContext('2d')
+   166→   166→    if (!ctx) return
+   167→   167→    const rgba = composeFrameRgba(project, clip, anchorFrame)
+   168→   168→    ctx.putImageData(new ImageData(new Uint8ClampedArray(rgba), project.width, project.height), 0, 0)
+   169→   169→    if (!showOverlay) return
+   170→   170→    // part rects (1px, color per part) + ground line + center axis
+   171→   171→    draftParts.forEach((p, i) => {
+   172→   172→      const r = p.rect ?? { x: 0, y: 0, w: project.width, h: project.height }
+   173→   173→      ctx.strokeStyle = PART_COLORS[i % PART_COLORS.length]
+   174→   174→      ctx.lineWidth = 1
+   175→   175→      ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1)
+   176→   176→    })
+   177→   177→    ctx.strokeStyle = 'rgba(45, 212, 191, 0.55)'
+   178→   178→    ctx.beginPath()
+   179→   179→    ctx.moveTo(0, project.height - 0.5)
+   180→   180→    ctx.lineTo(project.width, project.height - 0.5)
+   181→   181→    ctx.moveTo(project.width / 2 + 0.5, 0)
+   182→   182→    ctx.lineTo(project.width / 2 + 0.5, project.height)
+   183→   183→    ctx.stroke()
+   184→   184→  }, [project, clip, anchorFrame, draftParts, showOverlay, docVersion])
+   185→   185→
+   186→   186→  // draw the current preview frame + the strip thumbnails
+   187→   187→  useEffect(() => {
+   188→   188→    if (!plan || !previewCanvasRef.current) return
+   189→   189→    const canvas = previewCanvasRef.current
+   190→   190→    canvas.width = project.width
+   191→   191→    canvas.height = project.height
+   192→   192→    const ctx = canvas.getContext('2d')
+   193→   193→    if (!ctx) return
+   194→   194→    const rgba = displayBuffer(project, clip, anchorFrame, plan, previewIdx)
+   195→   195→    ctx.putImageData(new ImageData(new Uint8ClampedArray(rgba), project.width, project.height), 0, 0)
+   196→   196→    // preview frame part rects at their OFFSET positions (visual debugging)
+   197→   197→    if (showOverlay) {
+   198→   198→      ctx.strokeStyle = 'rgba(45, 212, 191, 0.55)'
+   199→   199→      ctx.beginPath()
+   200→   200→      ctx.moveTo(0, project.height - 0.5)
+   201→   201→      ctx.lineTo(project.width, project.height - 0.5)
+   202→   202→      ctx.stroke()
+   203→   203→    }
+   204→   204→    plan.frames.forEach((f, i) => {
+   205→   205→      const c = stripRefs.current[i]
+   206→   206→      if (!c) return
+   207→   207→      c.width = project.width
+   208→   208→      c.height = project.height
+   209→   209→      const cctx = c.getContext('2d')
+   210→   210→      if (!cctx) return
+   211→   211→      const r = displayBuffer(project, clip, anchorFrame, plan, i)
+   212→   212→      cctx.putImageData(new ImageData(new Uint8ClampedArray(r), project.width, project.height), 0, 0)
+   213→   213→    })
+   214→   214→  }, [plan, previewIdx, showOverlay, docVersion])
+   215→   215→
+   216→   216→  // playback timer (clip fps; play-once presets stop on the last frame)
+   217→   217→  useEffect(() => {
+   218→   218→    if (!playing || !plan) return
+   219→   219→    const ms = Math.max(30, Math.round(1000 / clip.fps))
+   220→   220→    const t = setInterval(() => {
+   221→   221→      setPreviewIdx((i) => {
+   222→   222→        const next = i + 1
+   223→   223→        if (next >= plan.frames.length) {
+   224→   224→          if (preset.playOnceSuggested) {
+   225→   225→            setPlaying(false)
+   226→   226→            return i
+   227→   227→          }
+   228→   228→          return 0
+   229→   229→        }
+   230→   230→        return next
+   231→   231→      })
+   232→   232→    }, ms)
+   233→   233→    return () => clearInterval(t)
+   234→   234→  }, [playing, plan, clip.fps, preset])
+   235→   235→
+   236→   236→  // --- actions -----------------------------------------------------------------
+   237→   237→  const addDraftPart = () => {
+   238→   238→    const name = draftName.trim()
+   239→   239→    if (!name) return
+   240→   240→    if (draftParts.some((p) => roleKey(p.name) === roleKey(name))) {
+   241→   241→      toast({ title: 'Duplicate part name', description: `A part named "${name}" already exists — names are roles.`, variant: 'destructive' })
+   242→   242→      return
+   243→   243→    }
+   244→   244→    if (draftParts.length >= 32) {
+   245→   245→      toast({ title: 'Too many parts', description: 'At most 32 parts per clip.', variant: 'destructive' })
+   246→   246→      return
+   247→   247→    }
+   248→   248→    setDraftParts((ps) => [...ps, { name, layerId, ...(draftWholeLayer ? {} : { rect: { ...draftRect } }) }])
+   249→   249→    setDirtyDraft(true)
+   250→   250→  }
+   251→   251→
+   252→   252→  const useSelectionAsRect = () => {
+   253→   253→    if (!selection) {
+   254→   254→      toast({ title: 'No selection', description: 'Drag a marquee on the canvas first, then press "Use selection".', variant: 'destructive' })
+   255→   255→      return
+   256→   256→    }
+   257→   257→    setDraftRect({ ...selection })
+   258→   258→    setDraftWholeLayer(false)
+   259→   259→  }
+   260→   260→
+   261→   261→  const saveParts = () => {
+   262→   262→    if (!setClipParts(clip.id, draftParts.map((p) => ({ ...p })))) return
+   263→   263→    setDirtyDraft(false)
+   264→   264→    toast({ title: 'Parts saved', description: `${draftParts.length} part${draftParts.length === 1 ? '' : 's'} tagged on "${clip.name}".` })
+   265→   265→  }
+   266→   266→
+   267→   267→  const accept = () => {
+   268→   268→    if (!plan) return
+   269→   269→    const target =
+   270→   270→      targetMode === 'new'
+   271→   271→        ? ({ kind: 'new', name: newClipName.trim() || `${presetId}-clip`, fps: clip.fps } as const)
+   272→   272→        : ({ kind: 'existing', clipId: clip.id, overwrite: true } as const)
+   273→   273→    const createdClipId = applyMotionPreset({
+   274→   274→      sourceClipId: clip.id,
+   275→   275→      preset: presetId,
+   276→   276→      params: { amplitude: params.amplitude, frameCount: plan.report.frameCount, gapFill: params.gapFill, smear: params.smear },
+   277→   277→      anchorFrameIndex: anchorIndex,
+   278→   278→      target,
+   279→   279→    })
+   280→   280→    if (!createdClipId) return
+   281→   281→    const skipped = plan.report.skipped.length
+   282→   282→    toast({
+   283→   283→      title: 'Motion applied',
+   284→   284→      description:
+   285→   285→        targetMode === 'new'
+   286→   286→          ? `New clip "${target.kind === 'new' ? target.name : ''}" created with ${plan.report.frameCount} frames.${skipped ? ` ${skipped} absent role(s) skipped.` : ''}`
+   287→   287→          : `${plan.report.frameCount} frame${plan.report.frameCount === 1 ? '' : 's'} of "${clip.name}" rewritten (undoable).`,
+   288→   288→    })
+   289→   289→    setPlan(null)
+   290→   290→    setIssues([])
+   291→   291→    setPlaying(false)
+   292→   292→    if (targetMode === 'new' && createdClipId) {
+   293→   293→      const st = useEditor.getState()
+   294→   294→      const created = st.project.clips.find((c) => c.id === createdClipId)
+   295→   295→      useEditor.setState({
+   296→   296→        activeClipId: createdClipId,
+   297→   297→        activeFrameIndex: 0,
+   298→   298→        activeLayerId: created?.layers.at(-1)?.id ?? st.activeLayerId,
+   299→   299→      })
+   300→   300→    }
+   301→   301→  }
+   302→   302→
+   303→   303→  // --- dev probe for browser smokes (mirrors window.__pfAi discipline) ----------
+   304→   304→  useEffect(() => {
+   305→   305→    const w = window as unknown as Record<string, unknown>
+   306→   306→    w.__pfMotion = {
+   307→   307→      draftParts: () => draftParts.length,
+   308→   308→      savedParts: () => clip.parts.map((p) => ({ name: p.name, rect: p.rect ?? null })),
+   309→   309→      tagPart: (name: string, rect?: PartRect) =>
+   310→   310→        setDraftParts((ps) => [...ps, { name, layerId, ...(rect ? { rect } : {}) }]),
+   311→   311→      saveParts,
+   312→   312→      selectPreset: (id: string) => {
+   313→   313→        if ((PRESET_IDS as string[]).includes(id)) setPresetId(id as MotionPresetId)
+   314→   314→      },
+   315→   315→      setParam: (k: 'amplitude' | 'frameCount' | 'gapFill' | 'smear', v: number | string | boolean) =>
+   316→   316→        setParams((p) => ({ ...p, [k]: v } as MotionParams)),
+   317→   317→      preview: renderPlan,
+   318→   318→      report: () => plan?.report ?? null,
+   319→   319→      issues: () => issues,
+   320→   320→      setTarget: (m: 'new' | 'overwrite') => setTargetMode(m),
+   321→   321→      accept,
+   322→   322→    }
+   323→   323→    return () => {
+   324→   324→      delete w.__pfMotion
+   325→   325→    }
+   326→   326→  })
+   327→   327→
+   328→   328→  // --------------------------------------------------------------------------------
+   329→   329→  if (!anchorFrame) {
+   330→   330→    return <div className="p-4 text-xs text-zinc-500">This clip has no frames.</div>
+   331→   331→  }
+   332→   332→
+   333→   333→  return (
+   334→   334→    <div className="pixelforge-scroll mx-auto min-h-0 w-full max-w-[520px] flex-1 space-y-3 overflow-y-auto p-3" data-testid="motion-panel">
+   335→   335→      {/* ---------------------------- source ---------------------------- */}
+   336→   336→      <section aria-label="Source" className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-3">
+   337→   337→        <header className="mb-2 flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-teal-300">
+   338→   338→          <Film className="h-3 w-3" /> Source
+   339→   339→        </header>
+   340→   340→        <div className="flex items-center justify-between gap-2">
+   341→   341→          <span className="truncate text-xs font-medium text-zinc-200">{clip.name}</span>
+   342→   342→          <div className="flex items-center gap-1">
+   343→   343→            <span className="font-mono text-[10px] text-zinc-500">anchor</span>
+   344→   344→            <Select value={String(anchorIndex)} onValueChange={(v) => setAnchorIndex(Number(v))}>
+   345→   345→              <SelectTrigger className="h-6 w-[70px] font-mono text-[11px]" aria-label="Anchor frame">
+   346→   346→                <SelectValue />
+   347→   347→              </SelectTrigger>
+   348→   348→              <SelectContent className="max-h-48">
+   349→   349→                {clip.frames.map((f, i) => (
+   350→   350→                  <SelectItem key={f.id} value={String(i)} className="font-mono text-[11px]">
+   351→   351→                    {i + 1}
+   352→   352→                  </SelectItem>
+   353→   353→                ))}
+   354→   354→              </SelectContent>
+   355→   355→            </Select>
+   356→   356→          </div>
+   357→   357→        </div>
+   358→   358→        <p className="mt-1 font-mono text-[10px] text-zinc-500">
+   359→   359→          every frame derives from frame {anchorIndex + 1} (R5) · {clip.fps} fps
+   360→   360→        </p>
+   361→   361→      </section>
+   362→   362→
+   363→   363→      {/* ---------------------------- parts ---------------------------- */}
+   364→   364→      <section aria-label="Body parts" className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-3">
+   365→   365→        <header className="mb-2 flex items-center justify-between">
+   366→   366→          <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-teal-300">
+   367→   367→            <Tag className="h-3 w-3" /> Parts ({draftParts.length})
+   368→   368→          </span>
+   369→   369→          {dirtyDraft && (
+   370→   370→            <div className="flex gap-1">
+   371→   371→              <Button size="sm" className="h-6 bg-teal-600 px-2 font-mono text-[10px] hover:bg-teal-500" onClick={saveParts}>
+   372→   372→                Save parts
+   373→   373→              </Button>
+   374→   374→              <Button
+   375→   375→                size="sm"
+   376→   376→                variant="ghost"
+   377→   377→                className="h-6 px-2 font-mono text-[10px] text-zinc-400"
+   378→   378→                onClick={() => {
+   379→   379→                  setDraftParts(clip.parts.map((p) => ({ name: p.name, layerId: p.layerId, ...(p.rect ? { rect: { ...p.rect } } : {}) })))
+   380→   380→                  setDirtyDraft(false)
+   381→   381→                }}
+   382→   382→              >
+   383→   383→                Revert
+   384→   384→              </Button>
+   385→   385→            </div>
+   386→   386→          )}
+   387→   387→        </header>
+   388→   388→
+   389→   389→        {/* source preview with part rects */}
+   390→   390→        <div className="mb-2 flex gap-2">
+   391→   391→          <canvas
+   392→   392→            ref={sourceCanvasRef}
+   393→   393→            className="h-[96px] w-[96px] shrink-0 rounded border border-zinc-700 bg-zinc-950"
+   394→   394→            style={{ imageRendering: 'pixelated' }}
+   395→   395→            aria-label="Anchor frame with part rectangles"
+   396→   396→          />
+   397→   397→          <div className="min-w-0 flex-1 space-y-1">
+   398→   398→            <p className="font-mono text-[10px] leading-tight text-zinc-500">
+   399→   399→              Regions only — never cuts. Overlaps are owned by the highest-z part (R2).
+   400→   400→            </p>
+   401→   401→            <div className="flex flex-wrap gap-1">
+   402→   402→              {draftParts.map((p, i) => (
+   403→   403→                <span
+   404→   404→                  key={`${p.name}-${i}`}
+   405→   405→                  className="inline-flex items-center gap-1 rounded border border-zinc-700 bg-zinc-950 px-1.5 py-0.5 font-mono text-[10px] text-zinc-300"
+   406→   406→                >
+   407→   407→                  <span className="h-2 w-2 rounded-sm" style={{ background: PART_COLORS[i % PART_COLORS.length] }} />
+   408→   408→                  {p.name}
+   409→   409→                  <button
+   410→   410→                    className="text-zinc-500 hover:text-red-400"
+   411→   411→                    aria-label={`Remove part ${p.name}`}
+   412→   412→                    onClick={() => {
+   413→   413→                      setDraftParts((ps) => ps.filter((_, j) => j !== i))
+   414→   414→                      setDirtyDraft(true)
+   415→   415→                    }}
+   416→   416→                  >
+   417→   417→                    <Trash2 className="h-3 w-3" />
+   418→   418→                  </button>
+   419→   419→                </span>
+   420→   420→              ))}
+   421→   421→              {draftParts.length === 0 && (
+   422→   422→                <span className="font-mono text-[10px] text-zinc-600">no parts tagged yet</span>
+   423→   423→              )}
+   424→   424→            </div>
+   425→   425→          </div>
+   426→   426→        </div>
+   427→   427→
+   428→   428→        {/* tag controls */}
+   429→   429→        <div className="space-y-2 rounded border border-zinc-800 bg-zinc-950/60 p-2">
+   430→   430→          <div className="grid grid-cols-2 gap-2">
+   431→   431→            <div>
+   432→   432→              <Label className="font-mono text-[10px] text-zinc-400">Part name</Label>
+   433→   433→              <Select value={draftName} onValueChange={setDraftName}>
+   434→   434→                <SelectTrigger className="h-7 font-mono text-[11px]" aria-label="Part name">
+   435→   435→                  <SelectValue />
+   436→   436→                </SelectTrigger>
+   437→   437→                <SelectContent className="max-h-48">
+   438→   438→                  {CANONICAL_ROLES.map((r) => (
+   439→   439→                    <SelectItem key={r} value={r} className="font-mono text-[11px]">
+   440→   440→                      {r}
+   441→   441→                    </SelectItem>
+   442→   442→                  ))}
+   443→   443→                </SelectContent>
+   444→   444→              </Select>
+   445→   445→            </div>
+   446→   446→            <div>
+   447→   447→              <Label className="font-mono text-[10px] text-zinc-400">Region</Label>
+   448→   448→              <div className="flex gap-1">
+   449→   449→                <Input
+   450→   450→                  className="h-7 font-mono text-[11px]"
+   451→   451→                  aria-label="Rect x"
+   452→   452→                  type="number"
+   453→   453→                  min={0}
+   454→   454→                  max={project.width - 1}
+   455→   455→                  value={draftRect.x}
+   456→   456→                  disabled={draftWholeLayer}
+   457→   457→                  onChange={(e) => setDraftRect((r) => ({ ...r, x: Number(e.target.value) }))}
+   458→   458→                />
+   459→   459→                <Input
+   460→   460→                  className="h-7 font-mono text-[11px]"
+   461→   461→                  aria-label="Rect y"
+   462→   462→                  type="number"
+   463→   463→                  min={0}
+   464→   464→                  max={project.height - 1}
+   465→   465→                  value={draftRect.y}
+   466→   466→                  disabled={draftWholeLayer}
+   467→   467→                  onChange={(e) => setDraftRect((r) => ({ ...r, y: Number(e.target.value) }))}
+   468→   468→                />
+   469→   469→              </div>
+   470→   470→            </div>
+   471→   471→          </div>
+   472→   472→          <div className="grid grid-cols-2 gap-2">
+   473→   473→            <div>
+   474→   474→              <Label className="font-mono text-[10px] text-zinc-400">Width</Label>
+   475→   475→              <Input
+   476→   476→                className="h-7 font-mono text-[11px]"
+   477→   477→                aria-label="Rect width"
+   478→   478→                type="number"
+   479→   479→                min={1}
+   480→   480→                max={project.width}
+   481→   481→                value={draftRect.w}
+   482→   482→                disabled={draftWholeLayer}
+   483→   483→                onChange={(e) => setDraftRect((r) => ({ ...r, w: Number(e.target.value) }))}
+   484→   484→              />
+   485→   485→            </div>
+   486→   486→            <div>
+   487→   487→              <Label className="font-mono text-[10px] text-zinc-400">Height</Label>
+   488→   488→              <Input
+   489→   489→                className="h-7 font-mono text-[11px]"
+   490→   490→                aria-label="Rect height"
+   491→   491→                type="number"
+   492→   492→                min={1}
+   493→   493→                max={project.height}
+   494→   494→                value={draftRect.h}
+   495→   495→                disabled={draftWholeLayer}
+   496→   496→                onChange={(e) => setDraftRect((r) => ({ ...r, h: Number(e.target.value) }))}
+   497→   497→              />
+   498→   498→            </div>
+   499→   499→          </div>
+   500→   500→          <div className="flex items-center justify-between gap-2">
+   501→   501→            <Button size="sm" variant="outline" className="h-7 gap-1 border-zinc-700 px-2 font-mono text-[10px] hover:border-teal-500 hover:text-teal-300" onClick={useSelectionAsRect}>
+   502→   502→              <Square className="h-3 w-3" /> Use selection
+   503→   503→            </Button>
+   504→   504→            <label className="flex items-center gap-1.5 font-mono text-[10px] text-zinc-400">
+   505→   505→              <Switch checked={draftWholeLayer} onCheckedChange={setDraftWholeLayer} className="scale-90" aria-label="Whole layer part" />
+   506→   506→              whole layer
+   507→   507→            </label>
+   508→   508→            <Button size="sm" className="h-7 gap-1 bg-teal-600 px-2 font-mono text-[10px] hover:bg-teal-500" onClick={addDraftPart}>
+   509→   509→              <Plus className="h-3 w-3" /> Tag part
+   510→   510→            </Button>
+   511→   511→          </div>
+   512→   512→        </div>
+   513→   513→      </section>
+   514→   514→
+   515→   515→      {/* ---------------------------- preset ---------------------------- */}
+   516→   516→      <section aria-label="Motion preset" className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-3">
+   517→   517→        <header className="mb-2 flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-teal-300">
+   518→   518→          <Clapperboard className="h-3 w-3" /> Preset
+   519→   519→        </header>
+   520→   520→        <div className="mb-2 grid grid-cols-5 gap-1">
+   521→   521→          {PRESET_IDS.map((id) => (
+   522→   522→            <button
+   523→   523→              key={id}
+   524→   524→              onClick={() => setPresetId(id)}
+   525→   525→              aria-pressed={presetId === id}
+   526→   526→              className={`rounded px-1 py-1.5 font-mono text-[10px] capitalize transition-colors ${
+   527→   527→                presetId === id
+   528→   528→                  ? 'bg-teal-600 text-white'
+   529→   529→                  : 'bg-zinc-950 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
+   530→   530→              }`}
+   531→   531→            >
+   532→   532→              {id}
+   533→   533→            </button>
+   534→   534→          ))}
+   535→   535→        </div>
+   536→   536→        <p className="mb-2 font-mono text-[10px] leading-tight text-zinc-500">{preset.description}</p>
+   537→   537→
+   538→   538→        <div className="grid grid-cols-2 gap-2">
+   539→   539→          <div>
+   540→   540→            <Label className="font-mono text-[10px] text-zinc-400">Frames</Label>
+   541→   541→            <Select
+   542→   542→              value={String(params.frameCount || preset.defaultFrameCount)}
+   543→   543→              onValueChange={(v) => setParams((p) => ({ ...p, frameCount: Number(v) }))}
+   544→   544→            >
+   545→   545→              <SelectTrigger className="h-7 font-mono text-[11px]" aria-label="Frame count">
+   546→   546→                <SelectValue />
+   547→   547→              </SelectTrigger>
+   548→   548→              <SelectContent>
+   549→   549→                {preset.frameCounts.map((n) => (
+   550→   550→                  <SelectItem key={n} value={String(n)} className="font-mono text-[11px]">
+   551→   551→                    {n}
+   552→   552→                  </SelectItem>
+   553→   553→                ))}
+   554→   554→              </SelectContent>
+   555→   555→            </Select>
+   556→   556→          </div>
+   557→   557→          <div>
+   558→   558→            <Label className="font-mono text-[10px] text-zinc-400">Gap fill</Label>
+   559→   559→            <Select
+   560→   560→              value={params.gapFill}
+   561→   561→              onValueChange={(v) => setParams((p) => ({ ...p, gapFill: v as MotionParams['gapFill'] }))}
+   562→   562→            >
+   563→   563→              <SelectTrigger className="h-7 font-mono text-[11px]" aria-label="Gap fill mode">
+   564→   564→                <SelectValue />
+   565→   565→              </SelectTrigger>
+   566→   566→              <SelectContent>
+   567→   567→                <SelectItem value="none" className="font-mono text-[11px]">none (honest)</SelectItem>
+   568→   568→                <SelectItem value="edge-extend" className="font-mono text-[11px]">edge-extend</SelectItem>
+   569→   569→              </SelectContent>
+   570→   570→            </Select>
+   571→   571→          </div>
+   572→   572→        </div>
+   573→   573→        <div className="mt-2">
+   574→   574→          <Label className="flex items-center justify-between font-mono text-[10px] text-zinc-400">
+   575→   575→            amplitude <span className="text-teal-300">{params.amplitude.toFixed(2)}×</span>
+   576→   576→          </Label>
+   577→   577→          <Slider
+   578→   578→            value={[params.amplitude]}
+   579→   579→            min={0.25}
+   580→   580→            max={3}
+   581→   581→            step={0.25}
+   582→   582→            onValueChange={([v]) => setParams((p) => ({ ...p, amplitude: v }))}
+   583→   583→            aria-label="Amplitude"
+   584→   584→            className="mt-1"
+   585→   585→          />
+   586→   586→        </div>
+   587→   587→        {presetId === 'attack' && (
+   588→   588→          <label className="mt-2 flex items-center justify-between font-mono text-[10px] text-zinc-400">
+   589→   589→            1-px smear frame (swing)
+   590→   590→            <Switch checked={params.smear} onCheckedChange={(v) => setParams((p) => ({ ...p, smear: v }))} aria-label="Smear frame" />
+   591→   591→          </label>
+   592→   592→        )}
+   593→   593→        {preset.playOnceSuggested && (
+   594→   594→          <p className="mt-2 font-mono text-[10px] text-amber-400/80">
+   595→   595→            {preset.label} is play-once — set the clip loop off (Layers → clip props) for correct playback.
+   596→   596→          </p>
+   597→   597→        )}
+   598→   598→
+   599→   599→        <div className="mt-2 flex gap-2">
+   600→   600→          <Button className="h-8 flex-1 gap-1.5 bg-teal-600 font-mono text-[11px] hover:bg-teal-500" onClick={renderPlan}>
+   601→   601→            <Play className="h-3.5 w-3.5" /> Generate preview
+   602→   602→          </Button>
+   603→   603→          <Button
+   604→   604→            variant="outline"
+   605→   605→            className="h-8 gap-1 border-zinc-700 px-2 font-mono text-[10px] hover:border-teal-500 hover:text-teal-300"
+   606→   606→            onClick={() => setShowOverlay((v) => !v)}
+   607→   607→            aria-pressed={showOverlay}
+   608→   608→            title="Ground line + center axis + part rects"
+   609→   609→          >
+   610→   610→            anchors {showOverlay ? 'on' : 'off'}
+   611→   611→          </Button>
+   612→   612→        </div>
+   613→   613→      </section>
+   614→   614→
+   615→   615→      {/* ---------------------------- preview ---------------------------- */}
+   616→   616→      {plan && (
+   617→   617→        <section aria-label="Preview" className="rounded-lg border border-teal-900/60 bg-zinc-900/60 p-3">
+   618→   618→          <header className="mb-2 flex items-center justify-between">
+   619→   619→            <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-teal-300">
+   620→   620→              <Clapperboard className="h-3 w-3" /> Preview — not committed
+   621→   621→            </span>
+   622→   622→            <div className="flex items-center gap-1">
+   623→   623→              <Button
+   624→   624→                size="icon"
+   625→   625→                variant="ghost"
+   626→   626→                className="h-6 w-6 text-zinc-300 hover:text-teal-300"
+   627→   627→                onClick={() => setPlaying((v) => !v)}
+   628→   628→                aria-label={playing ? 'Pause preview' : 'Play preview'}
+   629→   629→              >
+   630→   630→                {playing ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+   631→   631→              </Button>
+   632→   632→              <span className="font-mono text-[10px] text-zinc-500">
+   633→   633→                {previewIdx + 1}/{plan.frames.length}
+   634→   634→              </span>
+   635→   635→            </div>
+   636→   636→          </header>
+   637→   637→
+   638→   638→          <div className="flex gap-2">
+   639→   639→            <figure className="shrink-0">
+   640→   640→              <canvas
+   641→   641→                ref={previewCanvasRef}
+   642→   642→                className="h-[96px] w-[96px] rounded border border-zinc-700 bg-zinc-950"
+   643→   643→                style={{ imageRendering: 'pixelated' }}
+   644→   644→                aria-label={`Generated frame ${previewIdx + 1}`}
+   645→   645→              />
+   646→   646→              <figcaption className="mt-0.5 text-center font-mono text-[9px] text-teal-400/80">frame {previewIdx + 1}</figcaption>
+   647→   647→            </figure>
+   648→   648→            <figure className="shrink-0">
+   649→   649→              <canvas
+   650→   650→                className="h-[96px] w-[96px] rounded border border-zinc-800 bg-zinc-950"
+   651→   651→                style={{ imageRendering: 'pixelated' }}
+   652→   652→                ref={(c) => {
+   653→   653→                  // static source thumbnail for A/B compare
+   654→   654→                  if (c && anchorFrame) {
+   655→   655→                    c.width = project.width
+   656→   656→                    c.height = project.height
+   657→   657→                    const ctx = c.getContext('2d')
+   658→   658→                    if (ctx) {
+   659→   659→                      ctx.putImageData(
+   660→   660→                        new ImageData(new Uint8ClampedArray(composeFrameRgba(project, clip, anchorFrame)), project.width, project.height),
+   661→   661→                        0,
+   662→   662→                        0
+   663→   663→                      )
+   664→   664→                    }
+   665→   665→                  }
+   666→   666→                }}
+   667→   667→                aria-label="Source anchor frame"
+   668→   668→              />
+   669→   669→              <figcaption className="mt-0.5 text-center font-mono text-[9px] text-zinc-500">source {anchorIndex + 1}</figcaption>
+   670→   670→            </figure>
+   671→   671→            <div className="pixelforge-scroll flex min-w-0 flex-1 gap-1 overflow-x-auto pb-1">
+   672→   672→              {plan.frames.map((_, i) => (
+   673→   673→                <button key={i} onClick={() => { setPreviewIdx(i); setPlaying(false) }} aria-label={`Show frame ${i + 1}`} className="shrink-0">
+   674→   674→                  <canvas
+   675→   675→                    ref={(c) => { stripRefs.current[i] = c }}
+   676→   676→                    className={`h-[44px] w-[44px] rounded border bg-zinc-950 ${i === previewIdx ? 'border-teal-400' : 'border-zinc-800'}`}
+   677→   677→                    style={{ imageRendering: 'pixelated' }}
+   678→   678→                  />
+   679→   679→                </button>
+   680→   680→              ))}
+   681→   681→            </div>
+   682→   682→          </div>
+   683→   683→
+   684→   684→          {/* QA issues */}
+   685→   685→          <ul className="mt-2 space-y-1" aria-label="Quality checks">
+   686→   686→            {issues.map((iss, i) => (
+   687→   687→              <li key={`${iss.code}-${i}`} className={`flex items-start gap-1.5 rounded px-1.5 py-1 font-mono text-[10px] leading-tight ${iss.level === 'warning' ? 'bg-amber-500/10 text-amber-300' : 'bg-zinc-800/60 text-zinc-400'}`}>
+   688→   688→                {iss.level === 'warning' ? <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" /> : <Info className="mt-0.5 h-3 w-3 shrink-0" />}
+   689→   689→                <span>{iss.message}</span>
+   690→   690→              </li>
+   691→   691→            ))}
+   692→   692→            {issues.length === 0 && (
+   693→   693→              <li className="flex items-center gap-1.5 rounded bg-emerald-500/10 px-1.5 py-1 font-mono text-[10px] text-emerald-300">
+   694→   694→                <Info className="h-3 w-3" /> QA clean — no flicker, gaps or overlap issues detected.
+   695→   695→              </li>
+   696→   696→            )}
+   697→   697→          </ul>
+   698→   698→
+   699→   699→          {/* skipped roles (C27 report) */}
+   700→   700→          {plan.report.skipped.length > 0 && (
+   701→   701→            <p className="mt-1 font-mono text-[10px] text-zinc-500">
+   702→   702→              skipped roles: {plan.report.skipped.map((s) => s.role).join(', ')} (not tagged on this clip)
+   703→   703→            </p>
+   704→   704→          )}
+   705→   705→
+   706→   706→          {/* commit target */}
+   707→   707→          <div className="mt-3 space-y-2 rounded border border-zinc-800 bg-zinc-950/60 p-2">
+   708→   708→            <div className="flex items-center gap-3">
+   709→   709→              <label className="flex items-center gap-1.5 font-mono text-[10px] text-zinc-300">
+   710→   710→                <input type="radio" checked={targetMode === 'new'} onChange={() => setTargetMode('new')} className="accent-teal-500" />
+   711→   711→                new clip
+   712→   712→              </label>
+   713→   713→              {targetMode === 'new' && (
+   714→   714→                <Input
+   715→   715→                  className="h-7 flex-1 font-mono text-[11px]"
+   716→   716→                  value={newClipName}
+   717→   717→                  onChange={(e) => setNewClipName(e.target.value)}
+   718→   718→                  aria-label="New clip name"
+   719→   719→                  placeholder="clip name"
+   720→   720→                />
+   721→   721→              )}
+   722→   722→            </div>
+   723→   723→            <label className="flex items-start gap-1.5 font-mono text-[10px] text-zinc-300">
+   724→   724→              <input type="radio" checked={targetMode === 'overwrite'} onChange={() => setTargetMode('overwrite')} className="mt-0.5 accent-teal-500" />
+   725→   725→              <span>
+   726→   726→                overwrite {Math.min(plan.report.frameCount, clip.frames.length)} frame
+   727→   727→                {Math.min(plan.report.frameCount, clip.frames.length) === 1 ? '' : 's'} of "{clip.name}"
+   728→   728→                <span className="block text-zinc-500">
+   729→   729→                  requires overwrite — extra frames stay untouched, missing frames become holds (R6)
+   730→   730→                </span>
+   731→   731→              </span>
+   732→   732→            </label>
+   733→   733→          </div>
+   734→   734→
+   735→   735→          <div className="mt-2 flex gap-2">
+   736→   736→            <Button className="h-8 flex-1 bg-teal-600 font-mono text-[11px] hover:bg-teal-500" onClick={accept}>
+   737→   737→              Accept &amp; create {targetMode === 'new' ? 'clip' : 'frames'}
+   738→   738→            </Button>
+   739→   739→            <Button
+   740→   740→              variant="outline"
+   741→   741→              className="h-8 gap-1 border-zinc-700 px-3 font-mono text-[11px] hover:border-red-500 hover:text-red-400"
+   742→   742→              onClick={() => { setPlan(null); setIssues([]); setPlaying(false) }}
+   743→   743→            >
+   744→   744→              <Eraser className="h-3.5 w-3.5" /> Discard
+   745→   745→            </Button>
+   746→   746→          </div>
+   747→   747→        </section>
+   748→   748→      )}
+   749→   749→
+   750→   750→      <p className="px-1 font-mono text-[10px] leading-tight text-zinc-600">
+   751→   751→        deterministic composer · integer pixels · no interpolation · source colors preserved · $0
+   752→   752→      </p>
+   753→   753→    </div>
+   754→   754→  )
+   755→   755→}
+   756→   756→

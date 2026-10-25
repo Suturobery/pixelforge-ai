@@ -376,6 +376,7 @@ export {
   analyzeClipMotion,
   analyzeMotionPlan,
   diffChangedPixels,
+  footContactIssues,
   QA_OPTIONS_DEFAULTS,
   type QAIssue,
   type QaOptions,

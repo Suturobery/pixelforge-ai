@@ -10,7 +10,20 @@
     "db:push": "prisma db push --accept-data-loss",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
-    "db:reset": "prisma migrate reset"
+    "db:reset": "prisma migrate reset",
+    "core:test": "cd packages/core && bun test",
+    "core:typecheck": "cd packages/core && bun run typecheck",
+    "core:test:typecheck": "cd packages/core && bun run test:typecheck",
+    "desktop:test": "cd apps/desktop && bun test tests/",
+    "desktop:typecheck": "cd apps/desktop && npm run typecheck",
+    "desktop:dev": "cd apps/desktop && npm run dev",
+    "mcp:test": "cd mini-services/mcp-server && bun test",
+    "mcp:typecheck": "cd mini-services/mcp-server && bunx tsc -p tsconfig.json --noEmit",
+    "mcp:dev": "cd mini-services/mcp-server && bun run dev",
+    "seed:sample": "bun scripts/seed-sample.ts",
+    "bench:open": "bun scripts/bench-open.ts",
+    "ci:local": "bash scripts/ci-local.sh",
+    "ci:smoke": "bash scripts/smoke-stack.sh"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

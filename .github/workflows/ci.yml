@@ -1,0 +1,244 @@
+# =============================================================================
+# PixelForge AI — CI (Task 15a: Continuous Integration & Automated Testing)
+#
+# Jobs are independent and run in parallel:
+#   static         lint + TypeScript gates (core, core-tests, desktop, mcp)
+#   core-tests     editor-core unit suite incl. golden-image export tests
+#   mcp-tests      MCP protocol contract tests (isolated port + temp data dir)
+#   renderer-build Next.js renderer production build verification
+#   desktop-smoke  desktop unit tests + Electron build + full-stack xvfb
+#                  smokes (file/export/MCP/settings) + live MCP E2E
+#
+# Reproducibility: pinned tool versions + frozen lockfiles
+#   (bun.lock, mini-services/mcp-server/bun.lock, apps/desktop/package-lock.json)
+# No paid AI calls, no external secrets, no real API credentials in CI.
+# =============================================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  BUN_VERSION: 1.3.14
+  NODE_VERSION: '22'
+
+jobs:
+  # -------------------------------------------------------------------------
+  static:
+    name: Lint + Typecheck (core · desktop · mcp)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}-${{ hashFiles('mini-services/mcp-server/bun.lock') }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install root dependencies (bun, frozen)
+        run: bun install --frozen-lockfile
+
+      - name: Install MCP server dependencies (bun, frozen)
+        working-directory: mini-services/mcp-server
+        run: bun install --frozen-lockfile
+
+      - name: Install desktop dependencies (npm ci, frozen)
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: ESLint
+        run: bun run lint
+
+      - name: Typecheck editor core (src + tests)
+        run: |
+          bun run core:typecheck
+          bun run core:test:typecheck
+
+      - name: Typecheck desktop (Electron main + preload)
+        run: bun run desktop:typecheck
+
+      - name: Typecheck MCP server
+        run: bun run mcp:typecheck
+
+  # -------------------------------------------------------------------------
+  core-tests:
+    name: Core unit + golden-image tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+
+      - name: Install root dependencies (bun, frozen)
+        run: bun install --frozen-lockfile
+
+      - name: Core test suite (220 tests incl. 25 export goldens)
+        working-directory: packages/core
+        run: bun test
+
+  # -------------------------------------------------------------------------
+  mcp-tests:
+    name: MCP protocol contract tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('mini-services/mcp-server/bun.lock') }}
+
+      - name: Install MCP server dependencies (bun, frozen)
+        working-directory: mini-services/mcp-server
+        run: bun install --frozen-lockfile
+
+      # Tests are self-isolating: per-process port (pid-hashed) + temp data dir
+      # (PF_MCP_DATA_DIR=/tmp/mcp-test-*). Loopback-only by construction.
+      - name: MCP contract suite (20 tests over the wire)
+        working-directory: mini-services/mcp-server
+        run: bun test
+
+  # -------------------------------------------------------------------------
+  renderer-build:
+    name: Renderer build verification (Next.js)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      DATABASE_URL: file:/tmp/pf-ci-renderer.db
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+
+      - name: Install root dependencies (bun, frozen)
+        run: bun install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: bunx prisma generate
+
+      # Production build = renderer compatibility gate (module resolution,
+      # prerender, standalone output). Type errors are additionally gated by
+      # the per-project typechecks in the `static` job.
+      - name: Build renderer (next build, standalone output)
+        run: bun run build
+
+  # -------------------------------------------------------------------------
+  desktop-smoke:
+    name: Desktop unit + Electron build + full-stack smokes (xvfb)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      DATABASE_URL: file:/tmp/pf-ci-smoke.db
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}-${{ hashFiles('mini-services/mcp-server/bun.lock') }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-builder
+          key: electron-${{ runner.os }}-${{ hashFiles('apps/desktop/package-lock.json') }}
+
+      - name: Install root dependencies (bun, frozen)
+        run: bun install --frozen-lockfile
+
+      - name: Install MCP server dependencies (bun, frozen)
+        working-directory: mini-services/mcp-server
+        run: bun install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: bunx prisma generate
+
+      - name: Install desktop dependencies (npm ci, frozen)
+        working-directory: apps/desktop
+        run: npm ci
+
+      # Electron main + preload compilation IS the desktop build gate (§9).
+      - name: Compile Electron main + preload (tsc)
+        working-directory: apps/desktop
+        run: npm run build
+
+      - name: Desktop settings/security + AI job/adapter suites
+        working-directory: apps/desktop
+        run: bun test tests/
+
+      - name: Install Xvfb
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
+      # Full product stack in isolation: temp SQLite DB, seeded sample, MCP
+      # server on a temp data dir, then xvfb Electron smokes — shell · dev
+      # canvas · file round-trip · export round-trip · MCP bridge + live MCP
+      # E2E · settings/credential vault. Exit code of the script is the gate.
+      # Credential restart-persistence (PF_SMOKE_KEY_SEED/VERIFY) is NOT run:
+      # headless Linux has no OS keyring, so persistence would take the
+      # session-only path — real DPAPI/Keychain persistence stays a manual
+      # desktop QA item (documented, not silently skipped).
+      - name: Full-stack smokes + live MCP E2E
+        run: bash scripts/smoke-stack.sh
+
+      - name: Upload smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-smoke-evidence
+          path: |
+            apps/desktop/artifacts/
+          if-no-files-found: ignore
+          retention-days: 7

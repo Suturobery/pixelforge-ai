@@ -59,7 +59,7 @@ export function suggestMotionPreset(prompt: string): MotionSuggestion | null {
         params: {
           amplitude: 1,
           frameCount: def.defaultFrameCount,
-          gapFill: 'none',
+          gapFill: 'edge-extend',
           smear: false,
         },
         matched: hit,

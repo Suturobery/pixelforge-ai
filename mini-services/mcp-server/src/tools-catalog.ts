@@ -626,7 +626,7 @@ export const TOOL_CATALOG: ToolDef[] = [
       sourceClipName: z.string().min(1).max(60).optional().describe('Source clip by exact name (used when sourceClipId is omitted).'),
       amplitude: z.number().min(0.25).max(3).optional().describe('Curve intensity multiplier before R10 canvas scaling (default 1).'),
       frameCount: z.number().int().min(1).max(64).optional().describe('Frame count (preset-bounded: idle 4 · walk 4/6/8 · run 6 · attack 4–6 · jump 4–8).'),
-      gapFill: z.enum(['none', 'edge-extend']).optional().describe('Vacated-pixel handling (R4; default "none" = honest transparent gaps).'),
+      gapFill: z.enum(['none', 'edge-extend']).optional().describe('Vacated-pixel handling (R4; default "edge-extend" = seam holes refilled; "none" = honest transparent gaps).'),
       smear: z.boolean().optional().describe('attack only: add the 1-px smear trail on the swing frame.'),
       anchorFrameIndex: z.number().int().min(0).max(4095).optional().describe('Anchor frame index (0-based; default 0 = frame 1, R5).'),
       overwrite: z.boolean().optional().describe('true = overwrite the target clip frames (requires targetClipId, defaults to the source clip). Omit = create a NEW clip.'),

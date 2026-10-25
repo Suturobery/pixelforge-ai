@@ -105,6 +105,14 @@ export function MotionPanel() {
   const [targetMode, setTargetMode] = useState<'new' | 'overwrite'>('new')
   const [newClipName, setNewClipName] = useState('idle-1')
 
+  // leaving the Motion panel (or unmounting the studio) clears the timeline
+  // QA badges coming from the live plan preview
+  useEffect(() => {
+    return () => {
+      useEditor.getState().setMotionPreviewIssues([])
+    }
+  }, [])
+
   // draft parts start as a copy of the committed clip parts; draft state is
   // reset whenever the clip or the document changes (render-time adjustment —
   // the React-endorsed pattern for derived-state resets, no sync effect)
@@ -148,7 +156,11 @@ export function MotionPanel() {
       return
     }
     setPlan(p)
-    setIssues(analyzeMotionPlan(project, clip, p))
+    const planIssues = analyzeMotionPlan(project, clip, p)
+    setIssues(planIssues)
+    // Phase-1 Task 10 QA: mirror plan issues into the store so the timeline
+    // can badge the affected source frames while the preview is live
+    useEditor.getState().setMotionPreviewIssues(planIssues)
     setPreviewIdx(0)
     setPlaying(false)
     // the suggested clip name follows the preset; the user can still edit it
@@ -288,6 +300,7 @@ export function MotionPanel() {
     })
     setPlan(null)
     setIssues([])
+    useEditor.getState().setMotionPreviewIssues([])
     setPlaying(false)
     if (targetMode === 'new' && createdClipId) {
       const st = useEditor.getState()
@@ -564,8 +577,8 @@ export function MotionPanel() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="none" className="font-mono text-[11px]">none (honest)</SelectItem>
-                <SelectItem value="edge-extend" className="font-mono text-[11px]">edge-extend</SelectItem>
+                <SelectItem value="none" className="font-mono text-[11px]">none (leave gaps)</SelectItem>
+                <SelectItem value="edge-extend" className="font-mono text-[11px]">edge-extend (recommended)</SelectItem>
               </SelectContent>
             </Select>
           </div>

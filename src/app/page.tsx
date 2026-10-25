@@ -22,11 +22,16 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useEditor, type RightTab } from '@/lib/pixelforge/store'
-import { useAppSettings } from '@/lib/pixelforge/settings'
+import {
+  hydrateDesktopSettings,
+  startDesktopSettingsSync,
+  useAppSettings,
+} from '@/lib/pixelforge/settings'
+import { initMcpBridge } from '@/lib/pixelforge/mcp-bridge'
 import { useSaveProject } from '@/components/pixelforge/use-save'
 import { useKeyboardShortcuts } from '@/components/pixelforge/use-keyboard'
 import { useIsMobile } from '@/components/pixelforge/use-is-mobile'
-import { Layers, Sparkles, Bot, PanelRightClose } from 'lucide-react'
+import { Layers, Sparkles, Bot, PersonStanding, PanelRightClose } from 'lucide-react'
 import { Header } from '@/components/pixelforge/header'
 import { ToolRail } from '@/components/pixelforge/tool-rail'
 import { CanvasStage } from '@/components/pixelforge/canvas-stage'
@@ -34,12 +39,14 @@ import { Timeline } from '@/components/pixelforge/timeline'
 import { LayersPanel } from '@/components/pixelforge/layers-panel'
 import { AiPanel } from '@/components/pixelforge/ai-panel'
 import { AgentPanel } from '@/components/pixelforge/agent-panel'
+import { MotionPanel } from '@/components/pixelforge/motion-panel'
 import { Footer } from '@/components/pixelforge/footer'
 import { cn } from '@/lib/utils'
 
 const RIGHT_TABS: { id: RightTab; label: string; icon: React.ReactNode }[] = [
   { id: 'layers', label: 'Layers', icon: <Layers className="h-3.5 w-3.5" aria-hidden /> },
   { id: 'ai', label: 'AI', icon: <Sparkles className="h-3.5 w-3.5" aria-hidden /> },
+  { id: 'motion', label: 'Motion', icon: <PersonStanding className="h-3.5 w-3.5" aria-hidden /> },
   { id: 'agent', label: 'Agent', icon: <Bot className="h-3.5 w-3.5" aria-hidden /> },
 ]
 
@@ -131,6 +138,7 @@ function RightDock({ mobile }: { mobile: boolean }) {
         <div role="tabpanel" className="min-h-0 flex-1">
           {rightTab === 'layers' && <LayersPanel />}
           {rightTab === 'ai' && <AiPanel />}
+          {rightTab === 'motion' && <MotionPanel />}
           {rightTab === 'agent' && <AgentPanel />}
         </div>
 
@@ -176,6 +184,15 @@ export default function Home() {
     const t = setTimeout(() => void save(true), Math.max(500, autosaveDelay))
     return () => clearTimeout(t)
   }, [autosave, dirty, autosaveDelay, save])
+
+  // MCP editor bridge (renderer ⇄ mini-services/mcp-server) + desktop settings
+  // vault hydrate/write-through. Browser-safe: both are no-ops outside their
+  // environment, and the bridge guards itself against double-init.
+  useEffect(() => {
+    initMcpBridge()
+    void hydrateDesktopSettings()
+    return startDesktopSettingsSync()
+  }, [])
 
   return (
     <div className="flex h-dvh min-h-0 flex-col overflow-hidden bg-zinc-950 text-zinc-100">
