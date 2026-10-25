@@ -1,0 +1,758 @@
+     1→     1→// PixelForge AI — editor state store (Zustand)
+     2→     2→// The store owns the project document and dispatches commands. All mutations
+     3→     3→// are undoable: pixel edits record before/after buffers, structural edits
+     4→     4→// record shallow document snapshots (buffers are copy-on-write).
+     5→     5→
+     6→     6→import { create } from 'zustand'
+     7→     7→import type {
+     8→     8→  Clip,
+     9→     9→  Frame,
+    10→    10→  HistoryEntry,
+    11→    11→  Layer,
+    12→    12→  Project,
+    13→    13→  ToolId,
+    14→    14→} from './types'
+    15→    15→import { createFrame, createLayer, uid } from './factory'
+    16→    16→import { useAppSettings } from './settings'
+    17→    17→import { toast } from '@/hooks/use-toast'
+    18→    18→
+    19→    19→export const MIN_ZOOM = 1
+    20→    20→export const MAX_ZOOM = 48
+    21→    21→
+    22→    22→export type RightTab = 'layers' | 'ai' | 'agent'
+    23→    23→
+    24→    24→export interface StrokeHandle {
+    25→    25→  width: number
+    26→    26→  height: number
+    27→    27→  buffer: Uint8ClampedArray
+    28→    28→}
+    29→    29→
+    30→    30→interface ActiveLoc {
+    31→    31→  clip: Clip
+    32→    32→  frame: Frame
+    33→    33→  frameIndex: number
+    34→    34→  layer: Layer
+    35→    35→}
+    36→    36→
+    37→    37→function locate(
+    38→    38→  project: Project,
+    39→    39→  activeClipId: string,
+    40→    40→  activeFrameIndex: number,
+    41→    41→  activeLayerId: string
+    42→    42→): ActiveLoc | null {
+    43→    43→  const clip =
+    44→    44→    project.clips.find((c) => c.id === activeClipId) ?? project.clips[0]
+    45→    45→  if (!clip || clip.frames.length === 0) return null
+    46→    46→  const frameIndex = Math.min(Math.max(0, activeFrameIndex), clip.frames.length - 1)
+    47→    47→  const frame = clip.frames[frameIndex]
+    48→    48→  if (!frame || frame.layers.length === 0) return null
+    49→    49→  const layer =
+    50→    50→    frame.layers.find((l) => l.id === activeLayerId) ?? frame.layers[frame.layers.length - 1]
+    51→    51→  return { clip, frame, frameIndex, layer }
+    52→    52→}
+    53→    53→
+    54→    54→/** Immutably replace a layer's buffer deep inside the project. */
+    55→    55→function withLayerData(
+    56→    56→  project: Project,
+    57→    57→  clipId: string,
+    58→    58→  frameId: string,
+    59→    59→  layerId: string,
+    60→    60→  data: Uint8ClampedArray
+    61→    61→): Project {
+    62→    62→  return {
+    63→    63→    ...project,
+    64→    64→    clips: project.clips.map((c) =>
+    65→    65→      c.id !== clipId
+    66→    66→        ? c
+    67→    67→        : {
+    68→    68→            ...c,
+    69→    69→            frames: c.frames.map((f) =>
+    70→    70→              f.id !== frameId
+    71→    71→                ? f
+    72→    72→                : { ...f, layers: f.layers.map((l) => (l.id !== layerId ? l : { ...l, data })) }
+    73→    73→            ),
+    74→    74→          }
+    75→    75→    ),
+    76→    76→  }
+    77→    77→}
+    78→    78→
+    79→    79→/**
+    80→    80→ * Layers are CLIP-WIDE: every frame in a clip shares the same layer stack
+    81→    81→ * (same names, same order — Aseprite-style). Each frame keeps its own cell
+    82→    82→ * buffers/ids, so structural layer ops must apply to ALL frames of the clip,
+    83→    83→ * not just the visible one. Returns the NEW clips array (assign it back to
+    84→    84→ * `p.clips` — returning a whole Project here once made `p.clips` a Project
+    85→    85→ * object instead of an array, crashing every layer op with
+    86→    86→ * "project.clips.find is not a function").
+    87→    87→ */
+    88→    88→function mapClipFrames(
+    89→    89→  project: Project,
+    90→    90→  clipId: string,
+    91→    91→  fn: (frame: Frame, index: number) => Frame
+    92→    92→): Clip[] {
+    93→    93→  return project.clips.map((c) =>
+    94→    94→    c.id !== clipId ? c : { ...c, frames: c.frames.map((f, i) => fn(f, i)) }
+    95→    95→  )
+    96→    96→}
+    97→    97→
+    98→    98→// Transient stroke context (not part of undo history until the stroke ends)
+    99→    99→let stroke: {
+   100→   100→  clipId: string
+   101→   101→  frameId: string
+   102→   102→  layerId: string
+   103→   103→  before: Uint8ClampedArray
+   104→   104→} | null = null
+   105→   105→
+   106→   106→export interface EditorState {
+   107→   107→  project: Project
+   108→   108→  activeClipId: string
+   109→   109→  activeFrameIndex: number
+   110→   110→  activeLayerId: string
+   111→   111→  // tool state
+   112→   112→  tool: ToolId
+   113→   113→  primary: string
+   114→   114→  secondary: string
+   115→   115→  brushSize: number
+   116→   116→  mirrorX: boolean
+   117→   117→  // view state
+   118→   118→  zoom: number
+   119→   119→  panX: number
+   120→   120→  panY: number
+   121→   121→  showGrid: boolean
+   122→   122→  onionSkin: boolean
+   123→   123→  hover: { x: number; y: number } | null
+   124→   124→  // playback
+   125→   125→  playing: boolean
+   126→   126→  // history / persistence
+   127→   127→  past: HistoryEntry[]
+   128→   128→  future: HistoryEntry[]
+   129→   129→  dirty: boolean
+   130→   130→  savedAt: number | null
+   131→   131→  autosave: boolean
+   132→   132→  // ui
+   133→   133→  rightTab: RightTab
+   134→   134→  paletteOpen: boolean
+   135→   135→  rightOpen: boolean
+   136→   136→  rightWidth: number
+   137→   137→  timelineOpen: boolean
+   138→   138→  renderTick: number
+   139→   139→
+   140→   140→  // --- document actions ---
+   141→   141→  newProject: (p: Project) => void
+   142→   142→  loadProject: (p: Project) => void
+   143→   143→  setName: (name: string) => void
+   144→   144→  update: (mutator: (p: Project) => void, label: string) => void
+   145→   145→
+   146→   146→  // --- pixel stroke flow ---
+   147→   147→  beginStroke: () => StrokeHandle | null
+   148→   148→  endStroke: (label: string, changed: boolean) => void
+   149→   149→  cancelStroke: () => void
+   150→   150→  bump: () => void
+   151→   151→
+   152→   152→  // --- undo/redo ---
+   153→   153→  undo: () => void
+   154→   154→  redo: () => void
+   155→   155→
+   156→   156→  // --- structural commands ---
+   157→   157→  addFrame: (copyContent: boolean) => void
+   158→   158→  deleteFrame: (index: number) => void
+   159→   159→  moveFrame: (from: number, to: number) => void
+   160→   160→  addLayer: () => void
+   161→   161→  deleteLayer: (layerId: string) => void
+   162→   162→  duplicateLayer: (layerId: string) => void
+   163→   163→  mergeDown: (layerId: string) => void
+   164→   164→  moveLayer: (layerId: string, dir: -1 | 1) => void
+   165→   165→  setLayerProp: (layerId: string, patch: Partial<Pick<Layer, 'name' | 'visible' | 'opacity'>>) => void
+   166→   166→  addClip: (name: string) => void
+   167→   167→  deleteClip: (clipId: string) => void
+   168→   168→  setClipProp: (clipId: string, patch: Partial<Pick<Clip, 'name' | 'fps' | 'loop'>>) => void
+   169→   169→  addPaletteColor: (hex: string) => void
+   170→   170→  removePaletteColor: (hex: string) => void
+   171→   171→
+   172→   172→  // --- selection & ui ---
+   173→   173→  selectClip: (id: string) => void
+   174→   174→  selectFrame: (index: number) => void
+   175→   175→  selectLayer: (id: string) => void
+   176→   176→  setTool: (t: ToolId) => void
+   177→   177→  setPrimary: (hex: string) => void
+   178→   178→  setSecondary: (hex: string) => void
+   179→   179→  swapColors: () => void
+   180→   180→  setBrushSize: (n: number) => void
+   181→   181→  setMirrorX: (v: boolean) => void
+   182→   182→  setZoom: (z: number) => void
+   183→   183→  setPan: (x: number, y: number) => void
+   184→   184→  setShowGrid: (v: boolean) => void
+   185→   185→  setOnionSkin: (v: boolean) => void
+   186→   186→  setHover: (h: { x: number; y: number } | null) => void
+   187→   187→  setPlaying: (v: boolean) => void
+   188→   188→  setRightTab: (t: RightTab) => void
+   189→   189→  setPaletteOpen: (v: boolean) => void
+   190→   190→  setRightOpen: (v: boolean) => void
+   191→   191→  setRightWidth: (w: number) => void
+   192→   192→  setTimelineOpen: (v: boolean) => void
+   193→   193→  setAutosave: (v: boolean) => void
+   194→   194→
+   195→   195→  // --- persistence ---
+   196→   196→  setProjectId: (id: string) => void
+   197→   197→  markSaved: () => void
+   198→   198→  markDirty: () => void
+   199→   199→}
+   200→   200→
+   201→   201→const initialProject: Project = {
+   202→   202→  id: null,
+   203→   203→  name: 'untitled',
+   204→   204→  width: 32,
+   205→   205→  height: 32,
+   206→   206→  palette: ['#1a1c2c', '#5d275d', '#b13e53', '#ef7d57', '#ffcd75', '#a7f070', '#38b764', '#257179', '#29366f', '#3b5dc9', '#41a6f6', '#73eff7', '#f4f4f4', '#94b0c2', '#566c86', '#333c57'],
+   207→   207→  clips: [
+   208→   208→    {
+   209→   209→      id: 'cl_initial',
+   210→   210→      name: 'idle',
+   211→   211→      fps: 8,
+   212→   212→      loop: true,
+   213→   213→      frames: [
+   214→   214→        {
+   215→   215→          id: 'fr_initial',
+   216→   216→          layers: [{ id: 'ly_initial', name: 'layer 1', visible: true, opacity: 1, data: new Uint8ClampedArray(32 * 32 * 4) }],
+   217→   217→        },
+   218→   218→      ],
+   219→   219→    },
+   220→   220→  ],
+   221→   221→}
+   222→   222→
+   223→   223→export const useEditor = create<EditorState>()((set, get) => ({
+   224→   224→  project: initialProject,
+   225→   225→  activeClipId: 'cl_initial',
+   226→   226→  activeFrameIndex: 0,
+   227→   227→  activeLayerId: 'ly_initial',
+   228→   228→  tool: 'pencil',
+   229→   229→  primary: '#2ce8f5',
+   230→   230→  secondary: '#1a1c2c',
+   231→   231→  brushSize: 1,
+   232→   232→  mirrorX: false,
+   233→   233→  zoom: 12,
+   234→   234→  panX: 0,
+   235→   235→  panY: 0,
+   236→   236→  showGrid: true,
+   237→   237→  onionSkin: true,
+   238→   238→  hover: null,
+   239→   239→  playing: false,
+   240→   240→  past: [],
+   241→   241→  future: [],
+   242→   242→  dirty: false,
+   243→   243→  savedAt: null,
+   244→   244→  autosave: true,
+   245→   245→  rightTab: 'layers',
+   246→   246→  paletteOpen: true,
+   247→   247→  rightOpen: true,
+   248→   248→  rightWidth: 320,
+   249→   249→  timelineOpen: true,
+   250→   250→  renderTick: 0,
+   251→   251→
+   252→   252→  newProject: (p) =>
+   253→   253→    set({
+   254→   254→      project: p,
+   255→   255→      activeClipId: p.clips[0]?.id ?? '',
+   256→   256→      activeFrameIndex: 0,
+   257→   257→      activeLayerId: p.clips[0]?.frames[0]?.layers.at(-1)?.id ?? '',
+   258→   258→      past: [],
+   259→   259→      future: [],
+   260→   260→      dirty: true,
+   261→   261→      savedAt: null,
+   262→   262→      playing: false,
+   263→   263→      zoom: 12,
+   264→   264→      panX: 0,
+   265→   265→      panY: 0,
+   266→   266→    }),
+   267→   267→
+   268→   268→  loadProject: (p) =>
+   269→   269→    set({
+   270→   270→      project: p,
+   271→   271→      activeClipId: p.clips[0]?.id ?? '',
+   272→   272→      activeFrameIndex: 0,
+   273→   273→      activeLayerId: p.clips[0]?.frames[0]?.layers.at(-1)?.id ?? '',
+   274→   274→      past: [],
+   275→   275→      future: [],
+   276→   276→      dirty: false,
+   277→   277→      savedAt: Date.now(),
+   278→   278→      playing: false,
+   279→   279→      zoom: 12,
+   280→   280→      panX: 0,
+   281→   281→      panY: 0,
+   282→   282→    }),
+   283→   283→
+   284→   284→  setName: (name) => {
+   285→   285→    const s = get()
+   286→   286→    set({ project: { ...s.project, name }, dirty: true })
+   287→   287→  },
+   288→   288→
+   289→   289→  update: (mutator, label) => {
+   290→   290→    const s = get()
+   291→   291→    const before = s.project
+   292→   292→    const project = { ...before }
+   293→   293→    mutator(project)
+   294→   294→    const entry: HistoryEntry = { kind: 'project', label, before, after: project }
+   295→   295→    set({
+   296→   296→      project,
+   297→   297→      past: [...s.past, entry].slice(-useAppSettings.getState().historyLimit),
+   298→   298→      future: [],
+   299→   299→      dirty: true,
+   300→   300→    })
+   301→   301→  },
+   302→   302→
+   303→   303→  beginStroke: () => {
+   304→   304→    const s = get()
+   305→   305→    const loc = locate(s.project, s.activeClipId, s.activeFrameIndex, s.activeLayerId)
+   306→   306→    if (!loc) return null
+   307→   307→    const { clip, frame, frameIndex, layer } = loc
+   308→   308→    const before = layer.data
+   309→   309→    const working = new Uint8ClampedArray(before)
+   310→   310→    const newFrame: Frame = {
+   311→   311→      ...frame,
+   312→   312→      layers: frame.layers.map((l) => (l.id === layer.id ? { ...l, data: working } : l)),
+   313→   313→    }
+   314→   314→    const project: Project = {
+   315→   315→      ...s.project,
+   316→   316→      clips: s.project.clips.map((c) =>
+   317→   317→        c.id !== clip.id
+   318→   318→          ? c
+   319→   319→          : { ...c, frames: c.frames.map((f, i) => (i === frameIndex ? newFrame : f)) }
+   320→   320→      ),
+   321→   321→    }
+   322→   322→    stroke = { clipId: clip.id, frameId: frame.id, layerId: layer.id, before }
+   323→   323→    set({ project, renderTick: s.renderTick + 1 })
+   324→   324→    return { width: s.project.width, height: s.project.height, buffer: working }
+   325→   325→  },
+   326→   326→
+   327→   327→  endStroke: (label, changed) => {
+   328→   328→    if (!stroke) return
+   329→   329→    const st = stroke
+   330→   330→    stroke = null
+   331→   331→    if (!changed) return
+   332→   332→    const s = get()
+   333→   333→    const entry: HistoryEntry = { kind: 'pixels', label, ...st, after: st.before }
+   334→   334→    // Locate the working buffer in the *current* project (it may have moved if
+   335→   335→    // a structural change happened mid-stroke — rare, but stay safe)
+   336→   336→    const loc = locate(s.project, st.clipId, s.activeFrameIndex, st.layerId)
+   337→   337→    let after = st.before
+   338→   338→    if (loc && loc.clip.id === st.clipId && loc.frame.id === st.frameId && loc.layer.id === st.layerId) {
+   339→   339→      after = loc.layer.data
+   340→   340→    } else {
+   341→   341→      const clip = s.project.clips.find((c) => c.id === st.clipId)
+   342→   342→      const frame = clip?.frames.find((f) => f.id === st.frameId)
+   343→   343→      const layer = frame?.layers.find((l) => l.id === st.layerId)
+   344→   344→      if (layer) after = layer.data
+   345→   345→      else return
+   346→   346→    }
+   347→   347→    entry.after = after
+   348→   348→    set({
+   349→   349→      past: [...s.past, entry].slice(-useAppSettings.getState().historyLimit),
+   350→   350→      future: [],
+   351→   351→      dirty: true,
+   352→   352→    })
+   353→   353→  },
+   354→   354→
+   355→   355→  cancelStroke: () => {
+   356→   356→    if (!stroke) return
+   357→   357→    const st = stroke
+   358→   358→    stroke = null
+   359→   359→    const s = get()
+   360→   360→    set({
+   361→   361→      project: withLayerData(s.project, st.clipId, st.frameId, st.layerId, st.before),
+   362→   362→      renderTick: s.renderTick + 1,
+   363→   363→    })
+   364→   364→  },
+   365→   365→
+   366→   366→  bump: () => set((s) => ({ renderTick: s.renderTick + 1 })),
+   367→   367→
+   368→   368→  undo: () => {
+   369→   369→    const s = get()
+   370→   370→    if (stroke) return
+   371→   371→    const past = [...s.past]
+   372→   372→    while (past.length > 0) {
+   373→   373→      const entry = past.pop() as HistoryEntry
+   374→   374→      if (entry.kind === 'pixels') {
+   375→   375→        const cur = locate(s.project, entry.clipId, s.activeFrameIndex, entry.layerId)
+   376→   376→        const layer = cur && cur.clip.id === entry.clipId && cur.frame.id === entry.frameId && cur.layer.id === entry.layerId
+   377→   377→          ? cur.layer
+   378→   378→          : s.project.clips
+   379→   379→              .find((c) => c.id === entry.clipId)
+   380→   380→              ?.frames.find((f) => f.id === entry.frameId)
+   381→   381→              ?.layers.find((l) => l.id === entry.layerId)
+   382→   382→        if (!layer) continue // structure changed underneath; keep unwinding
+   383→   383→        const project = withLayerData(s.project, entry.clipId, entry.frameId, entry.layerId, entry.before)
+   384→   384→        const redoEntry: HistoryEntry = { ...entry, before: layer.data, after: entry.after }
+   385→   385→        set({ project, past, future: [...s.future, redoEntry].slice(-useAppSettings.getState().historyLimit), dirty: true })
+   386→   386→        return
+   387→   387→      }
+   388→   388→      const redoEntry: HistoryEntry = { kind: 'project', label: entry.label, before: s.project, after: entry.after }
+   389→   389→      set({ project: entry.before, past, future: [...s.future, redoEntry].slice(-useAppSettings.getState().historyLimit), dirty: true })
+   390→   390→      return
+   391→   391→    }
+   392→   392→  },
+   393→   393→
+   394→   394→  redo: () => {
+   395→   395→    const s = get()
+   396→   396→    if (stroke) return
+   397→   397→    const future = [...s.future]
+   398→   398→    while (future.length > 0) {
+   399→   399→      const entry = future.pop() as HistoryEntry
+   400→   400→      if (entry.kind === 'pixels') {
+   401→   401→        const layer = s.project.clips
+   402→   402→          .find((c) => c.id === entry.clipId)
+   403→   403→          ?.frames.find((f) => f.id === entry.frameId)
+   404→   404→          ?.layers.find((l) => l.id === entry.layerId)
+   405→   405→        if (!layer) continue
+   406→   406→        const project = withLayerData(s.project, entry.clipId, entry.frameId, entry.layerId, entry.after)
+   407→   407→        const undoEntry: HistoryEntry = { ...entry, before: entry.before, after: layer.data }
+   408→   408→        set({ project, past: [...s.past, undoEntry].slice(-useAppSettings.getState().historyLimit), future, dirty: true })
+   409→   409→        return
+   410→   410→      }
+   411→   411→      const undoEntry: HistoryEntry = { kind: 'project', label: entry.label, before: entry.before, after: s.project }
+   412→   412→      set({ project: entry.after, past: [...s.past, undoEntry].slice(-useAppSettings.getState().historyLimit), future, dirty: true })
+   413→   413→      return
+   414→   414→    }
+   415→   415→  },
+   416→   416→
+   417→   417→  // --- structural commands ---
+   418→   418→
+   419→   419→  addFrame: (copyContent) => {
+   420→   420→    const s = get()
+   421→   421→    const loc = locate(s.project, s.activeClipId, s.activeFrameIndex, s.activeLayerId)
+   422→   422→    if (!loc) return
+   423→   423→    const insertAt = s.activeFrameIndex + 1
+   424→   424→    const newFrame: Frame = {
+   425→   425→      id: uid('fr'),
+   426→   426→      layers: loc.frame.layers.map((l) => ({
+   427→   427→        id: uid('ly'),
+   428→   428→        name: l.name,
+   429→   429→        visible: l.visible,
+   430→   430→        opacity: l.opacity,
+   431→   431→        data: copyContent
+   432→   432→          ? new Uint8ClampedArray(l.data)
+   433→   433→          : new Uint8ClampedArray(s.project.width * s.project.height * 4),
+   434→   434→      })),
+   435→   435→    }
+   436→   436→    get().update((p) => {
+   437→   437→      p.clips = p.clips.map((c) =>
+   438→   438→        c.id !== loc.clip.id
+   439→   439→          ? c
+   440→   440→          : { ...c, frames: [...c.frames.slice(0, insertAt), newFrame, ...c.frames.slice(insertAt)] }
+   441→   441→      )
+   442→   442→    }, copyContent ? 'Duplicate frame' : 'Add frame')
+   443→   443→    set({ activeFrameIndex: insertAt, activeLayerId: newFrame.layers.at(-1)?.id ?? '' })
+   444→   444→    toast(
+   445→   445→      copyContent
+   446→   446→        ? { title: `Frame ${insertAt + 1} duplicated` }
+   447→   447→        : {
+   448→   448→            title: `Frame ${insertAt + 1} added (empty)`,
+   449→   449→            description: `The canvas now shows the new frame — frame ${s.activeFrameIndex + 1} and its pixels are safe on the timeline below.`,
+   450→   450→          }
+   451→   451→    )
+   452→   452→  },
+   453→   453→
+   454→   454→  deleteFrame: (index) => {
+   455→   455→    const s = get()
+   456→   456→    const loc = locate(s.project, s.activeClipId, s.activeFrameIndex, s.activeLayerId)
+   457→   457→    if (!loc || loc.clip.frames.length <= 1) return
+   458→   458→    const keptName = loc.layer.name // layer ids are per-frame — match by name
+   459→   459→    get().update((p) => {
+   460→   460→      p.clips = p.clips.map((c) =>
+   461→   461→        c.id !== loc.clip.id ? c : { ...c, frames: c.frames.filter((_, i) => i !== index) }
+   462→   462→      )
+   463→   463→    }, 'Delete frame')
+   464→   464→    const len = loc.clip.frames.length - 1
+   465→   465→    const nextIdx = Math.min(index, len - 1)
+   466→   466→    const nextFrame = loc.clip.frames.filter((_, i) => i !== index)[nextIdx]
+   467→   467→    const nextLayer =
+   468→   468→      nextFrame?.layers.find((l) => l.name === keptName) ?? nextFrame?.layers.at(-1)
+   469→   469→    set({ activeFrameIndex: nextIdx, activeLayerId: nextLayer?.id ?? '' })
+   470→   470→  },
+   471→   471→
+   472→   472→  moveFrame: (from, to) => {
+   473→   473→    const s = get()
+   474→   474→    const loc = locate(s.project, s.activeClipId, s.activeFrameIndex, s.activeLayerId)
+   475→   475→    if (!loc) return
+   476→   476→    const len = loc.clip.frames.length
+   477→   477→    if (to < 0 || to >= len || from === to) return
+   478→   478→    get().update((p) => {
+   479→   479→      p.clips = p.clips.map((c) => {
+   480→   480→        if (c.id !== loc.clip.id) return c
+   481→   481→        const frames = [...c.frames]
+   482→   482→        const [f] = frames.splice(from, 1)
+   483→   483→        frames.splice(to, 0, f)
+   484→   484→        return { ...c, frames }
+   485→   485→      })
+   486→   486→    }, 'Reorder frame')
+   487→   487→    set({ activeFrameIndex: to })
+   488→   488→  },
+   489→   489→
+   490→   490→  addLayer: () => {
+   491→   491→    const s = get()
+   492→   492→    const loc = locate(s.project, s.activeClipId, s.activeFrameIndex, s.activeLayerId)
+   493→   493→    if (!loc) return
+   494→   494→    const name = `layer ${loc.frame.layers.length + 1}`
+   495→   495→    // CLIP-WIDE: every frame gets its own cell of the new layer (same name,
+   496→   496→    // independent buffer) so the stack looks identical on every frame
+   497→   497→    get().update((p) => {
+   498→   498→      p.clips = mapClipFrames(p, loc.clip.id, (f) => ({
+   499→   499→        ...f,
+   500→   500→        layers: [...f.layers, createLayer(s.project.width, s.project.height, name)],
+   501→   501→      }))
+   502→   502→    }, 'Add layer')
+   503→   503→    // grab the id on the *active* frame (ids are per-frame)
+   504→   504→    const cur = locate(get().project, s.activeClipId, s.activeFrameIndex, '')
+   505→   505→    const newLayerIdOnActiveFrame = cur?.frame.layers.at(-1)?.id ?? ''
+   506→   506→    set({ activeLayerId: newLayerIdOnActiveFrame })
+   507→   507→    toast({
+   508→   508→      title: `Layer "${name}" added`,
+   509→   509→      description: `Added to all ${loc.clip.frames.length} frame${loc.clip.frames.length === 1 ? '' : 's'} in this clip.`,
+   510→   510→    })
+   511→   511→  },
+   512→   512→
+   513→   513→  deleteLayer: (layerId) => {
+   514→   514→    const s = get()
+   515→   515→    const loc = locate(s.project, s.activeClipId, s.activeFrameIndex, s.activeLayerId)
+   516→   516→    if (!loc || loc.frame.layers.length <= 1) return
+   517→   517→    const idx = loc.frame.layers.findIndex((l) => l.id === layerId)
+   518→   518→    if (idx < 0) return
+   519→   519→    // CLIP-WIDE: drop the same slot from every frame
+   520→   520→    get().update((p) => {
+   521→   521→      p.clips = mapClipFrames(p, loc.clip.id, (f) => ({
+   522→   522→        ...f,
+   523→   523→        layers: f.layers.filter((_, i) => i !== idx),
+   524→   524→      }))
+   525→   525→    }, 'Delete layer')
+   526→   526→    const next = loc.frame.layers[Math.min(idx, loc.frame.layers.length - 2)]
+   527→   527→    set({ activeLayerId: next?.id ?? '' })
+   528→   528→  },
+   529→   529→
+   530→   530→  duplicateLayer: (layerId) => {
+   531→   531→    const s = get()
+   532→   532→    const loc = locate(s.project, s.activeClipId, s.activeFrameIndex, s.activeLayerId)
+   533→   533→    if (!loc) return
+   534→   534→    const idx = loc.frame.layers.findIndex((l) => l.id === layerId)
+   535→   535→    if (idx < 0) return
+   536→   536→    const srcName = loc.frame.layers[idx].name
+   537→   537→    // CLIP-WIDE: duplicate the slot in every frame (each frame copies its own
+   538→   538→    // cell content), inserted directly above the original
+   539→   539→    get().update((p) => {
+   540→   540→      p.clips = mapClipFrames(p, loc.clip.id, (f) => {
+   541→   541→        const src = f.layers[idx]
+   542→   542→        if (!src) return f
+   543→   543→        const copy: Layer = {
+   544→   544→          ...src,
+   545→   545→          id: uid('ly'),
+   546→   546→          name: `${srcName} copy`,
+   547→   547→          data: new Uint8ClampedArray(src.data),
+   548→   548→        }
+   549→   549→        return {
+   550→   550→          ...f,
+   551→   551→          layers: [...f.layers.slice(0, idx + 1), copy, ...f.layers.slice(idx + 1)],
+   552→   552→        }
+   553→   553→      })
+   554→   554→    }, 'Duplicate layer')
+   555→   555→    const cur = locate(get().project, s.activeClipId, s.activeFrameIndex, '')
+   556→   556→    const copyIdOnActiveFrame = cur?.frame.layers[idx + 1]?.id ?? ''
+   557→   557→    set({ activeLayerId: copyIdOnActiveFrame })
+   558→   558→  },
+   559→   559→
+   560→   560→  mergeDown: (layerId) => {
+   561→   561→    const s = get()
+   562→   562→    const loc = locate(s.project, s.activeClipId, s.activeFrameIndex, s.activeLayerId)
+   563→   563→    if (!loc) return
+   564→   564→    const idx = loc.frame.layers.findIndex((l) => l.id === layerId)
+   565→   565→    if (idx <= 0) return // nothing below
+   566→   566→    const { width: w, height: h } = s.project
+   567→   567→    const bottomId = loc.frame.layers[idx - 1].id
+   568→   568→    // CLIP-WIDE: composite the same slot pair on every frame
+   569→   569→    get().update((p) => {
+   570→   570→      p.clips = mapClipFrames(p, loc.clip.id, (f) => {
+   571→   571→        if (idx >= f.layers.length) return f
+   572→   572→        const fTop = f.layers[idx]
+   573→   573→        const fBottom = f.layers[idx - 1]
+   574→   574→        if (!fTop || !fBottom) return f
+   575→   575→        const merged = new Uint8ClampedArray(fBottom.data)
+   576→   576→        for (let i = 0; i < w * h; i++) {
+   577→   577→          const ta = (fTop.data[i * 4 + 3] / 255) * fTop.opacity
+   578→   578→          if (ta >= 1) {
+   579→   579→            merged[i * 4] = fTop.data[i * 4]
+   580→   580→            merged[i * 4 + 1] = fTop.data[i * 4 + 1]
+   581→   581→            merged[i * 4 + 2] = fTop.data[i * 4 + 2]
+   582→   582→            merged[i * 4 + 3] = fTop.data[i * 4 + 3]
+   583→   583→          } else if (ta > 0) {
+   584→   584→            const ba = merged[i * 4 + 3] / 255
+   585→   585→            const outA = ta + ba * (1 - ta)
+   586→   586→            if (outA === 0) continue
+   587→   587→            for (let ch = 0; ch < 3; ch++) {
+   588→   588→              merged[i * 4 + ch] = Math.round(
+   589→   589→                (fTop.data[i * 4 + ch] * ta + merged[i * 4 + ch] * ba * (1 - ta)) / outA
+   590→   590→              )
+   591→   591→            }
+   592→   592→            merged[i * 4 + 3] = Math.round(outA * 255)
+   593→   593→          }
+   594→   594→        }
+   595→   595→        return {
+   596→   596→          ...f,
+   597→   597→          layers: f.layers.filter((_, i) => i !== idx).map((l, i) => (i === idx - 1 ? { ...l, data: merged } : l)),
+   598→   598→        }
+   599→   599→      })
+   600→   600→    }, 'Merge down')
+   601→   601→    set({ activeLayerId: bottomId })
+   602→   602→  },
+   603→   603→
+   604→   604→  moveLayer: (layerId, dir) => {
+   605→   605→    const s = get()
+   606→   606→    const loc = locate(s.project, s.activeClipId, s.activeFrameIndex, s.activeLayerId)
+   607→   607→    if (!loc) return
+   608→   608→    const idx = loc.frame.layers.findIndex((l) => l.id === layerId)
+   609→   609→    const to = idx + dir
+   610→   610→    if (idx < 0 || to < 0 || to >= loc.frame.layers.length) return
+   611→   611→    // CLIP-WIDE: reorder the same slot on every frame
+   612→   612→    get().update((p) => {
+   613→   613→      p.clips = mapClipFrames(p, loc.clip.id, (f) => {
+   614→   614→        if (to >= f.layers.length) return f
+   615→   615→        const layers = [...f.layers]
+   616→   616→        const [l] = layers.splice(idx, 1)
+   617→   617→        if (!l) return f
+   618→   618→        layers.splice(to, 0, l)
+   619→   619→        return { ...f, layers }
+   620→   620→      })
+   621→   621→    }, 'Reorder layer')
+   622→   622→    // the moved layer keeps its id on the active frame — selection unchanged
+   623→   623→  },
+   624→   624→
+   625→   625→  setLayerProp: (layerId, patch) => {
+   626→   626→    const s = get()
+   627→   627→    const loc = locate(s.project, s.activeClipId, s.activeFrameIndex, s.activeLayerId)
+   628→   628→    if (!loc) return
+   629→   629→    const idx = loc.frame.layers.findIndex((l) => l.id === layerId)
+   630→   630→    if (idx < 0) return
+   631→   631→    // CLIP-WIDE: name/visibility/opacity apply to the slot on every frame so
+   632→   632→    // the panel shows a consistent stack everywhere (eye toggle included)
+   633→   633→    get().update((p) => {
+   634→   634→      p.clips = mapClipFrames(p, loc.clip.id, (f) => ({
+   635→   635→        ...f,
+   636→   636→        layers: f.layers.map((l, i) => (i === idx ? { ...l, ...patch } : l)),
+   637→   637→      }))
+   638→   638→    }, 'Layer property')
+   639→   639→  },
+   640→   640→
+   641→   641→  addClip: (name) => {
+   642→   642→    const s = get()
+   643→   643→    const clip: Clip = {
+   644→   644→      id: uid('cl'),
+   645→   645→      name,
+   646→   646→      fps: Math.min(60, Math.max(1, useAppSettings.getState().defaultClipFps)),
+   647→   647→      loop: true,
+   648→   648→      frames: [createFrame(s.project.width, s.project.height, ['layer 1'])],
+   649→   649→    }
+   650→   650→    get().update((p) => {
+   651→   651→      p.clips = [...p.clips, clip]
+   652→   652→    }, 'Add clip')
+   653→   653→    set({ activeClipId: clip.id, activeFrameIndex: 0, activeLayerId: clip.frames[0].layers[0].id })
+   654→   654→  },
+   655→   655→
+   656→   656→  deleteClip: (clipId) => {
+   657→   657→    const s = get()
+   658→   658→    if (s.project.clips.length <= 1) return
+   659→   659→    const idx = s.project.clips.findIndex((c) => c.id === clipId)
+   660→   660→    if (idx < 0) return
+   661→   661→    get().update((p) => {
+   662→   662→      p.clips = p.clips.filter((c) => c.id !== clipId)
+   663→   663→    }, 'Delete clip')
+   664→   664→    const next = get().project.clips[Math.min(idx, get().project.clips.length - 1)]
+   665→   665→    set({ activeClipId: next.id, activeFrameIndex: 0, activeLayerId: next.frames[0]?.layers.at(-1)?.id ?? '' })
+   666→   666→  },
+   667→   667→
+   668→   668→  setClipProp: (clipId, patch) => {
+   669→   669→    const s = get()
+   670→   670→    get().update((p) => {
+   671→   671→      p.clips = p.clips.map((c) => (c.id === clipId ? { ...c, ...patch } : c))
+   672→   672→    }, 'Clip property')
+   673→   673→  },
+   674→   674→
+   675→   675→  addPaletteColor: (hex) => {
+   676→   676→    const s = get()
+   677→   677→    if (s.project.palette.includes(hex)) return
+   678→   678→    get().update((p) => {
+   679→   679→      p.palette = [...p.palette, hex]
+   680→   680→    }, 'Add palette color')
+   681→   681→  },
+   682→   682→
+   683→   683→  removePaletteColor: (hex) => {
+   684→   684→    get().update((p) => {
+   685→   685→      p.palette = p.palette.filter((c) => c !== hex)
+   686→   686→    }, 'Remove palette color')
+   687→   687→  },
+   688→   688→
+   689→   689→  // --- selection & ui ---
+   690→   690→
+   691→   691→  selectClip: (id) => {
+   692→   692→    const s = get()
+   693→   693→    const clip = s.project.clips.find((c) => c.id === id)
+   694→   694→    if (!clip) return
+   695→   695→    set({
+   696→   696→      activeClipId: id,
+   697→   697→      activeFrameIndex: Math.min(s.activeFrameIndex, clip.frames.length - 1),
+   698→   698→      activeLayerId: clip.frames[Math.min(s.activeFrameIndex, clip.frames.length - 1)]?.layers.at(-1)?.id ?? '',
+   699→   699→      playing: false,
+   700→   700→    })
+   701→   701→  },
+   702→   702→
+   703→   703→  selectFrame: (index) => {
+   704→   704→    const s = get()
+   705→   705→    const clip = s.project.clips.find((c) => c.id === s.activeClipId) ?? s.project.clips[0]
+   706→   706→    if (!clip) return
+   707→   707→    const i = Math.min(Math.max(0, index), clip.frames.length - 1)
+   708→   708→    // keep the user's layer context across frames: layers are clip-wide and
+   709→   709→    // share names, so match the active layer by name (fall back to the top)
+   710→   710→    const prev = clip.frames[Math.min(s.activeFrameIndex, clip.frames.length - 1)]
+   711→   711→    const prevName = prev?.layers.find((l) => l.id === s.activeLayerId)?.name
+   712→   712→    const nextFrame = clip.frames[i]
+   713→   713→    const matched = prevName ? nextFrame?.layers.find((l) => l.name === prevName) : undefined
+   714→   714→    set({ activeFrameIndex: i, activeLayerId: matched?.id ?? nextFrame?.layers.at(-1)?.id ?? s.activeLayerId })
+   715→   715→  },
+   716→   716→
+   717→   717→  selectLayer: (id) => set({ activeLayerId: id }),
+   718→   718→  setTool: (t) => set({ tool: t }),
+   719→   719→  setPrimary: (hex) => set({ primary: hex }),
+   720→   720→  setSecondary: (hex) => set({ secondary: hex }),
+   721→   721→  swapColors: () => set((s) => ({ primary: s.secondary, secondary: s.primary })),
+   722→   722→  setBrushSize: (n) => set({ brushSize: Math.min(4, Math.max(1, Math.round(n))) }),
+   723→   723→  setMirrorX: (v) => set({ mirrorX: v }),
+   724→   724→  setZoom: (z) => set({ zoom: Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z)) }),
+   725→   725→  setPan: (x, y) => set({ panX: x, panY: y }),
+   726→   726→  setShowGrid: (v) => set({ showGrid: v }),
+   727→   727→  setOnionSkin: (v) => set({ onionSkin: v }),
+   728→   728→  setHover: (h) =>
+   729→   729→    set((s) => {
+   730→   730→      if (s.hover === h) return s
+   731→   731→      if (s.hover && h && s.hover.x === h.x && s.hover.y === h.y) return s
+   732→   732→      return { hover: h }
+   733→   733→    }),
+   734→   734→  setPlaying: (v) => set({ playing: v }),
+   735→   735→  setRightTab: (t) => set({ rightTab: t }),
+   736→   736→  setPaletteOpen: (v) => set({ paletteOpen: v }),
+   737→   737→  setRightOpen: (v) => set({ rightOpen: v }),
+   738→   738→  setRightWidth: (w) => set({ rightWidth: Math.min(560, Math.max(260, Math.round(w))) }),
+   739→   739→  setTimelineOpen: (v) => set({ timelineOpen: v }),
+   740→   740→  setAutosave: (v) => set({ autosave: v }),
+   741→   741→
+   742→   742→  setProjectId: (id) =>
+   743→   743→    set((s) => ({ project: { ...s.project, id }, dirty: true })),
+   744→   744→  markSaved: () => set({ dirty: false, savedAt: Date.now() }),
+   745→   745→  markDirty: () => set({ dirty: true }),
+   746→   746→}))
+   747→   747→
+   748→   748→// --- selector helpers (with safe fallbacks) ---
+   749→   749→
+   750→   750→export function getActiveClip(s: Pick<EditorState, 'project' | 'activeClipId'>): Clip {
+   751→   751→  return s.project.clips.find((c) => c.id === s.activeClipId) ?? s.project.clips[0]
+   752→   752→}
+   753→   753→
+   754→   754→export function getActiveFrame(s: Pick<EditorState, 'project' | 'activeClipId' | 'activeFrameIndex'>): Frame {
+   755→   755→  const clip = getActiveClip(s)
+   756→   756→  return clip.frames[Math.min(s.activeFrameIndex, clip.frames.length - 1)] ?? clip.frames[0]
+   757→   757→}
+   758→   758→

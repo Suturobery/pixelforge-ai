@@ -1,0 +1,26 @@
+{
+  "name": "@pixelforge/desktop",
+  "productName": "PixelForge AI",
+  "version": "0.1.0",
+  "private": true,
+  "description": "PixelForge AI desktop shell — Electron main + secure preload (v3.1 Plan §12 Task 1). Interim renderer: existing web prototype via dev server; renderer port lands in Task 4.",
+  "main": "dist/main/index.js",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -p tsconfig.json",
+    "test": "bun test tests/",
+    "start": "electron .",
+    "dev": "npm run build && electron .",
+    "smoke:dev": "npm run build && cross-env PF_SMOKE=1 electron .",
+    "smoke:shell": "npm run build && cross-env PF_SMOKE=1 PF_RENDERER=shell electron ."
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "cross-env": "^7.0.3",
+    "electron": "^45.0.0",
+    "typescript": "^5"
+  },
+  "trustedDependencies": [
+    "electron"
+  ]
+}

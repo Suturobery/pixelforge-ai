@@ -1,0 +1,760 @@
+     1→/**
+     2→ * Built-in structural commands (v3.1 §2.4/§2.7).
+     3→ *
+     4→ * Structural edits record shallow document snapshots with copy-on-write
+     5→ * buffers (prototype mechanism kept — §2.5), so undo/redo are exact.
+     6→ * Deletes are trash-backed (C5/C9, cap 20): frame/layer/clip deletion moves
+     7→ * the item into project.trash; `trash.restore` puts it back.
+     8→ *
+     9→ * All commands are pure: (document in) → (new document out).
+    10→ */
+    11→
+    12→import type {
+    13→  Cel,
+    14→  Clip,
+    15→  Frame,
+    16→  Layer,
+    17→  LoopMode,
+    18→} from '../types/document';
+    19→import type { CommandDefinition } from '../types/commands';
+    20→import {
+    21→  findClip,
+    22→  findFrame,
+    23→  findLayer,
+    24→  mapClip,
+    25→  newLayerId,
+    26→  newTrashId,
+    27→  pushTrash,
+    28→  setCelEverywhere,
+    29→  takeTrash,
+    30→} from '../doc/access';
+    31→import { createClip, createFrame, createLayer, duplicateFrame } from '../doc/factory';
+    32→import { cloneBuffer } from '../util/buffers';
+    33→import { applyPixelOpsCommand } from './pixel-commands';
+    34→import { fail, failNotFound } from './errors';
+    35→import {
+    36→  assertObject,
+    37→  getHexColor,
+    38→  getInt,
+    39→  getLoopMode,
+    40→  getOptionalInt,
+    41→  getOptionalLoopMode,
+    42→  getOptionalString,
+    43→  getString,
+    44→} from './validate';
+    45→
+    46→// ---------------------------------------------------------------------------
+    47→// parse helpers (used by validate AND apply — validate throws, apply trusts)
+    48→// ---------------------------------------------------------------------------
+    49→
+    50→function parseRef(p: Record<string, unknown>): { clipId: string } {
+    51→  return { clipId: getString(p, 'clipId', 'command payload') };
+    52→}
+    53→
+    54→function parseFrameRef(p: Record<string, unknown>): { clipId: string; frameId: string } {
+    55→  return {
+    56→    clipId: getString(p, 'clipId', 'command payload'),
+    57→    frameId: getString(p, 'frameId', 'command payload'),
+    58→  };
+    59→}
+    60→
+    61→function parseLayerRef(p: Record<string, unknown>): { clipId: string; layerId: string } {
+    62→  return {
+    63→    clipId: getString(p, 'clipId', 'command payload'),
+    64→    layerId: getString(p, 'layerId', 'command payload'),
+    65→  };
+    66→}
+    67→
+    68→// ---------------------------------------------------------------------------
+    69→// project
+    70→// ---------------------------------------------------------------------------
+    71→
+    72→interface RenamePayload {
+    73→  name: string;
+    74→}
+    75→
+    76→export const projectRename: CommandDefinition<RenamePayload> = {
+    77→  type: 'project.rename',
+    78→  defaultLabel: 'Rename project',
+    79→  validate(payload) {
+    80→    const p = assertObject(payload, 'project.rename');
+    81→    const name = getString(p, 'name', 'project.rename');
+    82→    if (name.length > 120) fail('project.rename: name too long (max 120)');
+    83→  },
+    84→  apply(payload, ctx) {
+    85→    return { project: { ...ctx.project, name: payload.name }, label: 'Rename project' };
+    86→  },
+    87→};
+    88→
+    89→// ---------------------------------------------------------------------------
+    90→// clip
+    91→// ---------------------------------------------------------------------------
+    92→
+    93→export const clipAdd: CommandDefinition<{ name?: string; fps?: number }> = {
+    94→  type: 'clip.add',
+    95→  defaultLabel: 'Add clip',
+    96→  validate(payload) {
+    97→    const p = assertObject(payload, 'clip.add');
+    98→    getOptionalString(p, 'name', 'clip.add');
+    99→    getOptionalInt(p, 'fps', 'clip.add', 1, 60);
+   100→  },
+   101→  apply(payload, ctx) {
+   102→    const name = payload.name?.trim() || `clip ${ctx.project.clips.length + 1}`;
+   103→    const clip = createClip({
+   104→      name,
+   105→      width: ctx.project.width,
+   106→      height: ctx.project.height,
+   107→      fps: payload.fps,
+   108→    });
+   109→    return {
+   110→      project: { ...ctx.project, clips: [...ctx.project.clips, clip] },
+   111→      label: 'Add clip',
+   112→    };
+   113→  },
+   114→};
+   115→
+   116→export const clipDelete: CommandDefinition<{ clipId: string }> = {
+   117→  type: 'clip.delete',
+   118→  defaultLabel: 'Delete clip',
+   119→  validate(payload, ctx) {
+   120→    const p = assertObject(payload, 'clip.delete');
+   121→    const { clipId } = parseRef(p);
+   122→    if (ctx.project.clips.length <= 1) {
+   123→      fail('clip.delete: a project must keep at least one clip');
+   124→    }
+   125→    if (!findClip(ctx.project, clipId)) failNotFound(`clip.delete: clip "${clipId}" not found`);
+   126→  },
+   127→  apply(payload, ctx) {
+   128→    const idx = ctx.project.clips.findIndex((c) => c.id === payload.clipId);
+   129→    const clip = ctx.project.clips[idx];
+   130→    const trashEntry = {
+   131→      id: newTrashId(),
+   132→      label: `Clip "${clip.name}"`,
+   133→      deletedAt: Date.now(),
+   134→      item: { kind: 'clip' as const, clipIndex: idx, clip },
+   135→    };
+   136→    return {
+   137→      project: pushTrash(
+   138→        { ...ctx.project, clips: ctx.project.clips.filter((c) => c.id !== payload.clipId) },
+   139→        trashEntry
+   140→      ),
+   141→      label: 'Delete clip',
+   142→    };
+   143→  },
+   144→};
+   145→
+   146→interface ClipSetPropsPayload {
+   147→  clipId: string;
+   148→  patch: { name?: string; fps?: number; loop?: boolean; loopMode?: LoopMode };
+   149→}
+   150→
+   151→export const clipSetProps: CommandDefinition<ClipSetPropsPayload> = {
+   152→  type: 'clip.setProps',
+   153→  defaultLabel: 'Clip properties',
+   154→  validate(payload, ctx) {
+   155→    const p = assertObject(payload, 'clip.setProps');
+   156→    const { clipId } = parseRef(p);
+   157→    if (!findClip(ctx.project, clipId)) failNotFound(`clip.setProps: clip "${clipId}" not found`);
+   158→    const patch = assertObject(p.patch, 'clip.setProps patch');
+   159→    const name = getOptionalString(patch, 'name', 'clip.setProps');
+   160→    if (name !== undefined && name.length > 120) fail('clip.setProps: name too long');
+   161→    getOptionalInt(patch, 'fps', 'clip.setProps', 1, 60);
+   162→    getOptionalLoopMode(patch, 'loopMode', 'clip.setProps');
+   163→  },
+   164→  apply(payload, ctx) {
+   165→    const { clipId, patch } = payload;
+   166→    return {
+   167→      project: mapClip(ctx.project, clipId, (c) => ({
+   168→        ...c,
+   169→        ...(patch.name !== undefined ? { name: patch.name } : {}),
+   170→        ...(patch.fps !== undefined ? { fps: Math.min(60, Math.max(1, Math.round(patch.fps))) } : {}),
+   171→        ...(patch.loop !== undefined ? { loop: patch.loop } : {}),
+   172→        ...(patch.loopMode !== undefined ? { loopMode: patch.loopMode } : {}),
+   173→      })),
+   174→      label: 'Clip properties',
+   175→    };
+   176→  },
+   177→};
+   178→
+   179→// ---------------------------------------------------------------------------
+   180→// frame
+   181→// ---------------------------------------------------------------------------
+   182→
+   183→export const frameAdd: CommandDefinition<{
+   184→  clipId: string;
+   185→  afterIndex?: number;
+   186→  copy?: boolean;
+   187→}> = {
+   188→  type: 'frame.add',
+   189→  defaultLabel: 'Add frame',
+   190→  validate(payload, ctx) {
+   191→    const p = assertObject(payload, 'frame.add');
+   192→    const { clipId } = parseRef(p);
+   193→    const clip = findClip(ctx.project, clipId);
+   194→    if (!clip) failNotFound(`frame.add: clip "${clipId}" not found`);
+   195→    const afterIndex = getOptionalInt(p, 'afterIndex', 'frame.add', -1, clip.frames.length - 1);
+   196→    if (getOptionalInt(p, 'afterIndex', 'frame.add') !== undefined && afterIndex === undefined) {
+   197→      fail('frame.add: bad afterIndex');
+   198→    }
+   199→  },
+   200→  apply(payload, ctx) {
+   201→    const clip = findClip(ctx.project, payload.clipId) as Clip;
+   202→    const insertAt =
+   203→      payload.afterIndex !== undefined
+   204→        ? Math.min(Math.max(0, payload.afterIndex + 1), clip.frames.length)
+   205→        : clip.frames.length;
+   206→    const srcIndex =
+   207→      payload.afterIndex !== undefined
+   208→        ? Math.min(Math.max(0, payload.afterIndex), clip.frames.length - 1)
+   209→        : clip.frames.length - 1;
+   210→    const frame: Frame = payload.copy && clip.frames[srcIndex]
+   211→      ? duplicateFrame(clip.frames[srcIndex], clip.layers) // duplicate preserves cels exactly (§2.7)
+   212→      : createFrame(ctx.project.width, ctx.project.height, clip.layers);
+   213→    const frames = [...clip.frames.slice(0, insertAt), frame, ...clip.frames.slice(insertAt)];
+   214→    return {
+   215→      project: mapClip(ctx.project, clip.id, (c) => ({ ...c, frames })),
+   216→      label: payload.copy ? 'Duplicate frame' : 'Add frame',
+   217→    };
+   218→  },
+   219→};
+   220→
+   221→export const frameDelete: CommandDefinition<{ clipId: string; frameIndex: number }> = {
+   222→  type: 'frame.delete',
+   223→  defaultLabel: 'Delete frame',
+   224→  validate(payload, ctx) {
+   225→    const p = assertObject(payload, 'frame.delete');
+   226→    const { clipId } = parseRef(p);
+   227→    const clip = findClip(ctx.project, clipId);
+   228→    if (!clip) failNotFound(`frame.delete: clip "${clipId}" not found`);
+   229→    const index = getInt(p, 'frameIndex', 'frame.delete', 0, clip.frames.length - 1);
+   230→    if (clip.frames.length <= 1) fail('frame.delete: a clip must keep at least one frame');
+   231→    void index;
+   232→  },
+   233→  apply(payload, ctx) {
+   234→    const clip = findClip(ctx.project, payload.clipId) as Clip;
+   235→    const frame = clip.frames[payload.frameIndex];
+   236→    const frames = clip.frames.filter((_, i) => i !== payload.frameIndex);
+   237→    return {
+   238→      project: pushTrash(mapClip(ctx.project, clip.id, (c) => ({ ...c, frames })), {
+   239→        id: newTrashId(),
+   240→        label: `Frame ${payload.frameIndex + 1} of "${clip.name}"`,
+   241→        deletedAt: Date.now(),
+   242→        item: { kind: 'frame', clipId: clip.id, frameIndex: payload.frameIndex, frame },
+   243→      }),
+   244→      label: 'Delete frame',
+   245→    };
+   246→  },
+   247→};
+   248→
+   249→export const frameMove: CommandDefinition<{ clipId: string; from: number; to: number }> = {
+   250→  type: 'frame.move',
+   251→  defaultLabel: 'Reorder frame',
+   252→  validate(payload, ctx) {
+   253→    const p = assertObject(payload, 'frame.move');
+   254→    const { clipId } = parseRef(p);
+   255→    const clip = findClip(ctx.project, clipId);
+   256→    if (!clip) failNotFound(`frame.move: clip "${clipId}" not found`);
+   257→    getInt(p, 'from', 'frame.move', 0, clip.frames.length - 1);
+   258→    getInt(p, 'to', 'frame.move', 0, clip.frames.length - 1);
+   259→  },
+   260→  apply(payload, ctx) {
+   261→    const clip = findClip(ctx.project, payload.clipId) as Clip;
+   262→    if (payload.from === payload.to) {
+   263→      return { project: ctx.project, label: 'Reorder frame' };
+   264→    }
+   265→    const frames = [...clip.frames];
+   266→    const [moved] = frames.splice(payload.from, 1);
+   267→    frames.splice(payload.to, 0, moved);
+   268→    return {
+   269→      project: mapClip(ctx.project, clip.id, (c) => ({ ...c, frames })),
+   270→      label: 'Reorder frame',
+   271→    };
+   272→  },
+   273→};
+   274→
+   275→export const frameSetDuration: CommandDefinition<{
+   276→  clipId: string;
+   277→  frameId: string;
+   278→  durationMs: number;
+   279→}> = {
+   280→  type: 'frame.setDuration',
+   281→  defaultLabel: 'Frame duration',
+   282→  validate(payload, ctx) {
+   283→    const p = assertObject(payload, 'frame.setDuration');
+   284→    const { clipId, frameId } = parseFrameRef(p);
+   285→    const clip = findClip(ctx.project, clipId);
+   286→    if (!clip) failNotFound(`frame.setDuration: clip "${clipId}" not found`);
+   287→    if (!findFrame(clip, frameId)) failNotFound(`frame.setDuration: frame "${frameId}" not found`);
+   288→    getInt(p, 'durationMs', 'frame.setDuration', 0, 60_000);
+   289→  },
+   290→  apply(payload, ctx) {
+   291→    return {
+   292→      project: mapClip(ctx.project, payload.clipId, (c) => ({
+   293→        ...c,
+   294→        frames: c.frames.map((f) =>
+   295→          f.id === payload.frameId ? { ...f, durationMs: payload.durationMs } : f
+   296→        ),
+   297→      })),
+   298→      label: 'Frame duration',
+   299→    };
+   300→  },
+   301→};
+   302→
+   303→// ---------------------------------------------------------------------------
+   304→// layer (clip-wide stack ops — C1)
+   305→// ---------------------------------------------------------------------------
+   306→
+   307→export const layerAdd: CommandDefinition<{ clipId: string; name?: string }> = {
+   308→  type: 'layer.add',
+   309→  defaultLabel: 'Add layer',
+   310→  validate(payload, ctx) {
+   311→    const p = assertObject(payload, 'layer.add');
+   312→    const { clipId } = parseRef(p);
+   313→    if (!findClip(ctx.project, clipId)) failNotFound(`layer.add: clip "${clipId}" not found`);
+   314→    getOptionalString(p, 'name', 'layer.add');
+   315→  },
+   316→  apply(payload, ctx) {
+   317→    const clip = findClip(ctx.project, payload.clipId) as Clip;
+   318→    const layer = createLayer(payload.name?.trim() || `layer ${clip.layers.length + 1}`);
+   319→    const layers = [...clip.layers, layer]; // top
+   320→    const project = mapClip(ctx.project, clip.id, (c) => ({
+   321→      ...c,
+   322→      layers,
+   323→      frames: c.frames.map((f) => ({
+   324→        ...f,
+   325→        cels: {
+   326→          ...f.cels,
+   327→          [layer.id]: { buffer: new Uint8ClampedArray(ctx.project.width * ctx.project.height * 4), linked: false },
+   328→        },
+   329→      })),
+   330→    }));
+   331→    return { project, label: 'Add layer' };
+   332→  },
+   333→};
+   334→
+   335→export const layerDelete: CommandDefinition<{ clipId: string; layerId: string }> = {
+   336→  type: 'layer.delete',
+   337→  defaultLabel: 'Delete layer',
+   338→  validate(payload, ctx) {
+   339→    const p = assertObject(payload, 'layer.delete');
+   340→    const { clipId, layerId } = parseLayerRef(p);
+   341→    const clip = findClip(ctx.project, clipId);
+   342→    if (!clip) failNotFound(`layer.delete: clip "${clipId}" not found`);
+   343→    if (!findLayer(clip, layerId)) failNotFound(`layer.delete: layer "${layerId}" not found`);
+   344→    if (clip.layers.length <= 1) fail('layer.delete: a clip must keep at least one layer');
+   345→  },
+   346→  apply(payload, ctx) {
+   347→    const clip = findClip(ctx.project, payload.clipId) as Clip;
+   348→    const { layer, index } = findLayer(clip, payload.layerId) as { layer: Layer; index: number };
+   349→    const celsByFrameId: Record<string, Cel> = {};
+   350→    for (const f of clip.frames) {
+   351→      const cel = f.cels[layer.id];
+   352→      if (cel) celsByFrameId[f.id] = cel; // linked frames keep the shared reference
+   353→    }
+   354→    const project = mapClip(ctx.project, clip.id, (c) => ({
+   355→      ...c,
+   356→      layers: c.layers.filter((l) => l.id !== layer.id),
+   357→      frames: c.frames.map((f) => {
+   358→        if (!f.cels[layer.id]) return f;
+   359→        const cels = { ...f.cels };
+   360→        delete cels[layer.id];
+   361→        return { ...f, cels };
+   362→      }),
+   363→    }));
+   364→    return {
+   365→      project: pushTrash(project, {
+   366→        id: newTrashId(),
+   367→        label: `Layer "${layer.name}" of "${clip.name}"`,
+   368→        deletedAt: Date.now(),
+   369→        item: { kind: 'layer', clipId: clip.id, layerIndex: index, layer, celsByFrameId },
+   370→      }),
+   371→      label: 'Delete layer',
+   372→    };
+   373→  },
+   374→};
+   375→
+   376→export const layerDuplicate: CommandDefinition<{ clipId: string; layerId: string }> = {
+   377→  type: 'layer.duplicate',
+   378→  defaultLabel: 'Duplicate layer',
+   379→  validate(payload, ctx) {
+   380→    const p = assertObject(payload, 'layer.duplicate');
+   381→    const { clipId, layerId } = parseLayerRef(p);
+   382→    const clip = findClip(ctx.project, clipId);
+   383→    if (!clip) failNotFound(`layer.duplicate: clip "${clipId}" not found`);
+   384→    if (!findLayer(clip, layerId)) failNotFound(`layer.duplicate: layer "${layerId}" not found`);
+   385→  },
+   386→  apply(payload, ctx) {
+   387→    const clip = findClip(ctx.project, payload.clipId) as Clip;
+   388→    const { layer, index } = findLayer(clip, payload.layerId) as { layer: Layer; index: number };
+   389→    const copy: Layer = { ...layer, id: newLayerId(), name: `${layer.name} copy`, linked: false };
+   390→    const layers = [...clip.layers.slice(0, index + 1), copy, ...clip.layers.slice(index + 1)];
+   391→    const project = mapClip(ctx.project, clip.id, (c) => ({
+   392→      ...c,
+   393→      layers,
+   394→      frames: c.frames.map((f) => {
+   395→        const src = f.cels[layer.id];
+   396→        if (!src) return f;
+   397→        return {
+   398→          ...f,
+   399→          cels: {
+   400→            ...f.cels,
+   401→            [copy.id]: {
+   402→              // Duplicate of a linked layer → independent per-frame copies.
+   403→              buffer: new Uint8ClampedArray(src.buffer),
+   404→              linked: false,
+   405→            },
+   406→          },
+   407→        };
+   408→      }),
+   409→    }));
+   410→    return { project, label: 'Duplicate layer' };
+   411→  },
+   412→};
+   413→
+   414→/**
+   415→ * Alpha compositing of the top cel onto the one below, per frame (ported
+   416→ * from the prototype store's mergeDown). The top layer is removed; the
+   417→ * operation is undoable via the structural snapshot, so it is not
+   418→ * trash-backed (documented deviation from delete semantics).
+   419→ */
+   420→export const layerMergeDown: CommandDefinition<{ clipId: string; layerId: string }> = {
+   421→  type: 'layer.mergeDown',
+   422→  defaultLabel: 'Merge down',
+   423→  validate(payload, ctx) {
+   424→    const p = assertObject(payload, 'layer.mergeDown');
+   425→    const { clipId, layerId } = parseLayerRef(p);
+   426→    const clip = findClip(ctx.project, clipId);
+   427→    if (!clip) failNotFound(`layer.mergeDown: clip "${clipId}" not found`);
+   428→    const found = findLayer(clip, layerId);
+   429→    if (!found) failNotFound(`layer.mergeDown: layer "${layerId}" not found`);
+   430→    if (found.index === 0) fail('layer.mergeDown: nothing below the bottom layer');
+   431→    if (found.layer.linked) {
+   432→      fail('layer.mergeDown: merging a linked layer is not supported (unlink first — C2)');
+   433→    }
+   434→  },
+   435→  apply(payload, ctx) {
+   436→    const clip = findClip(ctx.project, payload.clipId) as Clip;
+   437→    const { index } = findLayer(clip, payload.layerId) as { layer: Layer; index: number };
+   438→    const { width, height } = ctx.project;
+   439→    const project = mapClip(ctx.project, clip.id, (c) => ({
+   440→      ...c,
+   441→      layers: c.layers.filter((_, i) => i !== index),
+   442→      frames: c.frames.map((f) => {
+   443→        const top = f.cels[payload.layerId];
+   444→        const bottomLayer = c.layers[index - 1];
+   445→        if (!bottomLayer) return f;
+   446→        const bottom = f.cels[bottomLayer.id];
+   447→        if (!top && !bottom) return f;
+   448→        // Missing cel = transparent (C2) — merge treats it as empty.
+   449→        const merged = bottom
+   450→          ? new Uint8ClampedArray(bottom.buffer)
+   451→          : new Uint8ClampedArray(width * height * 4);
+   452→        if (top) {
+   453→          for (let i = 0; i < width * height; i++) {
+   454→            const ta = (top.buffer[i * 4 + 3] / 255) * (top.linked ? 1 : (c.layers[index]?.opacity ?? 1));
+   455→            if (ta >= 1) {
+   456→              merged[i * 4] = top.buffer[i * 4];
+   457→              merged[i * 4 + 1] = top.buffer[i * 4 + 1];
+   458→              merged[i * 4 + 2] = top.buffer[i * 4 + 2];
+   459→              merged[i * 4 + 3] = top.buffer[i * 4 + 3];
+   460→            } else if (ta > 0) {
+   461→              const ba = merged[i * 4 + 3] / 255;
+   462→              const outA = ta + ba * (1 - ta);
+   463→              if (outA === 0) continue;
+   464→              for (let ch = 0; ch < 3; ch++) {
+   465→                merged[i * 4 + ch] = Math.round(
+   466→                  (top.buffer[i * 4 + ch] * ta + merged[i * 4 + ch] * ba * (1 - ta)) / outA
+   467→                );
+   468→              }
+   469→              merged[i * 4 + 3] = Math.round(outA * 255);
+   470→            }
+   471→          }
+   472→        }
+   473→        return { ...f, cels: { ...f.cels, [bottomLayer.id]: { buffer: merged, linked: false } } };
+   474→      }),
+   475→    }));
+   476→    // Remove the top layer's cels everywhere.
+   477→    const cleaned = mapClip(project, clip.id, (c) => ({
+   478→      ...c,
+   479→      frames: c.frames.map((f) => {
+   480→        if (!f.cels[payload.layerId]) return f;
+   481→        const cels = { ...f.cels };
+   482→        delete cels[payload.layerId];
+   483→        return { ...f, cels };
+   484→      }),
+   485→    }));
+   486→    return { project: cleaned, label: 'Merge down' };
+   487→  },
+   488→};
+   489→
+   490→export const layerMove: CommandDefinition<{ clipId: string; layerId: string; dir: -1 | 1 }> = {
+   491→  type: 'layer.move',
+   492→  defaultLabel: 'Reorder layer',
+   493→  validate(payload, ctx) {
+   494→    const p = assertObject(payload, 'layer.move');
+   495→    const { clipId, layerId } = parseLayerRef(p);
+   496→    const clip = findClip(ctx.project, clipId);
+   497→    if (!clip) failNotFound(`layer.move: clip "${clipId}" not found`);
+   498→    if (!findLayer(clip, layerId)) failNotFound(`layer.move: layer "${layerId}" not found`);
+   499→    const dir = p.dir;
+   500→    if (dir !== -1 && dir !== 1) fail('layer.move: dir must be -1 or 1');
+   501→  },
+   502→  apply(payload, ctx) {
+   503→    const clip = findClip(ctx.project, payload.clipId) as Clip;
+   504→    const { index } = findLayer(clip, payload.layerId) as { layer: Layer; index: number };
+   505→    const to = index + payload.dir;
+   506→    if (to < 0 || to >= clip.layers.length) {
+   507→      return { project: ctx.project, label: 'Reorder layer' };
+   508→    }
+   509→    const layers = [...clip.layers];
+   510→    const [moved] = layers.splice(index, 1);
+   511→    layers.splice(to, 0, moved);
+   512→    // Cel keys are layer ids — reordering the stack needs no cel changes.
+   513→    return { project: mapClip(ctx.project, clip.id, (c) => ({ ...c, layers })), label: 'Reorder layer' };
+   514→  },
+   515→};
+   516→
+   517→interface LayerSetPropsPayload {
+   518→  clipId: string;
+   519→  layerId: string;
+   520→  patch: { name?: string; visible?: boolean; opacity?: number };
+   521→}
+   522→
+   523→export const layerSetProps: CommandDefinition<LayerSetPropsPayload> = {
+   524→  type: 'layer.setProps',
+   525→  defaultLabel: 'Layer properties',
+   526→  validate(payload, ctx) {
+   527→    const p = assertObject(payload, 'layer.setProps');
+   528→    const { clipId, layerId } = parseLayerRef(p);
+   529→    const clip = findClip(ctx.project, clipId);
+   530→    if (!clip) failNotFound(`layer.setProps: clip "${clipId}" not found`);
+   531→    if (!findLayer(clip, layerId)) failNotFound(`layer.setProps: layer "${layerId}" not found`);
+   532→    const patch = assertObject(p.patch, 'layer.setProps patch');
+   533→    const name = getOptionalString(patch, 'name', 'layer.setProps');
+   534→    if (name !== undefined && name.length > 120) fail('layer.setProps: name too long');
+   535→    const opacity = patch.opacity;
+   536→    if (opacity !== undefined && (typeof opacity !== 'number' || opacity < 0 || opacity > 1)) {
+   537→      fail('layer.setProps: opacity must be 0..1');
+   538→    }
+   539→  },
+   540→  apply(payload, ctx) {
+   541→    const { clipId, layerId, patch } = payload;
+   542→    return {
+   543→      project: mapClip(ctx.project, clipId, (c) => ({
+   544→        ...c,
+   545→        layers: c.layers.map((l) =>
+   546→          l.id === layerId
+   547→            ? {
+   548→                ...l,
+   549→                ...(patch.name !== undefined ? { name: patch.name } : {}),
+   550→                ...(patch.visible !== undefined ? { visible: patch.visible } : {}),
+   551→                ...(patch.opacity !== undefined ? { opacity: patch.opacity } : {}),
+   552→              }
+   553→            : l
+   554→        ),
+   555→      })),
+   556→      label: 'Layer properties',
+   557→    };
+   558→  },
+   559→};
+   560→
+   561→/**
+   562→ * Linked-cel engine switch (C2/C19 — P0 engine support; UI toggle is P2).
+   563→ * ON  → pick the anchor frame's cel (first frame holding one) and share it
+   564→ *        across ALL frames (content of other frames collapses to the anchor).
+   565→ * OFF → break sharing: every frame gets an independent deep copy.
+   566→ */
+   567→export const layerSetLinked: CommandDefinition<{ clipId: string; layerId: string; linked: boolean }> = {
+   568→  type: 'layer.setLinked',
+   569→  defaultLabel: 'Linked cel',
+   570→  validate(payload, ctx) {
+   571→    const p = assertObject(payload, 'layer.setLinked');
+   572→    const { clipId, layerId } = parseLayerRef(p);
+   573→    const clip = findClip(ctx.project, clipId);
+   574→    if (!clip) failNotFound(`layer.setLinked: clip "${clipId}" not found`);
+   575→    if (!findLayer(clip, layerId)) failNotFound(`layer.setLinked: layer "${layerId}" not found`);
+   576→    if (typeof p.linked !== 'boolean') fail('layer.setLinked: "linked" must be a boolean');
+   577→  },
+   578→  apply(payload, ctx) {
+   579→    const clip = findClip(ctx.project, payload.clipId) as Clip;
+   580→    const { layer } = findLayer(clip, payload.layerId) as { layer: Layer; index: number };
+   581→    if (payload.linked === layer.linked) {
+   582→      return { project: ctx.project, label: 'Linked cel' };
+   583→    }
+   584→    if (payload.linked) {
+   585→      // Anchor = first frame that has a cel (else first frame → create).
+   586→      const anchorFrame = clip.frames.find((f) => f.cels[layer.id]) ?? clip.frames[0];
+   587→      if (!anchorFrame) fail('layer.setLinked: clip has no frames');
+   588→      const existing = anchorFrame.cels[layer.id];
+   589→      const shared: Cel = existing
+   590→        ? { buffer: existing.buffer, linked: true }
+   591→        : { buffer: new Uint8ClampedArray(ctx.project.width * ctx.project.height * 4), linked: true };
+   592→      const withFlag = mapClip(ctx.project, clip.id, (c) => ({
+   593→        ...c,
+   594→        layers: c.layers.map((l) => (l.id === layer.id ? { ...l, linked: true } : l)),
+   595→      }));
+   596→      return {
+   597→        project: setCelEverywhere(withFlag, clip.id, layer.id, shared),
+   598→        label: 'Link cel (shared)',
+   599→      };
+   600→    }
+   601→    // Unlink: give every frame its own copy of the current shared buffer.
+   602→    const project = mapClip(ctx.project, clip.id, (c) => ({
+   603→      ...c,
+   604→      layers: c.layers.map((l) => (l.id === layer.id ? { ...l, linked: false } : l)),
+   605→    }));
+   606→    const withCopies = mapClip(project, clip.id, (c) => ({
+   607→      ...c,
+   608→      frames: c.frames.map((f) => {
+   609→        const cel = f.cels[layer.id];
+   610→        if (!cel) return f;
+   611→        return { ...f, cels: { ...f.cels, [layer.id]: { buffer: cloneBuffer(cel.buffer), linked: false } } };
+   612→      }),
+   613→    }));
+   614→    return { project: withCopies, label: 'Unlink cel' };
+   615→  },
+   616→};
+   617→
+   618→// ---------------------------------------------------------------------------
+   619→// palette
+   620→// ---------------------------------------------------------------------------
+   621→
+   622→export const paletteAddColor: CommandDefinition<{ hex: string }> = {
+   623→  type: 'palette.addColor',
+   624→  defaultLabel: 'Add palette color',
+   625→  validate(payload) {
+   626→    const p = assertObject(payload, 'palette.addColor');
+   627→    getHexColor(p, 'hex', 'palette.addColor');
+   628→  },
+   629→  apply(payload, ctx) {
+   630→    const hex = payload.hex.toLowerCase();
+   631→    if (ctx.project.palette.includes(hex)) {
+   632→      return { project: ctx.project, label: 'Add palette color' };
+   633→    }
+   634→    return {
+   635→      project: { ...ctx.project, palette: [...ctx.project.palette, hex] },
+   636→      label: 'Add palette color',
+   637→    };
+   638→  },
+   639→};
+   640→
+   641→export const paletteRemoveColor: CommandDefinition<{ hex: string }> = {
+   642→  type: 'palette.removeColor',
+   643→  defaultLabel: 'Remove palette color',
+   644→  validate(payload, ctx) {
+   645→    const p = assertObject(payload, 'palette.removeColor');
+   646→    const hex = getHexColor(p, 'hex', 'palette.removeColor');
+   647→    if (!ctx.project.palette.includes(hex)) {
+   648→      failNotFound(`palette.removeColor: "${hex}" not in palette`);
+   649→    }
+   650→  },
+   651→  apply(payload, ctx) {
+   652→    const hex = payload.hex.toLowerCase();
+   653→    return {
+   654→      project: { ...ctx.project, palette: ctx.project.palette.filter((c) => c !== hex) },
+   655→      label: 'Remove palette color',
+   656→    };
+   657→  },
+   658→};
+   659→
+   660→// ---------------------------------------------------------------------------
+   661→// trash
+   662→// ---------------------------------------------------------------------------
+   663→
+   664→export const trashRestore: CommandDefinition<{ entryId: string }> = {
+   665→  type: 'trash.restore',
+   666→  defaultLabel: 'Restore from trash',
+   667→  validate(payload, ctx) {
+   668→    const p = assertObject(payload, 'trash.restore');
+   669→    const entryId = getString(p, 'entryId', 'trash.restore');
+   670→    if (!ctx.project.trash.some((t) => t.id === entryId)) {
+   671→      failNotFound(`trash.restore: entry "${entryId}" not found`);
+   672→    }
+   673→  },
+   674→  apply(payload, ctx) {
+   675→    const taken = takeTrash(ctx.project, payload.entryId);
+   676→    if (!taken) failNotFound('trash.restore: entry vanished');
+   677→    const { entry, project: without } = taken;
+   678→    const item = entry.item;
+   679→    if (item.kind === 'frame') {
+   680→      const clip = findClip(without, item.clipId);
+   681→      if (!clip) failNotFound('trash.restore: owning clip no longer exists');
+   682→      const index = Math.min(Math.max(0, item.frameIndex), clip.frames.length);
+   683→      return {
+   684→        project: mapClip(without, clip.id, (c) => ({
+   685→          ...c,
+   686→          frames: [...c.frames.slice(0, index), item.frame, ...c.frames.slice(index)],
+   687→        })),
+   688→        label: 'Restore frame',
+   689→      };
+   690→    }
+   691→    if (item.kind === 'layer') {
+   692→      const clip = findClip(without, item.clipId);
+   693→      if (!clip) failNotFound('trash.restore: owning clip no longer exists');
+   694→      const index = Math.min(Math.max(0, item.layerIndex), clip.layers.length);
+   695→      const layers = [...clip.layers.slice(0, index), item.layer, ...clip.layers.slice(index)];
+   696→      const restored = mapClip(without, clip.id, (c) => ({ ...c, layers }));
+   697→      // Restore cels to the frames they came from (missing frame ids skipped).
+   698→      const withCels = mapClip(restored, clip.id, (c) => ({
+   699→        ...c,
+   700→        frames: c.frames.map((f) => {
+   701→          const cel = item.celsByFrameId[f.id];
+   702→          if (!cel) return f;
+   703→          return { ...f, cels: { ...f.cels, [item.layer.id]: cel } };
+   704→        }),
+   705→      }));
+   706→      return { project: withCels, label: 'Restore layer' };
+   707→    }
+   708→    const index = Math.min(Math.max(0, item.clipIndex), without.clips.length);
+   709→    const clips = [...without.clips.slice(0, index), item.clip, ...without.clips.slice(index)];
+   710→    return { project: { ...without, clips }, label: 'Restore clip' };
+   711→  },
+   712→};
+   713→
+   714→export const trashPurge: CommandDefinition<{ entryId: string }> = {
+   715→  type: 'trash.purge',
+   716→  defaultLabel: 'Empty trash entry',
+   717→  validate(payload, ctx) {
+   718→    const p = assertObject(payload, 'trash.purge');
+   719→    const entryId = getString(p, 'entryId', 'trash.purge');
+   720→    if (!ctx.project.trash.some((t) => t.id === entryId)) {
+   721→      failNotFound(`trash.purge: entry "${entryId}" not found`);
+   722→    }
+   723→  },
+   724→  apply(payload, ctx) {
+   725→    const taken = takeTrash(ctx.project, payload.entryId);
+   726→    if (!taken) return { project: ctx.project, label: 'Empty trash entry' };
+   727→    return { project: taken.project, label: 'Empty trash entry' };
+   728→  },
+   729→};
+   730→
+   731→// ---------------------------------------------------------------------------
+   732→// registry
+   733→// ---------------------------------------------------------------------------
+   734→
+   735→export function builtinCommands(): CommandDefinition<never>[] {
+   736→  return [
+   737→    projectRename,
+   738→    clipAdd,
+   739→    clipDelete,
+   740→    clipSetProps,
+   741→    frameAdd,
+   742→    frameDelete,
+   743→    frameMove,
+   744→    frameSetDuration,
+   745→    layerAdd,
+   746→    layerDelete,
+   747→    layerDuplicate,
+   748→    layerMergeDown,
+   749→    layerMove,
+   750→    layerSetProps,
+   751→    layerSetLinked,
+   752→    paletteAddColor,
+   753→    paletteRemoveColor,
+   754→    trashRestore,
+   755→    trashPurge,
+   756→    // Pixel-editing path (same tile-diff history as strokes):
+   757→    applyPixelOpsCommand,
+   758→  ] as unknown as CommandDefinition<never>[];
+   759→}
+   760→

@@ -120,3 +120,47 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* ---------------------------------------------------------------------------
+ * PixelForge AI studio utilities
+ * ------------------------------------------------------------------------- */
+
+/* Transparent-pixel checkerboard behind the canvas, thumbnails and previews
+   (dark slate tones so RGBA artwork reads correctly on the dark shell). */
+.pixelforge-checker {
+  background-color: #232327;
+  background-image:
+    linear-gradient(45deg, #2c2c31 25%, transparent 25%),
+    linear-gradient(-45deg, #2c2c31 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #2c2c31 75%),
+    linear-gradient(-45deg, transparent 75%, #2c2c31 75%);
+  background-size: 16px 16px;
+  background-position:
+    0 0,
+    0 8px,
+    8px -8px,
+    -8px 0;
+}
+
+/* Slim dark scrollbars for the studio panels/strips. */
+.pixelforge-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #3f3f46 transparent;
+}
+.pixelforge-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.pixelforge-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.pixelforge-scroll::-webkit-scrollbar-thumb {
+  background: #3f3f46;
+  border-radius: 9999px;
+}
+.pixelforge-scroll::-webkit-scrollbar-thumb:hover {
+  background: #52525b;
+}
+.pixelforge-scroll::-webkit-scrollbar-corner {
+  background: transparent;
+}

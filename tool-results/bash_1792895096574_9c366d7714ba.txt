@@ -1,0 +1,201 @@
+- Settings → AI & MCP is the single place to connect Z.AI (built-in), GPT, Claude, Gemini or any OpenAI-compatible/MCP endpoint: paste key, Test connection, click Use; the Generate panel instantly switches engines (custom failures auto-fall back to built-in), and the Agent API toggle controls the MCP bridge.
+
+---
+Task ID: UI-FIX-8
+Agent: main (Z.ai Code)
+Task: "Fix UI responsive + redesign the up/down arrows on colors & fps (user thought UI-FIX-6 didn't take) + make panels hideable/draggable same as the preview."
+
+Work Log:
+- Killed native number inputs at the root: the CSS-only spinner hide (UI-FIX-6) evidently didn't survive the user's browser/OS, so every <input type="number"> was REPLACED — zero remain in src/ (grep-verified). New shared src/components/pixelforge/stepper-input.tsx: themed [−] value [+] control using type="text" inputMode="numeric" (numeric keypad on touch, ArrowUp/Down keys still step, clamped, commit on blur/Enter, focus ring, −/+ disabled at bounds).
+- FPS control redesigned (timeline.tsx): FPS label + StepperInput(1–60) replaces the number input. Color editor redesigned (color-picker.tsx): R/G/B number inputs replaced by three gradient channel SLIDERS (each track goes rgb(x,0,z)→rgb(x,255,z) with the other channels held, white thumb) + a tiny typed readout input (ChannelValue, inputMode numeric, commits on blur/Enter) — verified typed R=120 turned #2ce8f5→#78e8f5 (exact channel math). Export dialog COLUMNS/PADDING and New-project custom W/H also switched to StepperInput. Dialogs got max-h-[85dvh] overflow-y-auto for small screens.
+- Palette is now a FLOATING panel (palette-panel.tsx rewritten, moved from page.tsx flex row into canvas-stage.tsx overlay stack beside PreviewOverlay): drag by its header (pointer capture), clamp to stage bounds, hide via header X (tool-rail palette toggle reopens), position persisted in localStorage 'pixelforge-palette-v1' with view-toolbar's rAF-hydration + hydratedRef pattern. Canvas now uses the freed 80px column. Tool-rail toggle unchanged.
+- Responsive pass: NEW src/components/pixelforge/use-is-mobile.ts (matchMedia <md, SSR-safe). page.tsx: on first phone-sized viewport the dock + palette auto-collapse; right dock becomes an overlay DRAWER on mobile (absolute right, min(85vw,340px), z-40, shadow) with a tap-away backdrop; the drag-resize handle is desktop-only; dock width style switches on isMobile. Header compresses below sm/md (wordmark hidden <sm, name input hidden <md, New/Open/Save/Export become icon-only with aria-labels, status text hidden <sm). Footer segments (zoom <sm, coords/tool <md, version <lg) progressively hidden; clip info truncates. Timeline frame thumbs 44px (<sm) → 56px (sm+). Timeline transport row keeps overflow-x-auto.
+- Bug found & fixed during E2E: a palette position saved on desktop restored OFF-SCREEN on a phone (RO attached while hidden never re-attached; hydration didn't re-clamp). Added RO re-attach on [paletteOpen] + a re-clamp effect on [pos] (deferred into rAF to satisfy react-hooks/set-state-in-effect); same re-clamp effect added to view-toolbar. Verified: stored (900,900) clamps to (230,232) on 390px and re-persists.
+- E2E (agent-browser): desktop 1440×900 — palette dragged across canvas (pos persisted, survives hide/reopen/reload), X-hide + rail-reopen OK; FPS stepper + click, typed 12 committed (footer 12fps), restored to 4; color editor slider drag R 44→54 + typed 120 → exact hex; export steppers (+padding disabled at min, columns 4→5); New dialog Custom W/H steppers 32→33; draw+undo, frame click, dock resize 320→420→320 regressions OK. Mobile 390×844 — header one-row icon-only, no horizontal overflow (scrollW≤390), dock drawer 332px + backdrop tap/programmatic close, palette auto-collapsed then opens as clamped floating card via rail, 44px frame thumbs, compressed footer. Console clean, no page errors, dev.log shows only the previously-documented stale export-dialog ReferenceError (line 120, old HMR frame; current code uses st.project and the dialog was exercised twice with no page error). bun run lint clean. Sample "Sample: Farmer" intact (fps back to 4, primary #2ce8f5, playhead frame 1, saved).
+
+Stage Summary:
+- Files: NEW src/components/pixelforge/{stepper-input.tsx,use-is-mobile.ts}; MODIFIED src/components/pixelforge/{palette-panel,color-picker,timeline,export-dialog,project-dialogs,canvas-stage,view-toolbar,header,footer}.tsx, src/app/page.tsx (+ max-h safety on 3 dialogs).
+- No native number inputs remain anywhere (arrows impossible on any browser/OS); FPS is a themed −/+ stepper and the color editor's RGB are gradient sliders with typed readouts.
+- Palette joined preview + view toolbar as a drag-anywhere, hideable, position-persisted floating card over the edit area.
+- App is responsive again: phones get an icon-only header, overlay panel drawer with backdrop, auto-collapsed palette/dock, compact timeline thumbs and footer; desktop keeps the resizable dock.
+
+---
+Task ID: UI-FIX-9
+Agent: main (Z.ai Code)
+Task: "The preview btn and show-view-toolbar btn should also be draggable; adjust their size (in Settings) so they're readable."
+
+Work Log:
+- NEW shared src/components/pixelforge/float-pill.tsx (FloatPill): the labeled restore pill a collapsed panel becomes. Drag anywhere on the stage (pointer capture, cursor grab/grabbing, clamp to stage bounds); a plain click (< 4px movement) activates/restore, dragging never triggers the click (suppressClick ref); size variants sm/md/lg via PILL_SIZE; self-heals out-of-bounds positions with (a) an initial rAF clamp on mount/appearance and (b) a ResizeObserver on the stage so desktop-saved positions clamp when the viewport shrinks (fixed a real bug: a pill dragged off-screen on desktop stayed off-screen on mobile); pos/callback mirrors kept in effects (strict lint forbids ref writes during render).
+- preview-overlay.tsx: collapsed "Preview" pill replaced with FloatPill (was a small fixed button); the preview now PERSISTS open/collapsed + card position + pill position in localStorage 'pixelforge-preview-v1' (rAF hydration + hydratedRef + persist effect, view-toolbar pattern) — collapsed state and drag positions survive reload; added an rAF re-clamp effect for the card pos.
+- view-toolbar.tsx: hidden restore button (was a 28px icon-only ghost) replaced with a labeled draggable FloatPill ("View" + sliders icon) sharing the existing persisted pos — dragging the pill relocates it, clicking restores the toolbar at the pill's spot.
+- Readable sizes: md (default) pill = 36px tall with icon + text label (vs the old 28px icon-only / 26px preview pill); lg = 44px; sm = 28px compact.
+- settings.ts: AppSettings.floatBtnSize ('sm'|'md'|'lg', default 'md') + partialize; settings-dialog.tsx General tab new "Floating buttons" row with S/M/L toggle buttons (aria-pressed, persisted, covered by Reset).
+- E2E (agent-browser, 1440×900 + 390×844): Preview pill 36→44px when set Large (persisted across reload, verified in localStorage settings); pill dragged (60,672)→(520,362) with pos persisted and still collapsed; plain click restored the card; hide→pill reappears at persisted spot; View pill dragged (1029,672)→(749,282), click restored the toolbar there; mobile: off-screen pill (x=520 on 390px screen) auto-clamped to right=382 ≤ 390 on reload AND re-persisted clamped (209,314); click-vs-drag distinction verified both ways. Console clean, no page errors, dev.log clean (only the previously-documented stale ReferenceError), bun run lint clean. Test state reset afterwards (preview open, toolbar visible, floatBtnSize=md, pill positions cleared); Sample: Farmer untouched.
+
+Stage Summary:
+- Files: NEW src/components/pixelforge/float-pill.tsx; MODIFIED src/components/pixelforge/{preview-overlay,view-toolbar,settings-dialog}.tsx, src/lib/pixelforge/settings.ts.
+- Collapsed Preview + View pills are now draggable like the panels, noticeably bigger with text labels, and their size is adjustable in Settings → General → "Floating buttons" (S/M/L, persisted per browser). Preview collapsed-state + positions now survive reload too.
+
+---
+Task ID: UI-FIX-10
+Agent: main (Z.ai Code)
+Task: "MCP models: latest/popular selectable; grey text unreadable (audit & fix, e.g. footer 'tool: pencil' / colors labels); layers panel shows only 1 layer + 'when I + layer/frame, frame 1's pixels are gone'; settings UI must view freely with no scroll (General/Canvas/AI&MCP/Keys)."
+
+Work Log:
+- TWO real bugs found & fixed behind the user's "pixels gone" report:
+  1. CRASH: every clip-wide layer op (addLayer/deleteLayer/duplicateLayer/mergeDown/moveLayer/setLayerProp) did `p.clips = mapClipFrames(p, …)` — but mapClipFrames returned a whole PROJECT, so p.clips became a Project object instead of an array → next locate() threw "project.clips.find is not a function" (reproduced on a clean load via agent-browser; the same crash the user hit when pressing +). Fix: mapClipFrames now returns the new Clip[] array (assign-back contract), with an explanatory comment. Repro verified fixed.
+  2. BLANK THUMBS: renderFrameScaled()/frameToPng() ran drawFrame INTO the shared getScratch() canvas, whose drawLayerBuffer clears that same scratch per layer → multi-layer frames rendered only the TOP (new, empty) layer in all timeline thumbs / frames chips / preview / PNG exports ("worked" only while every frame had 1 layer). Fix: new private compositeToCanvas() used by both (comment explains why the shared scratch can't be the target). Verified: thumbs 0/0/0 → 786/821/796 opaque px.
+- Layers panel: header now "LAYERS · N LAYERS"; new FRAMES · N strip (FrameChip 28px canvases via renderFrameScaled, click = selectFrame, + = addFrame) so the panel reflects both layer and frame counts (user ask); note text kept. deleteFrame now keeps the active layer by NAME (per-frame ids) instead of a dead id.
+- Settings redesign: DialogContent sm:max-w-lg→sm:max-w-2xl + p-4; AI & MCP rebuilt as a 2-col grid (Z.AI wide slim card, 4 provider cards, MCP box wide) — measured NO scroll per tab at 1440×900 (ai 758/758, keys 401/401, general 394/394, canvas 312/312); Keys tab = 2-col shortcut grid; tabs stay General/Canvas/AI & MCP/Keys per user.
+- Model pickers: settings.ts gained MODEL_PRESETS per provider id (openai: gpt-image-1/gpt-image-1-mini/dall-e-3/dall-e-2; anthropic: claude-sonnet-4-5/claude-haiku-4-5/claude-opus-4-1/claude-3-5-haiku; gemini: gemini-2.5-flash-image "Nano Banana"/2.5-flash/2.5-pro/2.0-flash; zai: auto) + gemini default updated. New ModelPicker in ProviderCard: dropdown of curated models + "Custom… (type any model id)" → free-text input; providers without presets (custom endpoint) get a text field with examples. Unknown persisted values (e.g. old gemini-2.0-flash-exp) gracefully show Custom mode. E2E: picked claude-haiku-4-5 → persisted to localStorage; settings Reset restored defaults afterwards.
+- Grey-text audit & sweep (user: "like pencil… same sa colors"): footer/status base text-zinc-500 → zinc-400; ALL text-zinc-600 hints → zinc-400; labels in settings/ai/agent/export/project dialogs, timeline info, palette, preview, header status → zinc-400; decorative empty-state icons zinc-700 → zinc-500; footer pipes zinc-800 → zinc-700; stepper placeholder → zinc-500. Verified computed color of footer "tool: pencil" now zinc-400 (lab L≈66 vs ≈55).
+- Full layer/frame E2E after fixes: add layer → "2 LAYERS", canvas keeps farmer pixels, toast; delete layer → back to 1, canvas intact; add empty frame → FRAMES strip 4 chips, empty-frame hint + reassuring toast ("frame 1 and its pixels are safe on the timeline below"), other thumbs intact; delete frame → 3 frames, selection stays on 'farmer' by name; frame 1 click → pixels back (129904 opaque px on main canvas throughout).
+- Responsive re-check @390×844: no horizontal overflow; settings fits (358px, General 411/411 no scroll); AI & MCP single-column scrollable within dialog (graceful mobile fallback). Fresh browser session at end: ZERO page errors, console clean, autosave POST 200, bun run lint clean. User's project left exactly as they had it (3 frames, fps 3, 1 layer 'farmer'); settings reset to defaults.
+
+Stage Summary:
+- Files: MODIFIED src/lib/pixelforge/{store,render,settings}.ts; REWRITTEN src/components/pixelforge/settings-dialog.tsx; MODIFIED src/components/pixelforge/{layers-panel,footer,timeline,ai-panel,agent-panel,project-dialogs,export-dialog,palette-panel,preview-overlay,view-toolbar,tool-rail,header,stepper-input}.tsx, src/app/page.tsx (contrast sweep).
+- Root causes: (a) mapClipFrames returned a Project into p.clips → every layer op crashed; (b) frame compositing into the shared scratch canvas → multi-layer thumbnails/preview/exports blank. Both fixed + regression-verified.
+- Settings now fits the viewport with no scrolling on desktop (General/Canvas/AI & MCP/Keys), providers in a compact 2-col grid, each with a curated latest/popular model dropdown + Custom…; all muted grey text across the app raised to readable zinc-400+.
+
+---
+Task ID: UI-FIX-11
+Agent: main (Z.ai Code)
+Task: "right-click → 2nd this have grey text that doesnt readable ... make sure check and audit if u encounter like this and fix it" — find & fix ALL unreadable grey text.
+
+Work Log:
+- Root cause found (real bug, explains the user's report AND the earlier "pencil text" complaint): in dark mode --primary is LIGHT teal (oklch 0.72), and shadcn TooltipContent renders bg-primary text-primary-foreground → tooltips had a TEAL background with near-black text. Grey hint spans inside tooltips (text-zinc-400) have almost the same luminance as the teal → ~1.1:1 contrast, literally invisible. The user hovered swatch #38b764 and quoted its tooltip: "#38b764 · right-click → 2nd".
+- Audit sweep: grep'd all pixelforge components for text-zinc-4xx/5xx/6xx, text-muted-foreground, text-gray-*, white/alpha, opacity classes; identified the only broken class = grey text on LIGHT (bg-primary) surfaces. All other zinc-400 labels sit on zinc-950/900 (7.5:1 / 6.9:1, AA-passing, already raised in UI-FIX-10). Confirmed ui/context-menu.tsx is unused (the "right-click" refers to the swatch right-click→secondary hint, whose tooltip was the complaint).
+- FIX 1 (root): src/components/ui/tooltip.tsx TooltipContent now uses a dark surface (bg-zinc-950/95 text-zinc-100 ring-1 ring-teal-500/30 shadow-xl backdrop-blur) instead of bg-primary, arrow fill-zinc-950 — keeps the teal brand via the ring, makes EVERY tooltip hint readable app-wide (all tooltips get the studio-dark look consistently). Comment in file explains why.
+- FIX 2 (hint spans bumped zinc-400 → zinc-300 for extra legibility at small sizes): palette-panel.tsx "right-click → 2nd", tool-rail.tsx tool key hints "[P]" and brush "[n]".
+- E2E (agent-browser 1440×900): hovered #38b764 swatch → tooltip dark (oklab L 0.141) with zinc-300 hint (lab L 84.98); computed WCAG contrast of the hint vs tooltip bg = 13.4:1 (was ~1.1:1 on teal). Pencil tooltip "Pencil [B]" same 13.4:1. Primary-chip tooltip "Primary · click to edit" renders in new dark style (screenshot). Noted: Radix adds a visually-hidden screen-reader copy inside tooltip content (textContent looks doubled) — a11y, not a bug.
+- Functional regression: right-click on swatch still sets secondary (#1a1c2c→#41a6f6 on right-click, restored after; undo/redo stayed disabled = no history pollution). Sample: Farmer untouched (3 frames, fps 3, 1 layer, secondary #1a1c2c).
+- Mobile 390×844: no horizontal overflow (scrollWidth 390), layout intact. Console clean, zero page errors, dev.log clean (only normal project API GETs). bun run lint clean.
+
+Stage Summary:
+- Files: MODIFIED src/components/ui/tooltip.tsx (dark tooltip surface, root fix), src/components/pixelforge/palette-panel.tsx + tool-rail.tsx (hint spans zinc-400→zinc-300).
+- Every tooltip in the app now has a dark surface with near-white text — grey hints read at ~13.4:1 instead of ~1.1:1 on teal. Audit rule going forward: NEVER put zinc-4xx/5xx text on light surfaces (bg-primary/teal); tooltips are dark now so muted hints are safe everywhere.
+
+---
+Task ID: PLAN-REVIEW-1
+Agent: main (Z.ai Code)
+Task: Critical analysis of PixelForge_AI_Desktop_App_Project_Plan.docx (planning review only — no code changes per user instruction).
+
+Work Log:
+- Extracted full text from upload/PixelForge_AI_Desktop_App_Project_Plan.docx (8 sections: product def, functional reqs, architecture, MCP plan, AI strategy, data/export, roadmap P1-P5, risks).
+- Produced 12-weakness assessment (file format, history model, layer/cel model, AI pipeline spec, animation realism, MCP bridge/permissions, Electron security, perf budgets, testing, a11y, date error, proto learnings not folded back).
+- Full review written to download/PixelForge_AI_Plan_Review_v2.md: gap analysis (~40 features with complexity+priority), realistic 3-tier AI animation strategy (Tier-1 deterministic part-based motion presets / Tier-2 img2img+diff QA / Tier-3 experimental), MCP revision (bridge spec, 4 permission tiers, ~25-tool catalog, approval queue), revised architecture (core/ai/mcp packages + Electron boundary + ZIP project format + tile-diff history + perf budgets + test plan), P0-P3 roadmap with dependencies and acceptance criteria, risks table, 10 appendices to add to original doc.
+- No product code modified; Sample: Farmer untouched; original .docx untouched.
+
+Stage Summary:
+- Deliverable: download/PixelForge_AI_Plan_Review_v2.md awaiting user approval of proposed improvements before any implementation.
+
+---
+Task ID: PLAN-V3
+Agent: main (Z.ai Code)
+Task: Produce PixelForge AI Project Plan v3.0 (spec only — no code changes, originals untouched).
+
+Work Log:
+- Code audit of web prototype (evidence-based, Section 10 of v3.0): types.ts (per-frame layer stacks, history entry shapes), store.ts (24 commands, stroke-grouped history, historyLimit 40), pixels.ts (stamp/Bresenham/rect/flood/shift, no select/ellipse/pixel-perfect), color.ts (HSV + median-cut + flood bg-removal), ai-normalize.ts (contain-fit NN, no trim/dominant-color/despeckle), api/ai/sprite (Z.AI + OpenAI-dialect, fallback chain), api/mcp/* (9 tools, zod, ToolError, OperationLog), export.ts (PNG/sheet/JSON+Godot, no GIF/.tres), prisma schema (SQLite rows + PNG data URLs), use-keyboard.ts (shortcuts), ai-panel (candidate tray: layer/frame/discard).
+- Wrote download/PixelForge_AI_Project_Plan_v3.0.md: 14 sections — change summary, editor spec (cels model, tile-diff history, pixel-perfect, selection ops), AI system (provider adapter, candidates/cache/cost, normalize v2), 3-tier animation (motion presets w/ curve tables, flicker QA), full MCP spec (topology, pairing, 4 tiers, ~25 tools, approvals, security), .pixelforgeproj v2 format, engine exports, desktop architecture (processes/bridge/folders), perf budgets+testing, verified-implementation audit + reuse plan, P0-P3 roadmap, 15-task breakdown, checklist.
+- No product code modified; Sample: Farmer untouched; v1.0 docx and v2 review untouched.
+
+Stage Summary:
+- Deliverable: download/PixelForge_AI_Project_Plan_v3.0.md awaiting user approval; implementation starts at Task 1 only after approval.
+
+---
+Task ID: PLAN-V3-1
+Agent: main (Z.ai Code)
+Task: Final architecture consistency review of PixelForge_AI_Project_Plan_v3.0.md → produce v3.1 spec + changelog. No application source code modified, no implementation started.
+
+Work Log:
+- Re-verified prototype evidence for the review: types.ts (v1 per-frame Frame.layers, Clip.loop:boolean), settings.ts (plaintext apiKey, historyLimit 40), api/mcp/{run,tools} (9 tools incl. create_project), PixelForge_AI_Plan_Review_v2.md (original L0–L3 tier table).
+- Check ① (schema vs cel model): found v3.0 §6 put layers at project top level contradicting §2.4 per-clip stacks; cel entries were bare paths so linked cels had no representation; v1 loop:boolean → v2 loopMode migration undefined; §4.1 part tags had no file-format home; autosave cadence unspecified. → Fixed (C1–C6): per-clip layers, cel objects {src,linked} + shared/ path rule, loop+loopMode mapping, clip.parts[] + project.trash[] in schema, autosave 30s.
+- Check ② (MCP permissions): open_project was L0 read though it can discard unsaved work → L1 with dirty-state escalation (§5.2a, structured dirty_project; P0 = structured error only); accept/reject_candidate wrongly L3 (spend) → L1 undoable write, L3 stays on generate_sprite only; deletion made consistent (trash-backed L1 deletes + restore_from_trash; L2 = disk writes/resize_canvas/purge_trash); added missing L1 tools (add/duplicate/set_layer_props/reorder/merge_down layers, set_parts, apply_motion_preset); import_image_as_layer constrained to base64≤2MB or allowlisted path; approval-card content per op class; catalog count corrected (~25 → 47, per-tier).
+- Check ③ (credentials): safeStorage clarified precisely (encrypt-at-rest via DPAPI/Keychain/libsecret; ciphertext in settings file; plaintext never on disk nor to renderer; bridge gains settings.{setApiKey,hasKey,removeKey}; session-memory-only fallback when unavailable; no localStorage auto-import).
+- Check ④ (preset edge cases): added §4.1.1 composition semantics R1–R10 — painter's-order cut-then-paste, highest-z overlap ownership + tag-time overlap warning, alpha≥128 rule aligned with normalize v2 threshold, integer offsets + canvas-edge clipping (no wrap), gapFill none|edge-extend, anchor-frame alignment (no per-frame drift), frame-count reconciliation, durationMs:0, linked-layer skip/unlink-with-undo, static remainder bit-identity, ampScale=H/32 with min-1px rounding.
+- Check ⑤ (benchmarks): all budgets judged feasible on defined reference HW; added measurement protocol (packaged build, median-of-10, cold-start point) and CI relative-regression enforcement (fail >1.15×) instead of flaky absolute-ms gates; autosave budget scoped to dirty-cels-only.
+- Check ⑥ (contradictions): Space double-binding resolved (Space=pan, Enter=play); task 5/13 split (5a/5b, 13a/13b) + phase column + 13a→9 dependency; linked-cels P0-engine vs P2-UI scoping; GIF >256-color fallback defined; undo-depth wording aligned (≥250 floor, typically thousands).
+- Check ⑦ (solo realism): P0 cut-line + no-P1-into-P0-without-cut rule; approval-center scope fixed (no batch/rules); cost accounting of all v3.1 additions (<3 dev-days, thin layers over planned mechanisms).
+- Wrote download/PixelForge_AI_Project_Plan_v3.1.md (v3.0 file left untouched as historical record). Changelog §0.1 lists all 23 corrections mapped to the 7 requested checks; explicitly-preserved list included.
+
+Stage Summary:
+- Deliverable: download/PixelForge_AI_Project_Plan_v3.1.md — technically consistent spec awaiting approval; implementation still starts at Task 1 (§12) only after approval. Zero source-code changes; Sample: Farmer and all original docs untouched.
+
+---
+Task ID: PLAN-V3-1-FV
+Agent: main (Z.ai Code)
+Task: Final verification of PixelForge_AI_Project_Plan_v3.1.md (7 requested architecture-consistency checks + changelog). No application source code modified, no implementation started.
+
+Work Log:
+- Read full 558-line v3.1 draft; re-ran code spot-checks for §10 claims: types.ts (per-frame Frame.layers, Clip.loop:boolean), settings.ts (plaintext apiKey, historyLimit:40), api/mcp/tools (exactly 9 tools) — all audit claims accurate.
+- Independent sweep found 4 residual defects in the draft: (C24) §5.3 catalog count 47 wrong & §5.2 lists delete_layer/delete_clip missing from §5.3; (C25) R10 ampScale formula not sign-preserving (upward bob flips to sag at 16×16); (C26) gapFill edge-extend "max 1 px" contradicts 2–3 px holes from bob/run; (C27) preset curves referencing untagged parts undefined.
+- Fixed all 4 in body spec (§4.1.1 R4/R10/absent-part rule, §5.3 L1 list + count) and added "Final self-review pass (C24–C27)" subsection to §0.1; updated header counts (23→27 corrections), C10/C14/C15 changelog rows, §13 composer goldens.
+- Programmatic verification: all 51 cataloged tools present; totals L0×10 · L1×32 · L2×8 · L3×1 (+1 P2) match §5.3 claim; zero stale references ("47", "23 corrections", "max 1 px", "R1–R9" only remain inside C24/C26 defect quotations).
+- Verified section structure intact (§0–14, 570 lines). v3.0/v2/v1.0 files untouched; zero changes under src/.
+
+Stage Summary:
+- download/PixelForge_AI_Project_Plan_v3.1.md finalized: 27 corrections (C1–C23 seven checks + C24–C27 self-review), internally consistent, awaiting user approval. Implementation starts at §12 Task 1 only after approval.
+
+---
+Task ID: P0-T1-INV
+Agent: Explore (codebase inventory)
+Task: Read-only inventory/audit of the Next.js web prototype (deps, pixelforge lib + components + API routes, browser-API surface, shortcuts, localStorage keys) to feed Electron Task 1 (shell + secure preload + CSP + window mgmt). No source modified.
+
+Work Log:
+- Read worklog.md recent entries (latest = PLAN-V3-1-FV; v3.1 plan awaiting approval) and plan §12 Task-1 row ("Electron shell, preload bridge, CSP, window mgmt").
+- Read package.json, next.config.ts, Caddyfile; verified dev server LIVE on :3000 (HTTP 200; next-server pid 3885; Caddy :81 → localhost:3000 proxy).
+- Read all 13 src/lib/pixelforge/*.ts (types, store 757L, pixels, color, render, serialize, export, ai-normalize, settings, palettes, factory, server-image, server-png, server-helpers) + src/lib/db.ts + prisma/schema.prisma (Project + OperationLog, SQLite).
+- Read all 20 src/components/pixelforge/* (canvas-stage, tool-rail, palette-panel, color-picker, timeline, layers-panel, ai-panel, agent-panel, preview-overlay, view-toolbar, float-pill, header, footer, project-dialogs, export-dialog, settings-dialog, stepper-input, use-keyboard, use-save, use-is-mobile).
+- Read all API routes: /api, /api/ai/sprite, /api/mcp/{tools,run,ops}, /api/projects, /api/projects/[id].
+- Grepped src/ for window./localStorage/sessionStorage, https?://, WebSocket|EventSource, navigator./document./clipboard/createElement('a')/.download, beforeunload/matchMedia/ResizeObserver/rAF; grep-verified ZERO electron references in code/package (only in download/ docs).
+- Found latent bug: settings-dialog.tsx:193 POSTs /api/ai/test but no such route exists under src/app/api/ai/ (only sprite/) — "Test connection" always 404s.
+- Confirmed stock ui/sidebar|carousel|calendar|chart are unimported (sidebar.tsx writes document.cookie but is dead code).
+
+Stage Summary:
+- Stack: Next ^16.1.1 + React ^19 + TS ^5 + Tailwind ^4 + Prisma ^6.11.1 (SQLite db/custom.db) + zustand ^5 + zod ^4 + z-ai-web-dev-sdk (server-only); dev script `next dev -p 3000`; NO electron dep yet. next.config.ts: output standalone, ignoreBuildErrors, NO CSP/security headers.
+- localStorage keys (exactly 4): pixelforge-settings-v1 (zustand persist — includes PLAINTEXT aiProviders[].apiKey, plan C13 violation to replace with safeStorage on desktop), pixelforge-preview-v1 {open,pos,pillPos}, pixelforge-palette-v1 {pos}, pixelforge-viewbar-v1 {pos,hidden}. No sessionStorage. Dock state (rightOpen/rightWidth/paletteOpen/timelineOpen) is memory-only (not persisted).
+- Renderer network is Electron-friendly: 100% relative /api/* fetches (projects, ai/sprite, mcp/tools|run|ops), ZERO absolute-URL fetches in client code, ZERO WebSocket/EventSource. Provider API calls happen server-side. Only external URL = remote favicon https://z-cdn.chatglm.cn/z-ai/static/logo.svg (layout.tsx:29) — CSP allowlist or drop.
+- Full shortcut list (use-keyboard.ts window keydown; skips INPUT/TEXTAREA/SELECT/contentEditable; all ctrl||meta): Ctrl/Cmd+S save; Ctrl/Cmd+Z undo; Ctrl/Cmd+Shift+Z redo; Ctrl/Cmd+Y redo; bare B/E/F/L/R/I/M tool select; 1–4 brush size; G grid; O onion skin; +/= zoom in ×1.25; - zoom out. Space = pan (canvas-stage.tsx:257–278 keydown/keyup, no preventDefault; right/middle-button also pan). Electron menu accelerators must not swallow Ctrl/Cmd+S/Z/Shift+Z/Y.
+- Electron risk flags: (1) plaintext AI keys in localStorage; (2) /api/ai/test 404 — Settings→AI&MCP "Test connection" broken; (3) export.ts downloadBlob = anchor-click + a.download + URL.createObjectURL (multi-click for all-frames; later bridge to native save dialog); (4) navigator.clipboard.writeText (settings-dialog:370; try/catch silent fail — needs clipboard-sanitized-write); (5) window.confirm for project delete (project-dialogs:196); (6) NO beforeunload/unsaved-close guard though store exposes dirty; (7) page.tsx resume auto-loads newest DB project + debounced autosave POST (2.5 s default) — renderer must keep localhost:3000 pairing in dev; (8) document.cookie only in unused ui/sidebar.tsx; (9) window.matchMedia/devicePixelRatio/ResizeObserver/rAF/FileReader/canvas2D all renderer-safe.
+- / renders: Header → [ToolRail | CanvasStage (hosts floating PreviewOverlay + PalettePanel + ViewToolbar) | drag-resize handle | right dock aside (Tabs: Layers/AI/Agent; mobile drawer) ] → Timeline → Footer; h-dvh overflow-hidden dark studio.
+
+---
+Task ID: P0-T1
+Agent: main (Z.ai Code)
+Task: Implement P0 Task 1 — Electron desktop foundation (v3.1 §12 Task 1): main process, secure preload bridge, CSP, window management, dev/prod scripts, startup/error handling; prepare monorepo + @pixelforge/core skeleton. No P1/P2 features; prototype untouched.
+
+Work Log:
+- Env checks: dev server live on :3000 (HTTP 200); Xvfb available at /usr/bin/Xvfb (xvfb-run unusable — xauth missing → launched Xvfb :99 directly); npm registry reachable; Electron latest = 45.0.0; Node 24.21 / Bun 1.3.14.
+- Created monorepo scaffold at repo root (deviation D1 from literal `pixelforge/` tree): apps/desktop/{package.json,tsconfig.json,.gitignore,src,static}, packages/core/{package.json,tsconfig.json,src}.
+- Implemented Electron main (src/main/index.ts): single-instance lock, app.setName('PixelForge AI'), app.enableSandbox() pre-ready, Linux-dev-only --no-sandbox/--disable-dev-shm-usage (never packaged), PF_DISABLE_GPU switch, process-level uncaughtException/unhandledRejection → logger + showErrorBox, window-all-closed/activate, second-instance focus.
+- Window mgmt (src/window.ts): 1280×800 (min 960×600), zinc-950 bg, ready-to-show anti-flash, contextIsolation+sandbox+no-node, setWindowOpenHandler deny + shell.openExternal for http(s), will-navigate allowlist guard, will-attach-webview deny, did-fail-load/render-process-gone logging; loadRenderer() separated so hardening precedes first navigation.
+- Security (src/security.ts): session permission request+check deny-all, Report-Only CSP injected for localhost dev origin (enforcing CSP lands with Task 4 bundled renderer — documented), will-download audit logging (protects prototype anchor-click exports).
+- Menu (src/main/menu.ts): minimal File/Edit/View/Window; NO Undo/Redo/Save roles and zoom roles registered accelerator-free — evidence-based protection of prototype bindings Ctrl+S/Z/Shift+Z/Y, B/E/F/L/R/I/M, 1-4, G, O, +/=/-, Space-pan (inventory P0-T1-INV).
+- Preload bridge (src/preload/index.ts + shared/bridge-types.ts): typed allowlist {bridgeVersion:1, ping, app.getInfo, dialog.openFile/saveFile} via contextBridge; ipcMain handlers with hand-rolled payload validation (filters/paths sanitized, fail-closed); renderer d.ts added at src/types/pixelforge-bridge.d.ts (optional window.pixelforge).
+- Logger (src/logger.ts): rotating 7-day local-only file log under userData/logs; smoke.ts: did-finish-load/did-fail-load race + bridge probe FROM PAGE CONTEXT + canvas-presence check (dev mode) + capturePage screenshot + exit 0/1.
+- static/shell.html+css+js: strict-enforcing-CSP (meta) dark status page proving bridge end-to-end; doubles as prod fallback renderer until Task 4.
+- packages/core prepared: version + SCHEMA_VERSION=2 exports; zero DOM; typecheck-only (no install needed).
+- Root package.json: additive scripts desktop:{typecheck,build,dev,start,smoke:dev,smoke:shell} + core:{typecheck,build}; eslint.config.mjs: ignore apps/**/dist, packages/**/dist, artifacts.
+- npm install in apps/desktop (electron ^45.0.0, cross-env for Windows-safe scripts, typescript, @types/node); npm skipped electron postinstall → ran node node_modules/electron/install.js manually (binary 45.0.0 downloaded fine).
+- BUGFIX during verification: preload path was __dirname-relative from dist/window.js (src-flat emit) → resolved to wrong dir; fixed to app-root-anchored dist/preload/index.js.
+- VERIFIED (actually executed): desktop+core tsc --noEmit pass; eslint pass; smoke shell mode [SMOKE:OK] bridge:true ping:pong (Electron 45.0.0/Chromium 156.0.8078.48/Node 24.22) + screenshot artifacts/smoke-shell.png; smoke dev-server mode [SMOKE:OK] bridge:true ping:pong hasCanvas:true title "PixelForge AI — Pixel Art & Animation Studio" + screenshot artifacts/smoke-dev-server.png showing full editor (Sample: Farmer intact, tool rail, palette, timeline, panels); dev.log shows Electron session fetching / 200 + project resume + MCP feeds; main log trail clean; agent-browser pass of / in plain browser: full interactive snapshot, zero page errors.
+- NOT verified in this sandbox (honest limits): actual Windows launch (Linux-only sandbox), packaged build, native dialogs clicked by hand.
+
+Stage Summary:
+- Task 1 complete & verified headlessly: secure shell boots, bridge round-trips under contextIsolation+sandbox, prototype renders and functions inside Electron, web prototype unchanged in browser. Known issues recorded: /api/ai/test 404 (pre-existing), CSP report-only in dev by design, dirty-guard-on-quit deferred to 13a, window-bounds persistence deferred to 13a. Next task per §12: Task 2 — core types v2 + command bus + tile-diff history.
+
+---
+Task ID: P0-T2
+Agent: main (Z.ai Code)
+Task: Implement P0 Task 2 (v3.1 §12 row 2) — @pixelforge/core: types v2 + command bus + 16×16 tile-diff history + budgets. No P1/P2 features; prototype renderer untouched (Task 4); persistence untouched (Task 3).
+
+Work Log:
+- Read worklog (Task 1 complete) + v3.1 §2.4/§2.5/§2.7, §6, §8.3, §9.1/§9.2, §12; inspected prototype store.ts (24 commands, stroke contract, snapshot history), types.ts (v1 model), pixels.ts, factory.ts, serialize.ts — reuse targets identified.
+- Built packages/core (zero dependencies, DOM-free, strict TS): types v2 runtime model (Project.schemaVersion=2, per-clip Layer[] stack C1, Frame.cels Record<layerId, Cel{buffer,linked}> with absent=transparent C2, Part, TrashItem/TrashEntry cap 20 C5/C9, DocumentSettings, LoopMode C3) + SerializedProjectV2 contract types + guards + v1 mirrors (V1SerializedProject, isSerializedProjectV1) + CelSourceResolver/V1ToV2Importer interfaces for Task 3.
+- CommandBus (bus/bus.ts): register/execute/undo/redo, CommandOrigin 'ui'|'mcp'|'ai' recorded on every entry + stats.byOrigin, CommandError codes (UNKNOWN_COMMAND/VALIDATION_FAILED/NOT_FOUND/INVALID_STATE/TRANSACTION_CONFLICT), transaction() grouping (composite entries, nested folds into parent, exact rollback on throw), onChange ChangeEvent stream, dirty/markSaved, setProject, 20 built-in structural commands (project.rename; clip add/delete(trash)/setProps; frame add(copy preserves cels exactly §2.7)/delete(trash)/move/setDuration; layer add/delete(trash)/duplicate/mergeDown(prototype alpha math)/move/setProps/setLinked; palette add/remove; trash restore/purge) + pixels.applyOp (stamp/line/rect/fill/shift/clear/setBuffer) — single mutation path for UI/AI/MCP, no side doors.
+- Stroke flow kept prototype-contract: beginStroke→StrokeHandle{width,height,buffer} / endStroke(label,changed) / cancelStroke; missing cels created on demand; linked layers propagate working buffer to all frames; mid-stroke structural edits tolerated (re-resolve), target deleted mid-stroke → stroke discarded; undo/redo during stroke rejected.
+- Tile-diff history (pixels/tile.ts + history/engine.ts): TILE_SIZE 16, fixed 1024B per side, zero-padded partial edge tiles (non-16-multiples verified), extractTileDiff/applyTileDiff (new-buffer apply, never in-place — keeps snapshot invariant); HistoryEngine with byte estimates (pixel: 96+tiles×2072; structure: heuristic without buffers — copy-on-write shares buffers), default 64 MB budget, clamp 16–512 MB applied at BUS (settings policy) while engine accepts raw budgets (testable/CI), oldest-past-first eviction then future-front (shortens redo chain coherently), stale pixel entries dropped on undo (prototype unwind semantics), stats{undoDepth,redoDepth,bytes,usage,evictedCount,byOrigin}.
+- Linked-cel engine support (C19 P0): layer.setLinked materialize/break sharing; edits + undo/redo propagate through replaceCelBuffer following CURRENT layer.linked.
+- v1 compat (compat/v1.ts): mapV1Loop (C3: loop:false = play once → forward), v1ClipSkeleton, v2ProjectShell, re-exported importer contract — importer implementation explicitly deferred to Task 3.
+- Tests (bun test, 6 files, 69 tests, 575 assertions — ALL PASSING): factory defaults; per-clip layer isolation; missing-cel transparency + paint-creates-cel; linked-cel share/propagate/unlink/duplicate-frame semantics; validation (unknown cmd, bad fps/loopMode/hex/RGBA, missing targets, last-frame/layer/clip protection, bit-identical rollback); execute/notifications/dirty; origin tracking; undo/redo round trips incl. deep-equality determinism after undo/redo; stale-entry skip (bus + engine level); failed-command rollback (single + transaction + nested); stroke grouping (5 strokes→5 entries, cancel restores exact buffer object, net-zero stroke commits nothing, structural-mid-stroke); tile diff round-trip incl. 20×20 edge tiles; memory: 250 unique strokes @32×32 all retained ≈0.5MB ≪64MB (C21), engine eviction oldest-first @24KB, bus-level eviction @16MB floor with 256×256 floods (~530KB/entry), redo front-eviction coherence, live setBudget shrink; compat guards + C3 mapping + resolver contract.
+- Verification (all actually executed): bun test 69/69 pass; tsc src + tests clean; bun run lint 0 problems; web prototype regression-checked via agent-browser (Sample: Farmer loads, draw→Undo enabled→undo→Redo enabled, zero page errors, autosave queries normal); desktop:smoke:shell [SMOKE:OK] bridge:true ping:pong; desktop:smoke:dev [SMOKE:OK] hasCanvas:true — Task 1 shell + prototype intact; dev.log last 200 lines error-free (only historical getActiveClip error @L1054 from an old session).

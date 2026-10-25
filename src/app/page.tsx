@@ -1,210 +1,169 @@
+// PixelForge AI — the studio.
+//
+// Layout (dark studio shell, per the original evidence screenshots):
+//   ┌──────────────────────────────────────────────────────────────┐
+//   │ Header — logo · project name · New/Open/Save · undo/redo · ⚙ Export │
+//   ├──┬───────────────────────────────────────────────┬───────────┤
+//   │ T│                                               │ PANELS    │
+//   │ o│              CanvasStage                      │ [Layers | AI | Agent] │
+//   │ o│   (floating palette · view bar · tool options │           │
+//   │ l│    · preview overlay live inside the stage)   │           │
+//   │ s├───────────────────────────────────────────────┤           │
+//   │  │ Timeline — transport · scrubber · frames strip │           │
+//   ├──┴───────────────────────────────────────────────┴───────────┤
+//   │ Footer — size · zoom · hover · tool · clip/frame · save state │
+//   └──────────────────────────────────────────────────────────────┘
+//
+// The page owns NO editor state: everything reads the zustand store; every
+// mutation goes through the CommandBus. Keyboard shortcuts and the shared
+// playback controller are wired here.
+
 'use client'
 
-import { useEffect, useMemo } from 'react'
-import type { PresetId } from '@/lib/pixelforge/types'
-import { getPresetSet, DEFAULT_PARAMS } from '@/lib/pixelforge/presets'
-import { generateAnimation } from '@/lib/pixelforge/animate'
-import { analyzeMotion } from '@/lib/pixelforge/qa'
-import { effectiveDurations } from '@/lib/pixelforge/playback'
-import { useEditor } from '@/lib/pixelforge/store'
-import type { FixtureId } from '@/lib/pixelforge/fixtures'
-
-import { PixelCanvas } from '@/components/pixelforge/pixel-canvas'
-import { PreviewPlayer } from '@/components/pixelforge/preview-player'
-import { MotionPanel } from '@/components/pixelforge/motion-panel'
-import { RigPanel } from '@/components/pixelforge/rig-panel'
-import { FramesStrip } from '@/components/pixelforge/frames-strip'
+import { useCallback, useEffect, useRef } from 'react'
+import { useEditor, type RightTab } from '@/lib/pixelforge/store'
+import { useAppSettings } from '@/lib/pixelforge/settings'
+import { useSaveProject } from '@/components/pixelforge/use-save'
+import { useKeyboardShortcuts } from '@/components/pixelforge/use-keyboard'
+import { useIsMobile } from '@/components/pixelforge/use-is-mobile'
+import { Header } from '@/components/pixelforge/header'
+import { ToolRail } from '@/components/pixelforge/tool-rail'
+import { CanvasStage } from '@/components/pixelforge/canvas-stage'
+import { Timeline } from '@/components/pixelforge/timeline'
+import { LayersPanel } from '@/components/pixelforge/layers-panel'
 import { AiPanel } from '@/components/pixelforge/ai-panel'
+import { AgentPanel } from '@/components/pixelforge/agent-panel'
+import { Footer } from '@/components/pixelforge/footer'
+import { cn } from '@/lib/utils'
 
-const TEMPLATES: { id: FixtureId; label: string }[] = [
-  { id: 'simple', label: 'Simple humanoid 32×32' },
-  { id: 'detailed', label: 'Detailed humanoid 48×48' },
-  { id: 'slime', label: 'Slime 24×24' },
+const RIGHT_TABS: { id: RightTab; label: string }[] = [
+  { id: 'layers', label: 'Layers' },
+  { id: 'ai', label: 'AI' },
+  { id: 'agent', label: 'Agent' },
 ]
 
-const SWATCHES = ['#1a1622', '#e8b796', '#d8a878', '#f0c8a0', '#4a3123', '#7a3020', '#3f7d4e', '#2f5f3b', '#2e6f9e', '#5a4a68', '#c8ccd8', '#7a2430', '#d8b84a', '#59b359', '#3b4a36']
+function RightDock({ mobile }: { mobile: boolean }) {
+  const rightTab = useEditor((s) => s.rightTab)
+  const setRightTab = useEditor((s) => s.setRightTab)
+  const rightOpen = useEditor((s) => s.rightOpen)
+  const setRightOpen = useEditor((s) => s.setRightOpen)
+  const rightWidth = useEditor((s) => s.rightWidth)
+  const setRightWidth = useEditor((s) => s.setRightWidth)
+  const dragRef = useRef<{ startX: number; startW: number } | null>(null)
 
-export default function Home() {
-  const store = useEditor()
-  const {
-    grid, rig, tool, color, zoom,
-    presetId, presetVersion, params, durationOverrides,
-    undoStack, redoStack, savedAt, template,
-  } = store
-
-  // Load persisted project once
-  useEffect(() => {
-    useEditor.getState().load()
-  }, [])
-
-  // Debounced autosave for grid/rig changes
-  useEffect(() => {
-    const t = setTimeout(() => useEditor.getState().save(), 800)
-    return () => clearTimeout(t)
-  }, [grid, rig, durationOverrides, params, presetId, presetVersion])
-
-  // Derived animation (pure, deterministic)
-  const derived = useMemo(() => {
-    const set = getPresetSet(presetVersion)
-    const preset = set[presetId]
-    const anim = generateAnimation(grid, rig, preset, params)
-    const durations = effectiveDurations(anim.plans, durationOverrides)
-    const qa = analyzeMotion(
-      grid,
-      rig,
-      { ...preset, loops: preset.loops },
-      anim.plans.map((p, i) => ({ ...p, duration: durations[i] }))
+  if (!rightOpen) {
+    return (
+      <button
+        type="button"
+        onClick={() => setRightOpen(true)}
+        aria-label="Show panels"
+        className="w-6 shrink-0 border-l border-zinc-800 bg-zinc-950/60 font-mono text-[10px] uppercase tracking-widest text-zinc-500 hover:text-teal-300 [writing-mode:vertical-rl]"
+      >
+        Panels
+      </button>
     )
-    return { preset, anim, durations, qa }
-  }, [grid, rig, presetId, presetVersion, params, durationOverrides])
-
-  const keyboard = useMemo(() => ({
-    onKey: (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement) return
-      if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
-        e.preventDefault()
-        if (e.shiftKey) useEditor.getState().redo()
-        else useEditor.getState().undo()
-      }
-    },
-  }), [])
-
-  useEffect(() => {
-    window.addEventListener('keydown', keyboard.onKey)
-    return () => window.removeEventListener('keydown', keyboard.onKey)
-  }, [keyboard])
+  }
 
   return (
-    <div className="flex min-h-screen flex-col bg-stone-100 text-stone-900">
-      {/* Header */}
-      <header className="sticky top-0 z-20 border-b border-stone-200 bg-white/95 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-2 px-4 py-2.5">
-          <h1 className="text-sm font-bold tracking-tight">
-            PixelForge <span className="text-emerald-600">Motion Lab</span>
-          </h1>
-          <span className="hidden text-[11px] text-stone-400 sm:inline">
-            Task 10 · five presets · part-based composer · heuristic QA · AI generation
-          </span>
-          <div className="ml-auto flex items-center gap-1.5">
-            <select
-              data-testid="template-select"
-              value={template}
-              onChange={(e) => useEditor.getState().loadTemplate(e.target.value as FixtureId)}
-              className="rounded-md border border-stone-300 bg-white px-2 py-1.5 text-xs"
-              aria-label="Load template sprite"
-            >
-              {TEMPLATES.map((t) => (
-                <option key={t.id} value={t.id}>{t.label}</option>
-              ))}
-              {template === 'custom' && <option value="custom">Custom (saved)</option>}
-            </select>
-            <button
-              type="button"
-              data-testid="undo"
-              onClick={store.undo}
-              disabled={undoStack.length === 0}
-              className="rounded-md border px-2 py-1.5 text-xs font-medium disabled:opacity-40"
-              title="Undo (Ctrl+Z)"
-            >
-              Undo
-            </button>
-            <button
-              type="button"
-              data-testid="redo"
-              onClick={store.redo}
-              disabled={redoStack.length === 0}
-              className="rounded-md border px-2 py-1.5 text-xs font-medium disabled:opacity-40"
-              title="Redo (Ctrl+Shift+Z)"
-            >
-              Redo
-            </button>
-            <span className="text-[10px] text-stone-400" data-testid="save-state">
-              {savedAt ? 'saved' : 'unsaved'}
-            </span>
-          </div>
-        </div>
-      </header>
+    <aside
+      aria-label="Panels"
+      className="relative flex min-w-0 shrink-0 flex-col border-l border-zinc-800 bg-zinc-950/60"
+      style={{ width: mobile ? undefined : rightWidth }}
+    >
+      {/* tab bar — [Layers | AI | Agent] */}
+      <div role="tablist" aria-label="Panel tabs" className="flex h-9 shrink-0 items-stretch border-b border-zinc-800">
+        {RIGHT_TABS.map((t) => (
+          <button
+            key={t.id}
+            role="tab"
+            type="button"
+            aria-selected={rightTab === t.id}
+            onClick={() => setRightTab(t.id)}
+            className={`flex-1 border-b-2 px-2 font-mono text-xs transition-colors ${
+              rightTab === t.id
+                ? 'border-teal-400 bg-zinc-900/60 text-teal-300'
+                : 'border-transparent text-zinc-400 hover:text-zinc-200'
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+        <button
+          type="button"
+          onClick={() => setRightOpen(false)}
+          aria-label="Hide panels"
+          className="w-7 shrink-0 font-mono text-[11px] text-zinc-500 hover:text-zinc-200"
+          title="Hide panel dock"
+        >
+          ✕
+        </button>
+      </div>
 
-      {/* Main */}
-      <main className="mx-auto grid w-full max-w-7xl flex-1 grid-cols-1 gap-4 p-4 lg:grid-cols-[minmax(0,5fr)_minmax(0,4fr)] xl:grid-cols-[minmax(0,5fr)_minmax(0,3fr)_minmax(0,4fr)]">
-        {/* Left: editor */}
-        <section aria-label="Sprite editor" className="flex flex-col gap-3">
-          <AiPanel />
-          <div className="flex flex-wrap items-center gap-1.5 rounded-lg border bg-white p-2">
-            {(['pencil', 'eraser', 'picker'] as const).map((t) => (
-              <button
-                key={t}
-                type="button"
-                data-testid={`tool-${t}`}
-                onClick={() => store.setTool(t)}
-                className={`rounded px-2.5 py-1.5 text-xs font-medium capitalize ${
-                  tool === t ? 'bg-stone-800 text-white' : 'bg-stone-100 text-stone-700 hover:bg-stone-200'
-                }`}
-              >
-                {t}
-              </button>
-            ))}
-            <div className="mx-1 h-6 w-px bg-stone-200" />
-            {SWATCHES.map((c) => (
-              <button
-                key={c}
-                type="button"
-                onClick={() => store.setColor(c)}
-                className={`h-6 w-6 rounded border ${color === c ? 'ring-2 ring-emerald-600 ring-offset-1' : ''}`}
-                style={{ background: c }}
-                aria-label={`Color ${c}`}
-              />
-            ))}
-            <input
-              type="color"
-              value={color}
-              onChange={(e) => store.setColor(e.target.value)}
-              className="h-6 w-8 cursor-pointer rounded border"
-              aria-label="Custom color"
-            />
-            <div className="mx-1 h-6 w-px bg-stone-200" />
-            <button type="button" onClick={() => store.setZoom(zoom - 2)} className="rounded border px-2 py-1 text-xs">−</button>
-            <span className="font-mono text-[11px] text-stone-500">{zoom}×</span>
-            <button type="button" onClick={() => store.setZoom(zoom + 2)} className="rounded border px-2 py-1 text-xs">+</button>
-            <label className="ml-2 flex items-center gap-1 text-[11px] text-stone-600">
-              <input
-                type="checkbox"
-                checked={store.showRects}
-                onChange={(e) => store.setShowRects(e.target.checked)}
-                data-testid="toggle-rects"
-              />
-              part rects
-            </label>
-          </div>
-          <PixelCanvas grid={grid} rig={rig} />
-          <FramesStrip frames={derived.anim.frames} plans={derived.anim.plans} overrides={durationOverrides} />
-        </section>
+      {/* active panel */}
+      <div role="tabpanel" className="min-h-0 flex-1">
+        {rightTab === 'layers' && <LayersPanel />}
+        {rightTab === 'ai' && <AiPanel />}
+        {rightTab === 'agent' && <AgentPanel />}
+      </div>
 
-        {/* Middle: preview (xl only) / merged below on smaller screens */}
-        <section aria-label="Animation preview" className="flex flex-col gap-4 xl:col-auto max-xl:order-3">
-          <PreviewPlayer plans={derived.anim.plans} frames={derived.anim.frames} overrides={durationOverrides} />
-          <RigPanel grid={grid} rig={rig} />
-        </section>
+      {/* width drag handle (desktop) */}
+      {!mobile && (
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize panel dock"
+          className="absolute left-0 top-0 h-full w-1 cursor-col-resize touch-none hover:bg-teal-500/40"
+          onPointerDown={(e) => {
+            dragRef.current = { startX: e.clientX, startW: rightWidth }
+            e.currentTarget.setPointerCapture(e.pointerId)
+          }}
+          onPointerMove={(e) => {
+            const d = dragRef.current
+            if (!d) return
+            setRightWidth(d.startW - (e.clientX - d.startX))
+          }}
+          onPointerUp={() => {
+            dragRef.current = null
+          }}
+        />
+      )}
+    </aside>
+  )
+}
 
-        {/* Right: motion composer + QA */}
-        <section aria-label="Motion composer" className="flex flex-col gap-4">
-          <MotionPanel
-            frames={derived.anim.frames}
-            plans={derived.anim.plans}
-            qa={derived.qa}
-          />
-        </section>
-      </main>
+export default function Home() {
+  const dirty = useEditor((s) => s.dirty)
+  const autosave = useEditor((s) => s.autosave)
+  const autosaveDelay = useAppSettings((s) => s.autosaveDelay)
+  const { save } = useSaveProject()
+  const mobile = useIsMobile()
 
-      {/* Footer */}
-      <footer className="mt-auto border-t border-stone-200 bg-white">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3 text-[11px] text-stone-500">
-          <span className="font-semibold text-stone-700">PixelForge AI — Motion Lab</span>
-          <span>Translation-only part composer (v3.1 R1–R10)</span>
-          <span>QA warnings are heuristics — always review frames before export</span>
-          <span className="ml-auto font-mono">{grid.width}×{grid.height} · {presetId}/{presetVersion} · amp ×{params.amplitude} · spd ×{params.speed} · {DEFAULT_PARAMS.facing === params.facing ? 'default' : 'custom'} params</span>
-        </div>
-      </footer>
+  // Cmd/Ctrl+S · transport · tools — shared keyboard hook
+  useKeyboardShortcuts(useCallback(() => void save(), [save]))
+
+  // debounced background autosave (web testbed adapter; desktop saves files)
+  useEffect(() => {
+    if (!autosave || !dirty) return
+    const t = setTimeout(() => void save(true), Math.max(500, autosaveDelay))
+    return () => clearTimeout(t)
+  }, [autosave, dirty, autosaveDelay, save])
+
+  return (
+    <div className="flex h-dvh min-h-0 flex-col overflow-hidden bg-zinc-950 text-zinc-100">
+      <Header />
+
+      <div className="relative flex min-h-0 flex-1">
+        <ToolRail />
+
+        <main className="flex min-w-0 flex-1 flex-col">
+          <CanvasStage />
+          <Timeline />
+        </main>
+
+        <RightDock mobile={mobile} />
+      </div>
+
+      <Footer />
     </div>
   )
 }

@@ -26,6 +26,12 @@
     "paths": {
       "@/*": [
         "./src/*"
+      ],
+      "@pixelforge/core": [
+        "./packages/core/src/index.ts"
+      ],
+      "@pixelforge/core/*": [
+        "./packages/core/src/*"
       ]
     }
   },
@@ -37,6 +43,10 @@
     ".next/dev/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "apps/desktop",
+    "mini-services/mcp-server",
+    "packages/core/dist",
+    "examples"
   ]
 }

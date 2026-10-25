@@ -1,0 +1,109 @@
+{
+  "app": "PixelForge AI",
+  "version": 2,
+  "project": {
+    "name": "Sample: Farmer",
+    "width": 32,
+    "height": 32,
+    "palette": [
+      "#1a1c2c",
+      "#5d275d",
+      "#b13e53",
+      "#ef7d57",
+      "#ffcd75",
+      "#a7f070",
+      "#38b764",
+      "#257179",
+      "#29366f",
+      "#3b5dc9",
+      "#41a6f6",
+      "#73eff7",
+      "#f4f4f4",
+      "#94b0c2",
+      "#566c86",
+      "#333c57"
+    ]
+  },
+  "clip": {
+    "id": "cl_sample_wave",
+    "name": "idle wave",
+    "fps": 4,
+    "loop": true,
+    "loopMode": "forward",
+    "frameCount": 4,
+    "tags": []
+  },
+  "layout": "grid",
+  "frameWidth": 32,
+  "frameHeight": 32,
+  "columns": 4,
+  "rows": 1,
+  "padding": 2,
+  "spacing": 2,
+  "image": "sample-farmer_idle-wave_sheet.png",
+  "frames": [
+    {
+      "index": 0,
+      "x": 2,
+      "y": 2,
+      "w": 32,
+      "h": 32,
+      "durationMs": 250
+    },
+    {
+      "index": 1,
+      "x": 36,
+      "y": 2,
+      "w": 32,
+      "h": 32,
+      "durationMs": 250
+    },
+    {
+      "index": 2,
+      "x": 70,
+      "y": 2,
+      "w": 32,
+      "h": 32,
+      "durationMs": 250
+    },
+    {
+      "index": 3,
+      "x": 104,
+      "y": 2,
+      "w": 32,
+      "h": 32,
+      "durationMs": 250
+    }
+  ],
+  "playback": {
+    "mode": "forward",
+    "loop": true,
+    "fps": 4,
+    "sequence": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "frameDurationsMs": [
+      250,
+      250,
+      250,
+      250
+    ],
+    "cycleMs": 1000,
+    "interpretation": "sequence lists ONE full playback cycle in engine-visible order; frameDurationsMs runs parallel to sequence (effective ms per step) and cycleMs is their sum. While loop=true the engine repeats sequence from its start; loop=false plays it once and stops on the final entry. Reverse and ping-pong direction is already baked into sequence order — engines that only play forward can play sequence verbatim. frames[i].durationMs is the per-frame display duration for engines that step frames instead of steps."
+  },
+  "godot": {
+    "animation": "idle wave",
+    "fps": 4,
+    "loop": true,
+    "frames": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "sheet": "sample-farmer_idle-wave_sheet.png"
+  }
+}

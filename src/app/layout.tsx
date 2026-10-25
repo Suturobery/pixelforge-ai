@@ -14,23 +14,24 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "PixelForge AI — Motion Lab",
-  description: "Pixel art editor with part-based motion composer: five animation presets, heuristic motion QA, and sprite sheet / GIF export.",
-  keywords: ["PixelForge AI", "pixel art", "sprite animation", "motion presets", "pixel editor", "sprite sheet", "GIF export"],
+  title: "PixelForge AI",
+  description:
+    "Pixel art studio: layers, frames and clips with multi-layer editing, onion skin, part-based motion composer, AI sprite generation, and an MCP agent console.",
+  keywords: ["PixelForge AI", "pixel art", "sprite editor", "animation", "motion presets", "AI sprite generation", "sprite sheet", "GIF export"],
   authors: [{ name: "PixelForge AI" }],
   icons: {
     icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
   },
   openGraph: {
-    title: "PixelForge AI — Motion Lab",
-    description: "Pixel art editor with part-based motion composer and animation presets",
+    title: "PixelForge AI",
+    description: "Pixel art studio with layers, onion skin, motion composer, AI generation and an agent console",
     siteName: "PixelForge AI",
     type: "website",
   },
   twitter: {
     card: "summary_large_image",
-    title: "PixelForge AI — Motion Lab",
-    description: "Pixel art editor with part-based motion composer and animation presets",
+    title: "PixelForge AI",
+    description: "Pixel art studio with layers, onion skin, motion composer, AI generation and an agent console",
   },
 };
 

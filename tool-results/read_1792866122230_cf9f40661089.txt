@@ -1,0 +1,845 @@
+     1→     1→// PixelForge AI — editor state store (Zustand) — Task 4 core-backed shim.
+     2→     2→//
+     3→     3→// Architecture (v3.1 §12 Task 4 "Port renderer onto core"):
+     4→     4→//   • @pixelforge/core owns the DOCUMENT: model v2 (per-clip layer stacks +
+     5→     5→//     per-frame cels, linked cels, trash), the CommandBus (the single
+     6→     6→//     mutation path — UI/AI all execute commands), tile-diff history with a
+     7→     7→//     memory budget, and the command journal (crash recovery source).
+     8→     8→//   • Zustand keeps UI + VIEW state (tool, zoom, pan, panels, playback,
+     9→     9→//     active pointers) and mirrors bus-derived values (project reference,
+    10→    10→//     dirty, undo/redo availability) so components stay plain subscribers.
+    11→    11→//   • Action names from the prototype store are PRESERVED — components call
+    12→    12→//     the same API; each action now maps onto a bus command instead of
+    13→    13→//     mutating a v1 document by hand.
+    14→    14→//
+    15→    15→// The bus lives OUTSIDE React. Every bus change event re-syncs the mirrored
+    16→    16→// slice; mid-stroke painting bumps `renderTick` only (no bus traffic).
+    17→    17→
+    18→    18→import { create } from 'zustand'
+    19→    19→import {
+    20→    20→  CommandBus,
+    21→    21→  JournalRecorder,
+    22→    22→  CommandError,
+    23→    23→  createProject as coreCreateProject,
+    24→    24→  type CommandOrigin,
+    25→    25→  type Project,
+    26→    26→  type StrokeHandle as CoreStrokeHandle,
+    27→    27→} from '@pixelforge/core'
+    28→    28→import { DEFAULT_PALETTE } from './palettes'
+    29→    29→import { useAppSettings } from './settings'
+    30→    30→import { toast } from '@/hooks/use-toast'
+    31→    31→
+    32→    32→export const MIN_ZOOM = 1
+    33→    33→export const MAX_ZOOM = 48
+    34→    34→
+    35→    35→export type RightTab = 'layers' | 'ai' | 'agent'
+    36→    36→
+    37→    37→/** Same shape as the core StrokeHandle (re-exported for components). */
+    38→    38→export type StrokeHandle = CoreStrokeHandle
+    39→    39→
+    40→    40→const ORIGIN: CommandOrigin = 'ui'
+    41→    41→
+    42→    42→// ---------------------------------------------------------------------------
+    43→    43→// core singletons (document + journal live outside React/zustand)
+    44→    44→// ---------------------------------------------------------------------------
+    45→    45→
+    46→    46→const initialDoc = coreCreateProject({ name: 'untitled', width: 32, height: 32, palette: DEFAULT_PALETTE })
+    47→    47→const bus = new CommandBus(initialDoc)
+    48→    48→
+    49→    49→/**
+    50→    50→ * Journal sidecar flush hook — project-files.ts installs a throttled writer
+    51→    51→ * once a .pixelforgeproj path is active, so commands issued after the last
+    52→    52→ * save remain recoverable (crash window ≈ flush interval, not "next save").
+    53→    53→ */
+    54→    54→let journalFlushHook: ((records: { seq: number }[]) => void) | null = null
+    55→    55→export function setJournalFlushHook(fn: ((records: unknown[]) => void) | null): void {
+    56→    56→  journalFlushHook = fn as ((records: { seq: number }[]) => void) | null
+    57→    57→}
+    58→    58→
+    59→    59→const recorder = new JournalRecorder(bus, {
+    60→    60→  onFlush: (records) => {
+    61→    61→    try {
+    62→    62→      journalFlushHook?.(records)
+    63→    63→    } catch {
+    64→    64→      /* sidecar flush is best-effort — never break the command path */
+    65→    65→    }
+    66→    66→  },
+    67→    67→})
+    68→    68→
+    69→    69→/** Test/infra access to the bus (project-files.ts, dev diagnostics). */
+    70→    70→export function getBus(): CommandBus {
+    71→    71→  return bus
+    72→    72→}
+    73→    73→
+    74→    74→/** Journal recorder attached to the bus (.pixelforgeproj sidecar/embedded ring). */
+    75→    75→export function getRecorder(): JournalRecorder {
+    76→    76→  return recorder
+    77→    77→}
+    78→    78→
+    79→    79→/** Settings `historyLimit` presets map onto v3.1 byte budgets (§2.5). */
+    80→    80→function historyBudgetBytes(limit: number): number {
+    81→    81→  switch (limit) {
+    82→    82→    case 20: return 16 * 1024 * 1024
+    83→    83→    case 40: return 32 * 1024 * 1024
+    84→    84→    case 100: return 64 * 1024 * 1024
+    85→    85→    case 200: return 128 * 1024 * 1024
+    86→    86→    default: return 64 * 1024 * 1024
+    87→    87→  }
+    88→    88→}
+    89→    89→bus.setHistoryBudget(historyBudgetBytes(useAppSettings.getState().historyLimit))
+    90→    90→useAppSettings.subscribe((s, prev) => {
+    91→    91→  if (s.historyLimit !== prev.historyLimit) {
+    92→    92→    bus.setHistoryBudget(historyBudgetBytes(s.historyLimit))
+    93→    93→  }
+    94→    94→})
+    95→    95→
+    96→    96→// Shim-registered command: palette presets replace the whole palette in ONE
+    97→    97→// undoable step (built-ins only add/remove single colors).
+    98→    98→bus.register({
+    99→    99→  type: 'palette.replaceAll',
+   100→   100→  defaultLabel: 'Apply palette',
+   101→   101→  validate(payload) {
+   102→   102→    const p = payload as { colors?: unknown }
+   103→   103→    const colors = p?.colors
+   104→   104→    if (!Array.isArray(colors) || colors.length === 0 || colors.length > 256) {
+   105→   105→      throw new CommandError('VALIDATION_FAILED', 'palette.replaceAll: colors must be a 1..256 array')
+   106→   106→    }
+   107→   107→    for (const c of colors) {
+   108→   108→      if (typeof c !== 'string' || !/^#[0-9a-f]{6}([0-9a-f]{2})?$/i.test(c)) {
+   109→   109→        throw new CommandError('VALIDATION_FAILED', `palette.replaceAll: bad hex "${String(c)}"`)
+   110→   110→      }
+   111→   111→    }
+   112→   112→  },
+   113→   113→  apply(payload, ctx) {
+   114→   114→    return {
+   115→   115→      project: { ...ctx.project, palette: [...(payload as { colors: string[] }).colors] },
+   116→   116→      label: 'Apply palette',
+   117→   117→    }
+   118→   118→  },
+   119→   119→})
+   120→   120→
+   121→   121→// ---------------------------------------------------------------------------
+   122→   122→// state
+   123→   123→// ---------------------------------------------------------------------------
+   124→   124→
+   125→   125→interface ActiveRefs {
+   126→   126→  clipId: string
+   127→   127→  frameId: string
+   128→   128→  frameIndex: number
+   129→   129→  layerId: string
+   130→   130→}
+   131→   131→
+   132→   132→/** Resolve the active pointers against the LIVE document (safe fallbacks). */
+   133→   133→function activeRefs(s: Pick<EditorState, 'activeClipId' | 'activeFrameIndex' | 'activeLayerId'>): ActiveRefs | null {
+   134→   134→  const project = bus.getProject()
+   135→   135→  const clip = project.clips.find((c) => c.id === s.activeClipId) ?? project.clips[0]
+   136→   136→  if (!clip) return null
+   137→   137→  const frameIndex = Math.min(Math.max(0, s.activeFrameIndex), clip.frames.length - 1)
+   138→   138→  const frame = clip.frames[frameIndex]
+   139→   139→  if (!frame) return null
+   140→   140→  const layer = clip.layers.find((l) => l.id === s.activeLayerId) ?? clip.layers[clip.layers.length - 1]
+   141→   141→  if (!layer) return null
+   142→   142→  return { clipId: clip.id, frameId: frame.id, frameIndex, layerId: layer.id }
+   143→   143→}
+   144→   144→
+   145→   145→function findNewLayerId(before: Set<string>, project: Project, clipId: string): string | null {
+   146→   146→  const clip = project.clips.find((c) => c.id === clipId)
+   147→   147→  if (!clip) return null
+   148→   148→  for (let i = clip.layers.length - 1; i >= 0; i--) {
+   149→   149→    const l = clip.layers[i]
+   150→   150→    if (!before.has(l.id)) return l.id
+   151→   151→  }
+   152→   152→  return null
+   153→   153→}
+   154→   154→
+   155→   155→function layerIds(project: Project, clipId: string): Set<string> {
+   156→   156→  const clip = project.clips.find((c) => c.id === clipId)
+   157→   157→  return new Set(clip?.layers.map((l) => l.id) ?? [])
+   158→   158→}
+   159→   159→
+   160→   160→/**
+   161→   161→ * Structural sanity for documents entering the editor (Task 4 §5 data-loss
+   162→   162→ * protection): at least one clip, and every clip needs a frame to draw on
+   163→   163→ * and a layer to draw with. The core v1 shape guard is deliberately loose
+   164→   164→ * (serialization format check); THIS is the editor-entry gate. Degenerate
+   165→   165→ * rows/files are refused with a toast instead of limping or crashing.
+   166→   166→ */
+   167→   167→export function isUsableProject(p: unknown): p is Project {
+   168→   168→  if (!p || typeof p !== 'object') return false
+   169→   169→  const doc = p as Project
+   170→   170→  if (!Array.isArray(doc.clips) || doc.clips.length === 0) return false
+   171→   171→  return doc.clips.every(
+   172→   172→    (c) =>
+   173→   173→      c &&
+   174→   174→      Array.isArray(c.layers) &&
+   175→   175→      c.layers.length > 0 &&
+   176→   176→      Array.isArray(c.frames) &&
+   177→   177→      c.frames.length > 0
+   178→   178→  )
+   179→   179→}
+   180→   180→
+   181→   181→export interface EditorState {
+   182→   182→  // document mirror (reference from the bus; v2 model)
+   183→   183→  project: Project
+   184→   184→  docVersion: number
+   185→   185→  /** Bumped on every document replacement (new/load) — view-reset hooks. */
+   186→   186→  loadEpoch: number
+   187→   187→  // web-testbed persistence id (NOT part of the core document)
+   188→   188→  projectId: string | null
+   189→   189→  // active pointers (view state — v2 layer ids are clip-wide, so layer
+   190→   190→  // context survives frame/clip switches without name matching)
+   191→   191→  activeClipId: string
+   192→   192→  activeFrameIndex: number
+   193→   193→  activeLayerId: string
+   194→   194→  // tool state
+   195→   195→  tool: 'pencil' | 'eraser' | 'fill' | 'line' | 'rect' | 'eyedropper' | 'move'
+   196→   196→  primary: string
+   197→   197→  secondary: string
+   198→   198→  brushSize: number
+   199→   199→  mirrorX: boolean
+   200→   200→  // view state
+   201→   201→  zoom: number
+   202→   202→  panX: number
+   203→   203→  panY: number
+   204→   204→  showGrid: boolean
+   205→   205→  onionSkin: boolean
+   206→   206→  hover: { x: number; y: number } | null
+   207→   207→  // playback
+   208→   208→  playing: boolean
+   209→   209→  // history / persistence (mirrored from the bus)
+   210→   210→  canUndo: boolean
+   211→   211→  canRedo: boolean
+   212→   212→  historyUndoDepth: number
+   213→   213→  historyRedoDepth: number
+   214→   214→  historyBytes: number
+   215→   215→  dirty: boolean
+   216→   216→  savedAt: number | null
+   217→   217→  autosave: boolean
+   218→   218→  // ui
+   219→   219→  rightTab: RightTab
+   220→   220→  paletteOpen: boolean
+   221→   221→  rightOpen: boolean
+   222→   222→  rightWidth: number
+   223→   223→  timelineOpen: boolean
+   224→   224→  renderTick: number
+   225→   225→  // desktop file state (set by project-files.ts)
+   226→   226→  filePath: string | null
+   227→   227→  savingFile: boolean
+   228→   228→
+   229→   229→  // --- document actions ---
+   230→   230→  newProject: (p: Project) => void
+   231→   231→  loadProject: (p: Project, opts?: { projectId?: string | null; filePath?: string | null }) => void
+   232→   232→  setName: (name: string) => void
+   233→   233→
+   234→   234→  // --- pixel stroke flow ---
+   235→   235→  beginStroke: () => StrokeHandle | null
+   236→   236→  endStroke: (label: string, changed: boolean) => void
+   237→   237→  cancelStroke: () => void
+   238→   238→  bump: () => void
+   239→   239→
+   240→   240→  // --- undo/redo ---
+   241→   241→  undo: () => void
+   242→   242→  redo: () => void
+   243→   243→
+   244→   244→  // --- structural commands (names preserved; each maps to a bus command) ---
+   245→   245→  addFrame: (copyContent: boolean) => void
+   246→   246→  deleteFrame: (index: number) => void
+   247→   247→  moveFrame: (from: number, to: number) => void
+   248→   248→  addLayer: () => void
+   249→   249→  deleteLayer: (layerId: string) => void
+   250→   250→  duplicateLayer: (layerId: string) => void
+   251→   251→  mergeDown: (layerId: string) => void
+   252→   252→  moveLayer: (layerId: string, dir: -1 | 1) => void
+   253→   253→  setLayerProp: (layerId: string, patch: Partial<Pick<{ name: string; visible: boolean; opacity: number }, 'name' | 'visible' | 'opacity'>>) => void
+   254→   254→  addClip: (name: string) => void
+   255→   255→  deleteClip: (clipId: string) => void
+   256→   256→  setClipProp: (clipId: string, patch: Partial<Pick<{ name: string; fps: number; loop: boolean }, 'name' | 'fps' | 'loop'>>) => void
+   257→   257→  addPaletteColor: (hex: string) => void
+   258→   258→  removePaletteColor: (hex: string) => void
+   259→   259→  /** Replace the whole palette in one undoable step (palette presets). */
+   260→   260→  setPalette: (colors: string[], label: string) => void
+   261→   261→
+   262→   262→  // --- AI candidate import (candidates are proposals; never silent replace) ---
+   263→   263→  importCandidateAsLayer: (buffer: Uint8ClampedArray, name: string) => void
+   264→   264→  importCandidateAsFrame: (buffer: Uint8ClampedArray, name: string) => void
+   265→   265→
+   266→   266→  // --- selection & ui ---
+   267→   267→  selectClip: (id: string) => void
+   268→   268→  selectFrame: (index: number) => void
+   269→   269→  selectLayer: (id: string) => void
+   270→   270→  setTool: (t: EditorState['tool']) => void
+   271→   271→  setPrimary: (hex: string) => void
+   272→   272→  setSecondary: (hex: string) => void
+   273→   273→  swapColors: () => void
+   274→   274→  setBrushSize: (n: number) => void
+   275→   275→  setMirrorX: (v: boolean) => void
+   276→   276→  setZoom: (z: number) => void
+   277→   277→  setPan: (x: number, y: number) => void
+   278→   278→  setShowGrid: (v: boolean) => void
+   279→   279→  setOnionSkin: (v: boolean) => void
+   280→   280→  setHover: (h: { x: number; y: number } | null) => void
+   281→   281→  setPlaying: (v: boolean) => void
+   282→   282→  setRightTab: (t: RightTab) => void
+   283→   283→  setPaletteOpen: (v: boolean) => void
+   284→   284→  setRightOpen: (v: boolean) => void
+   285→   285→  setRightWidth: (w: number) => void
+   286→   286→  setTimelineOpen: (v: boolean) => void
+   287→   287→  setAutosave: (v: boolean) => void
+   288→   288→
+   289→   289→  // --- persistence ---
+   290→   290→  setProjectId: (id: string | null) => void
+   291→   291→  setFilePath: (path: string | null) => void
+   292→   292→  setSavingFile: (v: boolean) => void
+   293→   293→  markSaved: () => void
+   294→   294→  markDirty: () => void
+   295→   295→}
+   296→   296→
+   297→   297→// ---------------------------------------------------------------------------
+   298→   298→// bus → zustand mirror
+   299→   299→// ---------------------------------------------------------------------------
+   300→   300→
+   301→   301→let docVersionCounter = 0
+   302→   302→let loadEpochCounter = 0
+   303→   303→
+   304→   304→function syncFromBus(extra: Partial<EditorState> = {}): void {
+   305→   305→  docVersionCounter += 1
+   306→   306→  const stats = bus.historyStats()
+   307→   307→  useEditor.setState({
+   308→   308→    project: bus.getProject(),
+   309→   309→    docVersion: docVersionCounter,
+   310→   310→    renderTick: docVersionCounter,
+   311→   311→    dirty: bus.isDirty(),
+   312→   312→    canUndo: bus.canUndo(),
+   313→   313→    canRedo: bus.canRedo(),
+   314→   314→    historyUndoDepth: stats.undoDepth,
+   315→   315→    historyRedoDepth: stats.redoDepth,
+   316→   316→    historyBytes: stats.bytes,
+   317→   317→    ...extra,
+   318→   318→  })
+   319→   319→  revalidatePointers()
+   320→   320→}
+   321→   321→
+   322→   322→/** Keep the active pointers resolvable after undo/load/structural edits. */
+   323→   323→function revalidatePointers(): void {
+   324→   324→  const s = useEditor.getState()
+   325→   325→  const project = bus.getProject()
+   326→   326→  let clip = project.clips.find((c) => c.id === s.activeClipId)
+   327→   327→  let patch: Partial<EditorState> | null = null
+   328→   328→  if (!clip) {
+   329→   329→    clip = project.clips[0]
+   330→   330→    if (!clip) return
+   331→   331→    patch = { activeClipId: clip.id }
+   332→   332→  }
+   333→   333→  const frameIndex = Math.min(Math.max(0, s.activeFrameIndex), clip.frames.length - 1)
+   334→   334→  const frame = clip.frames[frameIndex]
+   335→   335→  const layerExists = clip.layers.some((l) => l.id === s.activeLayerId)
+   336→   336→  const nextLayerId = layerExists ? s.activeLayerId : (clip.layers[clip.layers.length - 1]?.id ?? '')
+   337→   337→  if (frameIndex !== s.activeFrameIndex || !layerExists || patch) {
+   338→   338→    patch = { ...(patch ?? {}), activeFrameIndex: frameIndex, activeLayerId: nextLayerId }
+   339→   339→  }
+   340→   340→  if (patch && (patch.activeFrameIndex !== s.activeFrameIndex || patch.activeLayerId !== s.activeLayerId || patch.activeClipId !== s.activeClipId)) {
+   341→   341→    useEditor.setState(patch)
+   342→   342→  }
+   343→   343→}
+   344→   344→
+   345→   345→// ---------------------------------------------------------------------------
+   346→   346→// store
+   347→   347→// ---------------------------------------------------------------------------
+   348→   348→
+   349→   349→export const useEditor = create<EditorState>()((set, get) => ({
+   350→   350→  project: bus.getProject(),
+   351→   351→  docVersion: 0,
+   352→   352→  loadEpoch: 0,
+   353→   353→  projectId: null,
+   354→   354→  activeClipId: initialDoc.clips[0]?.id ?? '',
+   355→   355→  activeFrameIndex: 0,
+   356→   356→  activeLayerId: initialDoc.clips[0]?.layers[0]?.id ?? '',
+   357→   357→  tool: 'pencil',
+   358→   358→  primary: '#2ce8f5',
+   359→   359→  secondary: '#1a1c2c',
+   360→   360→  brushSize: 1,
+   361→   361→  mirrorX: false,
+   362→   362→  zoom: 12,
+   363→   363→  panX: 0,
+   364→   364→  panY: 0,
+   365→   365→  showGrid: true,
+   366→   366→  onionSkin: true,
+   367→   367→  hover: null,
+   368→   368→  playing: false,
+   369→   369→  canUndo: false,
+   370→   370→  canRedo: false,
+   371→   371→  historyUndoDepth: 0,
+   372→   372→  historyRedoDepth: 0,
+   373→   373→  historyBytes: 0,
+   374→   374→  dirty: false,
+   375→   375→  savedAt: null,
+   376→   376→  autosave: true,
+   377→   377→  rightTab: 'layers',
+   378→   378→  paletteOpen: true,
+   379→   379→  rightOpen: true,
+   380→   380→  rightWidth: 320,
+   381→   381→  timelineOpen: true,
+   382→   382→  renderTick: 0,
+   383→   383→  filePath: null,
+   384→   384→  savingFile: false,
+   385→   385→
+   386→   386→  newProject: (p) => {
+   387→   387→    if (!isUsableProject(p)) {
+   388→   388→      toast({ title: 'Invalid project', description: 'The document has no usable clips, frames or layers.', variant: 'destructive' })
+   389→   389→      return
+   390→   390→    }
+   391→   391→    bus.setProject(p, { dirty: true })
+   392→   392→    loadEpochCounter += 1
+   393→   393→    set({
+   394→   394→      projectId: null,
+   395→   395→      filePath: null,
+   396→   396→      activeClipId: p.clips[0]?.id ?? '',
+   397→   397→      activeFrameIndex: 0,
+   398→   398→      activeLayerId: p.clips[0]?.layers.at(-1)?.id ?? p.clips[0]?.layers[0]?.id ?? '',
+   399→   399→      savedAt: null,
+   400→   400→      playing: false,
+   401→   401→      zoom: 12,
+   402→   402→      panX: 0,
+   403→   403→      panY: 0,
+   404→   404→      loadEpoch: loadEpochCounter,
+   405→   405→    })
+   406→   406→    syncFromBus()
+   407→   407→  },
+   408→   408→
+   409→   409→  loadProject: (p, opts) => {
+   410→   410→    if (!isUsableProject(p)) {
+   411→   411→      toast({
+   412→   412→        title: 'Project could not be opened',
+   413→   413→        description: 'It contains no usable clips, frames or layers.',
+   414→   414→        variant: 'destructive',
+   415→   415→      })
+   416→   416→      return
+   417→   417→    }
+   418→   418→    bus.setProject(p, { dirty: false })
+   419→   419→    loadEpochCounter += 1
+   420→   420→    set({
+   421→   421→      projectId: opts?.projectId ?? null,
+   422→   422→      filePath: opts?.filePath ?? null,
+   423→   423→      activeClipId: p.clips[0]?.id ?? '',
+   424→   424→      activeFrameIndex: 0,
+   425→   425→      activeLayerId: p.clips[0]?.layers.at(-1)?.id ?? p.clips[0]?.layers[0]?.id ?? '',
+   426→   426→      savedAt: Date.now(),
+   427→   427→      playing: false,
+   428→   428→      zoom: 12,
+   429→   429→      panX: 0,
+   430→   430→      panY: 0,
+   431→   431→      loadEpoch: loadEpochCounter,
+   432→   432→    })
+   433→   433→    syncFromBus()
+   434→   434→  },
+   435→   435→
+   436→   436→  setName: (name) => {
+   437→   437→    try {
+   438→   438→      bus.execute('project.rename', { name }, ORIGIN)
+   439→   439→    } catch {
+   440→   440→      /* validation failure (too long) — keep current name */
+   441→   441→    }
+   442→   442→  },
+   443→   443→
+   444→   444→  // --- pixel stroke flow ---
+   445→   445→
+   446→   446→  beginStroke: () => {
+   447→   447→    const refs = activeRefs(get())
+   448→   448→    if (!refs) return null
+   449→   449→    try {
+   450→   450→      return bus.beginStroke({ clipId: refs.clipId, frameId: refs.frameId, layerId: refs.layerId })
+   451→   451→    } catch {
+   452→   452→      return null // dangling refs / stroke conflict — same as v1 null return
+   453→   453→    }
+   454→   454→  },
+   455→   455→
+   456→   456→  endStroke: (label, changed) => {
+   457→   457→    if (!bus.activeStroke) return
+   458→   458→    try {
+   459→   459→      bus.endStroke(label, changed, ORIGIN)
+   460→   460→    } catch {
+   461→   461→      /* never throws under the guard above */
+   462→   462→    }
+   463→   463→  },
+   464→   464→
+   465→   465→  cancelStroke: () => {
+   466→   466→    if (!bus.activeStroke) return
+   467→   467→    try {
+   468→   468→      bus.cancelStroke(ORIGIN)
+   469→   469→    } catch {
+   470→   470→      /* same */
+   471→   471→    }
+   472→   472→  },
+   473→   473→
+   474→   474→  bump: () => set((s) => ({ renderTick: s.renderTick + 1 })),
+   475→   475→
+   476→   476→  // --- undo/redo ---
+   477→   477→
+   478→   478→  undo: () => {
+   479→   479→    if (!bus.canUndo()) return
+   480→   480→    try {
+   481→   481→      bus.undo()
+   482→   482→    } catch {
+   483→   483→      /* nothing to undo after stale-walk — ignore */
+   484→   484→    }
+   485→   485→  },
+   486→   486→
+   487→   487→  redo: () => {
+   488→   488→    if (!bus.canRedo()) return
+   489→   489→    try {
+   490→   490→      bus.redo()
+   491→   491→    } catch {
+   492→   492→      /* ignore */
+   493→   493→    }
+   494→   494→  },
+   495→   495→
+   496→   496→  // --- structural commands ---
+   497→   497→
+   498→   498→  addFrame: (copyContent) => {
+   499→   499→    const refs = activeRefs(get())
+   500→   500→    if (!refs) return
+   501→   501→    try {
+   502→   502→      bus.execute('frame.add', { clipId: refs.clipId, afterIndex: refs.frameIndex, copy: copyContent }, ORIGIN)
+   503→   503→    } catch {
+   504→   504→      return
+   505→   505→    }
+   506→   506→    const insertAt = refs.frameIndex + 1
+   507→   507→    set({ activeFrameIndex: insertAt, playing: false })
+   508→   508→    toast(
+   509→   509→      copyContent
+   510→   510→        ? { title: `Frame ${insertAt + 1} duplicated` }
+   511→   511→        : {
+   512→   512→            title: `Frame ${insertAt + 1} added (empty)`,
+   513→   513→            description: `The canvas now shows the new frame — frame ${refs.frameIndex + 1} and its pixels are safe on the timeline below.`,
+   514→   514→          }
+   515→   515→    )
+   516→   516→  },
+   517→   517→
+   518→   518→  deleteFrame: (index) => {
+   519→   519→    const refs = activeRefs(get())
+   520→   520→    if (!refs) return
+   521→   521→    const clip = bus.getProject().clips.find((c) => c.id === refs.clipId)
+   522→   522→    if (!clip || clip.frames.length <= 1) return
+   523→   523→    try {
+   524→   524→      bus.execute('frame.delete', { clipId: refs.clipId, frameIndex: index }, ORIGIN)
+   525→   525→    } catch {
+   526→   526→      return
+   527→   527→    }
+   528→   528→    const newLen = clip.frames.length - 1
+   529→   529→    set({ activeFrameIndex: Math.min(Math.max(0, index), newLen - 1) })
+   530→   530→  },
+   531→   531→
+   532→   532→  moveFrame: (from, to) => {
+   533→   533→    const refs = activeRefs(get())
+   534→   534→    if (!refs) return
+   535→   535→    const clip = bus.getProject().clips.find((c) => c.id === refs.clipId)
+   536→   536→    if (!clip) return
+   537→   537→    if (to < 0 || to >= clip.frames.length || from === to) return
+   538→   538→    try {
+   539→   539→      bus.execute('frame.move', { clipId: refs.clipId, from, to }, ORIGIN)
+   540→   540→    } catch {
+   541→   541→      return
+   542→   542→    }
+   543→   543→    set({ activeFrameIndex: to })
+   544→   544→  },
+   545→   545→
+   546→   546→  addLayer: () => {
+   547→   547→    const refs = activeRefs(get())
+   548→   548→    if (!refs) return
+   549→   549→    const clip = bus.getProject().clips.find((c) => c.id === refs.clipId)
+   550→   550→    if (!clip) return
+   551→   551→    const name = `layer ${clip.layers.length + 1}`
+   552→   552→    try {
+   553→   553→      bus.execute('layer.add', { clipId: refs.clipId, name }, ORIGIN)
+   554→   554→    } catch {
+   555→   555→      return
+   556→   556→    }
+   557→   557→    // layer.add appends to the top — the new top layer IS the new layer.
+   558→   558→    const topId = bus.getProject().clips.find((c) => c.id === refs.clipId)?.layers.at(-1)?.id
+   559→   559→    if (topId) set({ activeLayerId: topId })
+   560→   560→    toast({
+   561→   561→      title: `Layer "${name}" added`,
+   562→   562→      description: `Added to all ${clip.frames.length} frame${clip.frames.length === 1 ? '' : 's'} in this clip.`,
+   563→   563→    })
+   564→   564→  },
+   565→   565→
+   566→   566→  deleteLayer: (layerId) => {
+   567→   567→    const refs = activeRefs(get())
+   568→   568→    if (!refs) return
+   569→   569→    const clip = bus.getProject().clips.find((c) => c.id === refs.clipId)
+   570→   570→    if (!clip || clip.layers.length <= 1) return
+   571→   571→    const idx = clip.layers.findIndex((l) => l.id === layerId)
+   572→   572→    if (idx < 0) return
+   573→   573→    try {
+   574→   574→      bus.execute('layer.delete', { clipId: refs.clipId, layerId }, ORIGIN)
+   575→   575→    } catch {
+   576→   576→      return
+   577→   577→    }
+   578→   578→    const next = clip.layers[Math.min(idx, clip.layers.length - 2)]
+   579→   579→    set({ activeLayerId: next?.id ?? clip.layers[0]?.id ?? '' })
+   580→   580→  },
+   581→   581→
+   582→   582→  duplicateLayer: (layerId) => {
+   583→   583→    const refs = activeRefs(get())
+   584→   584→    if (!refs) return
+   585→   585→    const before = layerIds(bus.getProject(), refs.clipId)
+   586→   586→    try {
+   587→   587→      bus.execute('layer.duplicate', { clipId: refs.clipId, layerId }, ORIGIN)
+   588→   588→    } catch {
+   589→   589→      return
+   590→   590→    }
+   591→   591→    const newId = findNewLayerId(before, bus.getProject(), refs.clipId)
+   592→   592→    if (newId) set({ activeLayerId: newId })
+   593→   593→  },
+   594→   594→
+   595→   595→  mergeDown: (layerId) => {
+   596→   596→    const refs = activeRefs(get())
+   597→   597→    if (!refs) return
+   598→   598→    const clip = bus.getProject().clips.find((c) => c.id === refs.clipId)
+   599→   599→    if (!clip) return
+   600→   600→    const idx = clip.layers.findIndex((l) => l.id === layerId)
+   601→   601→    if (idx <= 0) return // nothing below
+   602→   602→    const bottomId = clip.layers[idx - 1].id
+   603→   603→    try {
+   604→   604→      bus.execute('layer.mergeDown', { clipId: refs.clipId, layerId }, ORIGIN)
+   605→   605→    } catch {
+   606→   606→      return
+   607→   607→    }
+   608→   608→    set({ activeLayerId: bottomId })
+   609→   609→  },
+   610→   610→
+   611→   611→  moveLayer: (layerId, dir) => {
+   612→   612→    const refs = activeRefs(get())
+   613→   613→    if (!refs) return
+   614→   614→    try {
+   615→   615→      bus.execute('layer.move', { clipId: refs.clipId, layerId, dir }, ORIGIN)
+   616→   616→    } catch {
+   617→   617→      /* out of range no-ops in the command itself */
+   618→   618→    }
+   619→   619→  },
+   620→   620→
+   621→   621→  setLayerProp: (layerId, patch) => {
+   622→   622→    const refs = activeRefs(get())
+   623→   623→    if (!refs) return
+   624→   624→    try {
+   625→   625→      bus.execute('layer.setProps', { clipId: refs.clipId, layerId, patch }, ORIGIN)
+   626→   626→    } catch {
+   627→   627→      /* invalid patch — ignore */
+   628→   628→    }
+   629→   629→  },
+   630→   630→
+   631→   631→  addClip: (name) => {
+   632→   632→    const fps = Math.min(60, Math.max(1, useAppSettings.getState().defaultClipFps))
+   633→   633→    let clipId: string | null = null
+   634→   634→    try {
+   635→   635→      bus.execute('clip.add', { name, fps }, ORIGIN)
+   636→   636→      clipId = bus.getProject().clips.at(-1)?.id ?? null
+   637→   637→    } catch {
+   638→   638→      return
+   639→   639→    }
+   640→   640→    if (clipId) {
+   641→   641→      const clip = bus.getProject().clips.find((c) => c.id === clipId)
+   642→   642→      set({
+   643→   643→        activeClipId: clipId,
+   644→   644→        activeFrameIndex: 0,
+   645→   645→        activeLayerId: clip?.layers[0]?.id ?? '',
+   646→   646→        playing: false,
+   647→   647→      })
+   648→   648→    }
+   649→   649→  },
+   650→   650→
+   651→   651→  deleteClip: (clipId) => {
+   652→   652→    const s = get()
+   653→   653→    const project = bus.getProject()
+   654→   654→    if (project.clips.length <= 1) return
+   655→   655→    const idx = project.clips.findIndex((c) => c.id === clipId)
+   656→   656→    if (idx < 0) return
+   657→   657→    try {
+   658→   658→      bus.execute('clip.delete', { clipId }, ORIGIN)
+   659→   659→    } catch {
+   660→   660→      return
+   661→   661→    }
+   662→   662→    const next = bus.getProject().clips[Math.min(idx, project.clips.length - 2)]
+   663→   663→    set({
+   664→   664→      activeClipId: next.id,
+   665→   665→      activeFrameIndex: 0,
+   666→   666→      activeLayerId: next.layers.at(-1)?.id ?? '',
+   667→   667→      playing: false,
+   668→   668→    })
+   669→   669→  },
+   670→   670→
+   671→   671→  setClipProp: (clipId, patch) => {
+   672→   672→    try {
+   673→   673→      bus.execute('clip.setProps', { clipId, patch }, ORIGIN)
+   674→   674→    } catch {
+   675→   675→      /* invalid patch — ignore */
+   676→   676→    }
+   677→   677→  },
+   678→   678→
+   679→   679→  addPaletteColor: (hex) => {
+   680→   680→    if (bus.getProject().palette.includes(hex.toLowerCase())) return
+   681→   681→    try {
+   682→   682→      bus.execute('palette.addColor', { hex }, ORIGIN)
+   683→   683→    } catch {
+   684→   684→      /* bad hex — ignore */
+   685→   685→    }
+   686→   686→  },
+   687→   687→
+   688→   688→  removePaletteColor: (hex) => {
+   689→   689→    if (!bus.getProject().palette.includes(hex.toLowerCase())) return
+   690→   690→    try {
+   691→   691→      bus.execute('palette.removeColor', { hex }, ORIGIN)
+   692→   692→    } catch {
+   693→   693→      /* ignore */
+   694→   694→    }
+   695→   695→  },
+   696→   696→
+   697→   697→  setPalette: (colors, label) => {
+   698→   698→    try {
+   699→   699→      bus.execute('palette.replaceAll', { colors }, ORIGIN, { label })
+   700→   700→    } catch {
+   701→   701→      /* bad colors — ignore */
+   702→   702→    }
+   703→   703→  },
+   704→   704→
+   705→   705→  // --- AI candidate import (one undoable transaction each) ---
+   706→   706→
+   707→   707→  importCandidateAsLayer: (buffer, name) => {
+   708→   708→    const refs = activeRefs(get())
+   709→   709→    if (!refs) return
+   710→   710→    let newLayerId: string | null = null
+   711→   711→    try {
+   712→   712→      bus.transaction('Import AI candidate as layer', 'ai', () => {
+   713→   713→        bus.execute('layer.add', { clipId: refs.clipId, name }, 'ai')
+   714→   714→        newLayerId = bus.getProject().clips.find((c) => c.id === refs.clipId)?.layers.at(-1)?.id ?? null
+   715→   715→        if (!newLayerId) throw new CommandError('INVALID_STATE', 'layer add produced no id')
+   716→   716→        bus.execute(
+   717→   717→          'pixels.applyOp',
+   718→   718→          { clipId: refs.clipId, frameId: refs.frameId, layerId: newLayerId, ops: [{ op: 'setBuffer', buffer: new Uint8ClampedArray(buffer) }] },
+   719→   719→          'ai'
+   720→   720→        )
+   721→   721→      })
+   722→   722→    } catch {
+   723→   723→      toast({ title: 'Import failed', description: 'The candidate could not be imported.', variant: 'destructive' })
+   724→   724→      return
+   725→   725→    }
+   726→   726→    if (newLayerId) set({ activeLayerId: newLayerId })
+   727→   727→  },
+   728→   728→
+   729→   729→  importCandidateAsFrame: (buffer, name) => {
+   730→   730→    const refs = activeRefs(get())
+   731→   731→    if (!refs) return
+   732→   732→    const insertAt = refs.frameIndex + 1
+   733→   733→    let ok = false
+   734→   734→    try {
+   735→   735→      bus.transaction('Import AI candidate as frame', 'ai', () => {
+   736→   736→        bus.execute('frame.add', { clipId: refs.clipId, afterIndex: refs.frameIndex, copy: false }, 'ai')
+   737→   737→        const clip = bus.getProject().clips.find((c) => c.id === refs.clipId)
+   738→   738→        const newFrame = clip?.frames[insertAt]
+   739→   739→        if (!newFrame) throw new CommandError('INVALID_STATE', 'frame add produced no frame')
+   740→   740→        bus.execute(
+   741→   741→          'pixels.applyOp',
+   742→   742→          { clipId: refs.clipId, frameId: newFrame.id, layerId: refs.layerId, ops: [{ op: 'setBuffer', buffer: new Uint8ClampedArray(buffer) }] },
+   743→   743→          'ai'
+   744→   744→        )
+   745→   745→        ok = true
+   746→   746→      })
+   747→   747→    } catch {
+   748→   748→      toast({ title: 'Import failed', description: 'The candidate could not be imported.', variant: 'destructive' })
+   749→   749→      return
+   750→   750→    }
+   751→   751→    if (ok) set({ activeFrameIndex: insertAt, playing: false })
+   752→   752→  },
+   753→   753→
+   754→   754→  // --- selection & ui ---
+   755→   755→
+   756→   756→  selectClip: (id) => {
+   757→   757→    const clip = bus.getProject().clips.find((c) => c.id === id)
+   758→   758→    if (!clip) return
+   759→   759→    set({
+   760→   760→      activeClipId: id,
+   761→   761→      activeFrameIndex: Math.min(get().activeFrameIndex, clip.frames.length - 1),
+   762→   762→      activeLayerId: clip.layers.some((l) => l.id === get().activeLayerId)
+   763→   763→        ? get().activeLayerId
+   764→   764→        : (clip.layers.at(-1)?.id ?? ''),
+   765→   765→      playing: false,
+   766→   766→    })
+   767→   767→  },
+   768→   768→
+   769→   769→  selectFrame: (index) => {
+   770→   770→    const clip = bus.getProject().clips.find((c) => c.id === get().activeClipId) ?? bus.getProject().clips[0]
+   771→   771→    if (!clip) return
+   772→   772→    set({ activeFrameIndex: Math.min(Math.max(0, index), clip.frames.length - 1) })
+   773→   773→  },
+   774→   774→
+   775→   775→  selectLayer: (id) => set({ activeLayerId: id }),
+   776→   776→  setTool: (t) => set({ tool: t }),
+   777→   777→  setPrimary: (hex) => set({ primary: hex }),
+   778→   778→  setSecondary: (hex) => set({ secondary: hex }),
+   779→   779→  swapColors: () => set((s) => ({ primary: s.secondary, secondary: s.primary })),
+   780→   780→  setBrushSize: (n) => set({ brushSize: Math.min(4, Math.max(1, Math.round(n))) }),
+   781→   781→  setMirrorX: (v) => set({ mirrorX: v }),
+   782→   782→  setZoom: (z) => set({ zoom: Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z)) }),
+   783→   783→  setPan: (x, y) => set({ panX: x, panY: y }),
+   784→   784→  setShowGrid: (v) => set({ showGrid: v }),
+   785→   785→  setOnionSkin: (v) => set({ onionSkin: v }),
+   786→   786→  setHover: (h) =>
+   787→   787→    set((s) => {
+   788→   788→      if (s.hover === h) return s
+   789→   789→      if (s.hover && h && s.hover.x === h.x && s.hover.y === h.y) return s
+   790→   790→      return { hover: h }
+   791→   791→    }),
+   792→   792→  setPlaying: (v) => set({ playing: v }),
+   793→   793→  setRightTab: (t) => set({ rightTab: t }),
+   794→   794→  setPaletteOpen: (v) => set({ paletteOpen: v }),
+   795→   795→  setRightOpen: (v) => set({ rightOpen: v }),
+   796→   796→  setRightWidth: (w) => set({ rightWidth: Math.min(560, Math.max(260, Math.round(w))) }),
+   797→   797→  setTimelineOpen: (v) => set({ timelineOpen: v }),
+   798→   798→  setAutosave: (v) => set({ autosave: v }),
+   799→   799→
+   800→   800→  // --- persistence ---
+   801→   801→
+   802→   802→  setProjectId: (id) => set({ projectId: id, dirty: true }),
+   803→   803→  setFilePath: (path) => set({ filePath: path }),
+   804→   804→  setSavingFile: (v) => set({ savingFile: v }),
+   805→   805→  markSaved: () => {
+   806→   806→    bus.markSaved()
+   807→   807→    set({ dirty: false, savedAt: Date.now() })
+   808→   808→  },
+   809→   809→  markDirty: () => set({ dirty: true }),
+   810→   810→}))
+   811→   811→
+   812→   812→// subscribe the mirror to every bus change (executed commands, undo/redo,
+   813→   813→// stroke flow, document replacement)
+   814→   814→bus.onChange(() => syncFromBus())
+   815→   815→
+   816→   816→// --- selector helpers (with safe fallbacks) --------------------------------
+   817→   817→
+   818→   818→export function getActiveClip(s: Pick<EditorState, 'project' | 'activeClipId'>): Project['clips'][number] {
+   819→   819→  return s.project.clips.find((c) => c.id === s.activeClipId) ?? s.project.clips[0]
+   820→   820→}
+   821→   821→
+   822→   822→export function getActiveFrame(
+   823→   823→  s: Pick<EditorState, 'project' | 'activeClipId' | 'activeFrameIndex'>
+   824→   824→): Project['clips'][number]['frames'][number] {
+   825→   825→  const clip = getActiveClip(s)
+   826→   826→  return clip.frames[Math.min(s.activeFrameIndex, clip.frames.length - 1)] ?? clip.frames[0]
+   827→   827→}
+   828→   828→
+   829→   829→// Dev-only automation hook (browser E2E + desktop smoke harness). Gives test
+   830→   830→// scripts read access to the core bus/store for state assertions. Process
+   831→   831→// guards keep it out of production builds; it exposes NO new capabilities.
+   832→   832→if (process.env.NODE_ENV !== 'production' && typeof window !== 'undefined') {
+   833→   833→  void import('./project-files').then((files) => {
+   834→   834→    ;(window as unknown as Record<string, unknown>).__pf = {
+   835→   835→      getBus,
+   836→   836→      useEditor,
+   837→   837→      files: {
+   838→   838→        saveProjectToPath: files.saveProjectToPath,
+   839→   839→        openProjectFromPath: files.openProjectFromPath,
+   840→   840→        inspectCurrentFileRecovery: files.inspectCurrentFileRecovery,
+   841→   841→      },
+   842→   842→    }
+   843→   843→  })
+   844→   844→}
+   845→   845→

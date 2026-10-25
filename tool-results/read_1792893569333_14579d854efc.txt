@@ -1,0 +1,757 @@
+     1→/**
+     2→ * Export golden tests (Task 7, v3.1 §7 + §13 "Export goldens: dimensions /
+     3→ * alpha / rect math").
+     4→ *
+     5→ * Mandate: tests compare ACTUAL DECODED IMAGE PIXELS (core decodePng), never
+     6→ * file existence or raw PNG bytes — the zlib stream may vary across
+     7→ * runtimes, decoded pixels must not.
+     8→ *
+     9→ * Fixtures are deterministic (explicit ids, no uid(), no clock): reviewed
+    10→ * literal byte expectations for every blending case. Any intentional
+    11→ * golden update must be explained in the worklog + Task 7 report.
+    12→ */
+    13→
+    14→import { describe, expect, test } from 'bun:test';
+    15→import {
+    16→  EXPORT_METADATA_VERSION,
+    17→  ExportError,
+    18→  MemoryFs,
+    19→  SCHEMA_VERSION,
+    20→  buildAllArtifacts,
+    21→  buildClipMetadata,
+    22→  composeFrameRgba,
+    23→  composeSheetRgba,
+    24→  decodePng,
+    25→  planExport,
+    26→  resolveSheetLayout,
+    27→  sheetFrameOrigin,
+    28→  writeExportPlan,
+    29→  type Cel,
+    30→  type Clip,
+    31→  type Frame,
+    32→  type Layer,
+    33→  type Project,
+    34→} from '../src';
+    35→import type { FileFs } from '../src/persist/store';
+    36→
+    37→// ---------------------------------------------------------------------------
+    38→// deterministic fixtures (reviewed; tiny 8×8 canvases)
+    39→// ---------------------------------------------------------------------------
+    40→
+    41→const W = 8;
+    42→const H = 8;
+    43→
+    44→function buffer(paint: (x: number, y: number) => [number, number, number, number]): Uint8ClampedArray {
+    45→  const buf = new Uint8ClampedArray(W * H * 4);
+    46→  for (let y = 0; y < H; y++) {
+    47→    for (let x = 0; x < W; x++) {
+    48→      const i = (y * W + x) * 4;
+    49→      const [r, g, b, a] = paint(x, y);
+    50→      buf[i] = r;
+    51→      buf[i + 1] = g;
+    52→      buf[i + 2] = b;
+    53→      buf[i + 3] = a;
+    54→    }
+    55→  }
+    56→  return buf;
+    57→}
+    58→
+    59→function cel(paint: (x: number, y: number) => [number, number, number, number], linked = false): Cel {
+    60→  return { buffer: buffer(paint), linked };
+    61→}
+    62→
+    63→function layer(id: string, name: string, opts?: Partial<Layer>): Layer {
+    64→  return { id, name, visible: true, opacity: 1, linked: false, ...opts };
+    65→}
+    66→
+    67→function frame(id: string, cels: Record<string, Cel>, durationMs = 0): Frame {
+    68→  return { id, durationMs, cels };
+    69→}
+    70→
+    71→const BG_BLUE: [number, number, number, number] = [20, 40, 220, 255];
+    72→const FG_RED: [number, number, number, number] = [235, 30, 30, 255];
+    73→const MARKER: [number, number, number, number] = [255, 214, 10, 255];
+    74→
+    75→/** Clip A "idle": 4 frames, 2 layers — bg linked (shared buffer), fg animated. */
+    76→function mkIdleClip(): { clip: Clip; bgCel: Cel } {
+    77→  // Linked bg: ONE buffer object shared by every frame (C2/C19).
+    78→  const bgCel = cel(() => BG_BLUE, true);
+    79→  const clip: Clip = {
+    80→    id: 'clip_idle',
+    81→    name: 'idle',
+    82→    fps: 8,
+    83→    loop: true,
+    84→    loopMode: 'forward',
+    85→    layers: [layer('lay_bg', 'bg', { linked: true }), layer('lay_fg', 'fg')],
+    86→    parts: [],
+    87→    tags: [{ name: 'breathe', from: 1, to: 2 }],
+    88→    frames: [
+    89→      frame('f0', { lay_bg: bgCel, lay_fg: cel((x, y) => (x < 4 ? FG_RED : [0, 0, 0, 0])) }),
+    90→      frame('f1', { lay_bg: bgCel, lay_fg: cel((x, y) => (x >= 4 ? FG_RED : [0, 0, 0, 0])) }),
+    91→      // f2: per-frame duration overrides (golden #13)
+    92→      frame('f2', { lay_bg: bgCel, lay_fg: cel(() => [0, 0, 0, 0]) }, 500),
+    93→      // f3: EMPTY frame — no fg cel at all (golden #11); bg still linked.
+    94→      frame('f3', { lay_bg: bgCel }, 250),
+    95→    ],
+    96→  };
+    97→  return { clip, bgCel };
+    98→}
+    99→
+   100→/** Clip B "walk": reverse, 2 frames, one 50%-opacity layer with alpha variety. */
+   101→function mkWalkClip(): Clip {
+   102→  return {
+   103→    id: 'clip_walk',
+   104→    name: 'walk',
+   105→    fps: 12,
+   106→    loop: true,
+   107→    loopMode: 'reverse',
+   108→    layers: [layer('lay_walk', 'walk', { opacity: 0.5 })],
+   109→    parts: [],
+   110→    tags: [],
+   111→    frames: [
+   112→      // alpha triplet: 0 / 128 / 255 (golden #6), plus semi pixel at (5,5)
+   113→      frame('w0', {
+   114→        lay_walk: cel((x, y) => {
+   115→          if (x === 0 && y === 0) return [0, 0, 0, 0];
+   116→          if (x === 1 && y === 0) return [255, 0, 0, 128];
+   117→          if (x === 2 && y === 0) return [0, 255, 0, 255];
+   118→          if (x === 5 && y === 5) return [255, 0, 0, 128];
+   119→          return [10, 10, 10, 255];
+   120→        }),
+   121→      }),
+   122→      frame('w1', {
+   123→        lay_walk: cel((x, y) => (x === 0 && y === 7 ? MARKER : [200, 200, 200, 255])),
+   124→      }),
+   125→    ],
+   126→  };
+   127→}
+   128→
+   129→/** Clip C "bounce": ping-pong, play-once, 3 frames, empty + hidden layers. */
+   130→function mkBounceClip(hidden?: Layer[]): Clip {
+   131→  return {
+   132→    id: 'clip_bounce',
+   133→    name: 'bounce',
+   134→    fps: 10,
+   135→    loop: false,
+   136→    loopMode: 'pingpong',
+   137→    layers: hidden ?? [layer('lay_b', 'b')],
+   138→    parts: [],
+   139→    tags: [],
+   140→    frames: [
+   141→      frame('b0', { lay_b: cel(() => [1, 2, 3, 255]) }),
+   142→      frame('b1', { lay_b: cel(() => [4, 5, 6, 255]) }),
+   143→      frame('b2', { lay_b: cel(() => [7, 8, 9, 255]) }),
+   144→    ],
+   145→  };
+   146→}
+   147→
+   148→function mkProject(): Project {
+   149→  return {
+   150→    id: null,
+   151→    schemaVersion: SCHEMA_VERSION,
+   152→    name: 'Golden Forge',
+   153→    width: W,
+   154→    height: H,
+   155→    palette: ['#1428dc', '#eb1e1e', '#ffd60a'],
+   156→    settings: { paletteEnforce: false, onion: { prev: 0, next: 0 } },
+   157→    clips: [mkIdleClip().clip, mkWalkClip(), mkBounceClip()],
+   158→    trash: [],
+   159→  };
+   160→}
+   161→
+   162→async function decodeArtifact(bytes: Uint8Array) {
+   163→  return decodePng(bytes);
+   164→}
+   165→
+   166→function expectBuffersEqual(a: Uint8Array | Uint8ClampedArray, b: Uint8Array | Uint8ClampedArray, ctx?: string) {
+   167→  expect(a.length).toBe(b.length);
+   168→  for (let i = 0; i < a.length; i++) {
+   169→    if (a[i] !== b[i]) {
+   170→      throw new Error(`byte mismatch at ${i} (${ctx ?? ''}): ${a[i]} !== ${b[i]}`);
+   171→    }
+   172→  }
+   173→}
+   174→
+   175→function pixel(buf: Uint8Array | Uint8ClampedArray, w: number, x: number, y: number): [number, number, number, number] {
+   176→  const i = (y * w + x) * 4;
+   177→  return [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]];
+   178→}
+   179→
+   180→/** Error-code helper: run fn, assert ExportError code. */
+   181→async function expectExportError(fn: () => unknown, code: ExportError['code']) {
+   182→  try {
+   183→    await fn();
+   184→    throw new Error(`expected ExportError ${code}, but nothing was thrown`);
+   185→  } catch (err) {
+   186→    expect(err).toBeInstanceOf(ExportError);
+   187→    expect((err as ExportError).code).toBe(code);
+   188→  }
+   189→}
+   190→
+   191→// ---------------------------------------------------------------------------
+   192→// golden #1 + #2 — frame PNGs
+   193→// ---------------------------------------------------------------------------
+   194→
+   195→describe('golden: frame PNG exports', () => {
+   196→  test('#1 single-frame export: exact 8×8 RGBA, transparency preserved', async () => {
+   197→    const project = mkProject();
+   198→    const plan = planExport(project, { scope: 'frame', frameIndex: 0, format: 'png-frames' });
+   199→    expect(plan.artifacts).toHaveLength(1);
+   200→    expect(plan.artifacts[0].filename).toBe('golden-forge_idle_frame00.png');
+   201→
+   202→    const [bytes] = await buildAllArtifacts(plan);
+   203→    const decoded = await decodeArtifact(bytes.bytes);
+   204→    expect(decoded.width).toBe(W);
+   205→    expect(decoded.height).toBe(H);
+   206→
+   207→    const expected = composeFrameRgba(project, project.clips[0], project.clips[0].frames[0]);
+   208→    expectBuffersEqual(decoded.rgba, expected, 'frame0');
+   209→    // spot pixels: linked bg under fg / fg-only / transparent corner
+   210→    expect(pixel(decoded.rgba, W, 1, 0)).toEqual([FG_RED[0], FG_RED[1], FG_RED[2], 255]);
+   211→    expect(pixel(decoded.rgba, W, 5, 0)).toEqual(BG_BLUE); // fg absent here → bg
+   212→    expect(pixel(decoded.rgba, W, 7, 7)).toEqual(BG_BLUE); // linked bg everywhere
+   213→  });
+   214→
+   215→  test('#2 multi-frame export: every frame decodes pixel-exact, names zero-padded', async () => {
+   216→    const project = mkProject();
+   217→    const plan = planExport(project, { scope: 'clip', format: 'png-frames' });
+   218→    expect(plan.artifacts.map((a) => a.filename)).toEqual([
+   219→      'golden-forge_idle_frame00.png',
+   220→      'golden-forge_idle_frame01.png',
+   221→      'golden-forge_idle_frame02.png',
+   222→      'golden-forge_idle_frame03.png',
+   223→    ]);
+   224→    const built = await buildAllArtifacts(plan);
+   225→    const clip = project.clips[0];
+   226→    for (let i = 0; i < clip.frames.length; i++) {
+   227→      const decoded = await decodeArtifact(built[i].bytes);
+   228→      expect(decoded.width).toBe(W);
+   229→      expect(decoded.height).toBe(H);
+   230→      expectBuffersEqual(decoded.rgba, composeFrameRgba(project, clip, clip.frames[i]), `frame${i}`);
+   231→    }
+   232→  });
+   233→
+   234→  test('#2b zero-pad option off → legacy frame0 names', async () => {
+   235→    const project = mkProject();
+   236→    const plan = planExport(project, { scope: 'frame', frameIndex: 2, format: 'png-frames', zeroPadFrames: 0 });
+   237→    expect(plan.artifacts[0].filename).toBe('golden-forge_idle_frame2.png');
+   238→  });
+   239→});
+   240→
+   241→// ---------------------------------------------------------------------------
+   242→// golden #3–#5 — sheet layouts + padding/spacing
+   243→// ---------------------------------------------------------------------------
+   244→
+   245→describe('golden: sprite-sheet layouts', () => {
+   246→  test('#3 horizontal strip: single row, rect math + gap transparency', async () => {
+   247→    const project = mkProject();
+   248→    const clip = project.clips[0];
+   249→    const { rgba, layout } = composeSheetRgba(project, clip, { columns: 0, padding: 1 });
+   250→    expect(layout.layout).toBe('horizontal');
+   251→    expect(layout.columns).toBe(4);
+   252→    expect(layout.rows).toBe(1);
+   253→    expect(layout.width).toBe(2 * 1 + 4 * W + 3 * 1); // 2·pad + cols·w + (cols−1)·spacing (= legacy (cols+1)·pad when spacing defaults to padding)
+   254→    expect(layout.height).toBe(2 * 1 + H);
+   255→
+   256→    // x of frame i = pad + i*(w+spacing) = 1 + i*9; rows start at pad (outer margin)
+   257→    for (let i = 0; i < 4; i++) {
+   258→      const x = 1 + i * (W + 1);
+   259→      const expected = composeFrameRgba(project, clip, clip.frames[i]);
+   260→      for (let y = 0; y < H; y++) {
+   261→        const si = ((y + layout.padding) * layout.width + x) * 4;
+   262→        expectBuffersEqual(
+   263→          rgba.subarray(si, si + W * 4),
+   264→          expected.subarray(y * W * 4, y * W * 4 + W * 4),
+   265→          `hstrip f${i} row${y}`,
+   266→        );
+   267→      }
+   268→      // gap column before frame i is fully transparent
+   269→      if (i > 0) {
+   270→        for (let y = 0; y < layout.height; y++) {
+   271→          expect(pixel(rgba, layout.width, x - 1, y)[3]).toBe(0);
+   272→        }
+   273→      }
+   274→    }
+   275→  });
+   276→
+   277→  test('#4 grid layout: 2 columns → 2×2, row/col origin math', async () => {
+   278→    const project = mkProject();
+   279→    const clip = project.clips[0];
+   280→    const { layout } = composeSheetRgba(project, clip, { columns: 2, padding: 1, spacing: 1 });
+   281→    expect(layout.layout).toBe('grid');
+   282→    expect(layout.columns).toBe(2);
+   283→    expect(layout.rows).toBe(2);
+   284→    expect(layout.width).toBe(2 * 1 + 2 * W + 1 * 1); // 2·pad + cols·w + (cols−1)·spacing
+   285→    expect(layout.height).toBe(2 * 1 + 2 * H + 1 * 1);
+   286→
+   287→    const built = await buildAllArtifacts(planExport(project, { scope: 'clip', format: 'sheet', sheet: { columns: 2, padding: 1, spacing: 1 } }));
+   288→    const decoded = await decodeArtifact(built[0].bytes);
+   289→    expect(decoded.width).toBe(layout.width);
+   290→    expect(decoded.height).toBe(layout.height);
+   291→    for (let i = 0; i < 4; i++) {
+   292→      const { x, y } = sheetFrameOrigin(layout, i);
+   293→      expect(x).toBe(1 + (i % 2) * (W + 1)); // pitch = w + spacing
+   294→      expect(y).toBe(1 + Math.floor(i / 2) * (H + 1));
+   295→      const expected = composeFrameRgba(project, clip, clip.frames[i]);
+   296→      for (let yy = 0; yy < H; yy++) {
+   297→        const si = ((y + yy) * layout.width + x) * 4;
+   298→        expectBuffersEqual(decoded.rgba.subarray(si, si + W * 4), expected.subarray(yy * W * 4, yy * W * 4 + W * 4), `grid f${i} r${yy}`);
+   299→      }
+   300→    }
+   301→  });
+   302→
+   303→  test('#5 padding values 0/2/3 and spacing default = padding (legacy single-knob)', async () => {
+   304→    const project = mkProject();
+   305→    const clip = project.clips[0];
+   306→    for (const pad of [0, 2, 3]) {
+   307→      const legacy = resolveSheetLayout(project, clip, { columns: 2, padding: pad });
+   308→      // spacing omitted → defaults to padding (old `(cols+1)*pad` geometry)
+   309→      expect(legacy.width).toBe(2 * W + 3 * pad);
+   310→      expect(legacy.height).toBe(2 * H + 3 * pad);
+   311→      const explicit = resolveSheetLayout(project, clip, { columns: 2, padding: pad, spacing: 0 });
+   312→      expect(explicit.width).toBe(2 * W + 2 * pad); // outer margin only, no gaps
+   313→    }
+   314→    // decoded sheet honors padding=2 outer margin: border rows fully transparent
+   315→    const { rgba, layout } = composeSheetRgba(project, clip, { columns: 2, padding: 2 });
+   316→    for (let x = 0; x < layout.width; x++) {
+   317→      expect(pixel(rgba, layout.width, x, 0)[3]).toBe(0);
+   318→      expect(pixel(rgba, layout.width, x, layout.height - 1)[3]).toBe(0);
+   319→    }
+   320→  });
+   321→});
+   322→
+   323→// ---------------------------------------------------------------------------
+   324→// golden #6–#9 — alpha, layers, opacity
+   325→// ---------------------------------------------------------------------------
+   326→
+   327→describe('golden: alpha + layer compositing', () => {
+   328→  test('#6 transparent + partially transparent pixels survive encode→decode byte-exact', async () => {
+   329→    // dedicated full-opacity fixture: alpha triplet 0 / 128 / 255 per row 0
+   330→    const project = mkProject();
+   331→    const clip: Clip = {
+   332→      id: 'clip_alpha',
+   333→      name: 'alpha',
+   334→      fps: 8,
+   335→      loop: true,
+   336→      loopMode: 'forward',
+   337→      layers: [layer('lay_a', 'a')],
+   338→      parts: [],
+   339→      tags: [],
+   340→      frames: [
+   341→        frame('a0', {
+   342→          lay_a: cel((x, y) => {
+   343→            if (x === 0 && y === 0) return [0, 0, 0, 0];
+   344→            if (x === 1 && y === 0) return [255, 0, 0, 128];
+   345→            if (x === 2 && y === 0) return [0, 255, 0, 255];
+   346→            return [10, 10, 10, 255];
+   347→          }),
+   348→        }),
+   349→      ],
+   350→    };
+   351→    project.clips = [clip];
+   352→    const plan = planExport(project, { scope: 'clip', clipId: 'clip_alpha', format: 'png-frames' });
+   353→    const decoded = await decodeArtifact((await buildAllArtifacts(plan))[0].bytes);
+   354→    expect(pixel(decoded.rgba, W, 0, 0)).toEqual([0, 0, 0, 0]);
+   355→    // straight passthrough: semi pixel alone keeps its exact color + alpha 128
+   356→    expect(pixel(decoded.rgba, W, 1, 0)).toEqual([255, 0, 0, 128]);
+   357→    expect(pixel(decoded.rgba, W, 2, 0)).toEqual([0, 255, 0, 255]);
+   358→  });
+   359→
+   360→  test('#7 multiple visible layers composite bottom→top', () => {
+   361→    const project = mkProject();
+   362→    const clip = project.clips[0];
+   363→    const frame0 = clip.frames[0];
+   364→    // fg covers x<4 opaque red, bg linked blue everywhere → left red, right blue
+   365→    const out = composeFrameRgba(project, clip, frame0);
+   366→    expect(pixel(out, W, 0, 0)).toEqual([FG_RED[0], FG_RED[1], FG_RED[2], 255]);
+   367→    expect(pixel(out, W, 6, 3)).toEqual(BG_BLUE);
+   368→  });
+   369→
+   370→  test('#8 hidden layers are excluded from exports', () => {
+   371→    const project = mkProject();
+   372→    const hidden = [layer('lay_b', 'b', { visible: false }), layer('lay_top', 'top')];
+   373→    const clip = mkBounceClip([hidden[0], hidden[1]]);
+   374→    clip.frames = [
+   375→      frame('b0', { lay_b: cel(() => [1, 2, 3, 255]), lay_top: cel(() => [250, 250, 250, 255]) }),
+   376→    ];
+   377→    project.clips = [clip];
+   378→    const out = composeFrameRgba(project, clip, clip.frames[0]);
+   379→    // hidden layer's (0,0) must NOT appear; visible top layer does
+   380→    expect(pixel(out, W, 0, 0)).toEqual([250, 250, 250, 255]);
+   381→    expect(pixel(out, W, 7, 7)).toEqual([250, 250, 250, 255]);
+   382→  });
+   383→
+   384→  test('#9 layer opacity blends with hand-computed literal bytes', () => {
+   385→    const project = mkProject();
+   386→    const walk = project.clips[1]; // lay_walk opacity 0.5
+   387→    const out = composeFrameRgba(project, walk, walk.frames[0]);
+   388→    // src alpha 0 → untouched
+   389→    expect(pixel(out, W, 0, 0)).toEqual([0, 0, 0, 0]);
+   390→    // src (255,0,0,128) @0.5 over transparent → sa=(128/255)*0.5; a=round(sa*255)=64, color (255,0,0)
+   391→    expect(pixel(out, W, 1, 0)).toEqual([255, 0, 0, 64]);
+   392→    // opaque dark (10,10,10,255) @0.5 over transparent → (10,10,10,128)
+   393→    expect(pixel(out, W, 3, 3)).toEqual([10, 10, 10, 128]);
+   394→
+   395→    // hand-computed over an opaque dst (FG_RED 235,30,30 @0.5 over BG_BLUE 20,40,220):
+   396→    //   sa=.5, oa=1 → r=(235·.5+20·.5)=127.5→128, g=(30·.5+40·.5)=35, b=(30·.5+220·.5)=125, a=255
+   397→    const p2 = mkProject();
+   398→    const c2: Clip = {
+   399→      id: 'c',
+   400→      name: 'op',
+   401→      fps: 8,
+   402→      loop: true,
+   403→      loopMode: 'forward',
+   404→      layers: [layer('bg', 'bg'), layer('fg', 'fg', { opacity: 0.5 })],
+   405→      parts: [],
+   406→      tags: [],
+   407→      frames: [frame('x', { bg: cel(() => BG_BLUE), fg: cel((x, y) => (x === 0 && y === 0 ? FG_RED : [0, 0, 0, 0])) })],
+   408→    };
+   409→    p2.clips = [c2];
+   410→    const out2 = composeFrameRgba(p2, c2, c2.frames[0]);
+   411→    expect(pixel(out2, W, 0, 0)).toEqual([128, 35, 125, 255]); // red@50% over blue
+   412→    expect(pixel(out2, W, 1, 1)).toEqual(BG_BLUE); // fg transparent → bg untouched
+   413→
+   414→    // semi src over semi dst (no opacity modifier):
+   415→    //   (255,0,0,128) over (0,0,255,128) → a=192, r=170, b=85 (hand-derived)
+   416→    const p3 = mkProject();
+   417→    const c3: Clip = {
+   418→      id: 'c3',
+   419→      name: 'semi',
+   420→      fps: 8,
+   421→      loop: true,
+   422→      loopMode: 'forward',
+   423→      layers: [layer('bg', 'bg'), layer('fg', 'fg')],
+   424→      parts: [],
+   425→      tags: [],
+   426→      frames: [
+   427→        frame(
+   428→          'y',
+   429→          {
+   430→            bg: cel((x, y) => (x === 0 && y === 0 ? [0, 0, 255, 128] : [0, 0, 0, 0])),
+   431→            fg: cel((x, y) => (x === 0 && y === 0 ? [255, 0, 0, 128] : [0, 0, 0, 0])),
+   432→          },
+   433→        ),
+   434→      ],
+   435→    };
+   436→    p3.clips = [c3];
+   437→    const out3 = composeFrameRgba(p3, c3, c3.frames[0]);
+   438→    expect(pixel(out3, W, 0, 0)).toEqual([170, 0, 85, 192]);
+   439→  });
+   440→});
+   441→
+   442→// ---------------------------------------------------------------------------
+   443→// golden #10–#12 — linked cels, empty frames, multiple clips
+   444→// ---------------------------------------------------------------------------
+   445→
+   446→describe('golden: linked cels, empty frames, multi-clip', () => {
+   447→  test('#10 linked cel: shared buffer appears identically on every exported frame', async () => {
+   448→    const project = mkProject();
+   449→    const clip = project.clips[0];
+   450→    const bgCel = clip.frames[0].cels['lay_bg'];
+   451→    // model invariant: every frame references the SAME buffer object
+   452→    for (const f of clip.frames) expect(f.cels['lay_bg']!.buffer).toBe(bgCel!.buffer);
+   453→    const built = await buildAllArtifacts(planExport(project, { scope: 'clip', format: 'png-frames' }));
+   454→    // per-frame probe spots: bg is visible where that frame's fg is transparent
+   455→    const bgSpot: [number, number][] = [
+   456→      [7, 0], // f0: fg covers x<4 → (7,0) shows linked bg
+   457→      [0, 0], // f1: fg covers x≥4 → (0,0) shows linked bg
+   458→      [0, 0], // f2: fg fully transparent
+   459→      [0, 0], // f3: bare linked bg
+   460→    ];
+   461→    for (let i = 0; i < clip.frames.length; i++) {
+   462→      const decoded = await decodeArtifact(built[i].bytes);
+   463→      expect(pixel(decoded.rgba, W, bgSpot[i][0], bgSpot[i][1])).toEqual(BG_BLUE);
+   464→    }
+   465→    // fg animation differs per frame while bg stays shared
+   466→    const f0 = await decodeArtifact(built[0].bytes);
+   467→    const f1 = await decodeArtifact(built[1].bytes);
+   468→    expect(pixel(f0.rgba, W, 0, 0)).toEqual([FG_RED[0], FG_RED[1], FG_RED[2], 255]);
+   469→    expect(pixel(f1.rgba, W, 7, 0)).toEqual([FG_RED[0], FG_RED[1], FG_RED[2], 255]);
+   470→  });
+   471→
+   472→  test('#11 empty frame exports as fully transparent PNG of exact canvas size', async () => {
+   473→    const project = mkProject();
+   474→    const clip = project.clips[0];
+   475→    clip.frames[3] = { id: 'bare', durationMs: 0, cels: {} }; // no cels at all
+   476→    const plan = planExport(project, { scope: 'frame', frameIndex: 3, format: 'png-frames' });
+   477→    const [artifact] = await buildAllArtifacts(plan);
+   478→    const decoded = await decodeArtifact(artifact.bytes);
+   479→    expect(decoded.width).toBe(W);
+   480→    expect(decoded.height).toBe(H);
+   481→    let nonZero = 0;
+   482→    for (let i = 3; i < decoded.rgba.length; i += 4) if (decoded.rgba[i] !== 0) nonZero++;
+   483→    expect(nonZero).toBe(0);
+   484→  });
+   485→
+   486→  test('#12 multiple clips: one deterministic artifact set per clip', async () => {
+   487→    const project = mkProject();
+   488→    const plan = planExport(project, { scope: 'all-clips', format: 'sheet', sheet: { columns: 0, padding: 1 }, includeJson: true });
+   489→    expect(plan.clipCount).toBe(3);
+   490→    expect(plan.artifacts.map((a) => a.filename)).toEqual([
+   491→      'golden-forge_idle_sheet.png',
+   492→      'golden-forge_idle.json',
+   493→      'golden-forge_walk_sheet.png',
+   494→      'golden-forge_walk.json',
+   495→      'golden-forge_bounce_sheet.png',
+   496→      'golden-forge_bounce.json',
+   497→    ]);
+   498→    const built = await buildAllArtifacts(plan);
+   499→    for (const a of plan.artifacts.filter((a) => a.kind === 'png')) {
+   500→      const bytes = built.find((b) => b.filename === a.filename)!.bytes;
+   501→      const decoded = await decodeArtifact(bytes);
+   502→      expect(decoded.width).toBeGreaterThan(0);
+   503→      expect(decoded.height).toBeGreaterThan(0);
+   504→    }
+   505→  });
+   506→
+   507→  test('#12b duplicate clip names are rejected (no silent overwrite)', async () => {
+   508→    const project = mkProject();
+   509→    project.clips.push({ ...project.clips[1], name: 'walk' });
+   510→    await expectExportError(
+   511→      () => planExport(project, { scope: 'all-clips', format: 'sheet', sheet: { columns: 0, padding: 0 } }),
+   512→      'DUPLICATE_FILENAME',
+   513→    );
+   514→  });
+   515→});
+   516→
+   517→// ---------------------------------------------------------------------------
+   518→// golden #13–#14 — metadata: durations, loop modes, tags
+   519→// ---------------------------------------------------------------------------
+   520→
+   521→describe('golden: animation metadata', () => {
+   522→  test('#13 per-frame effective durations (override + fps fallback, ≥1ms clamp)', () => {
+   523→    const project = mkProject();
+   524→    const clip = project.clips[0]; // fps 8 → fallback 125ms; overrides 500 / 250
+   525→    const meta = buildClipMetadata(project, clip, { columns: 2, padding: 1 }, 'golden-forge_idle_sheet.png');
+   526→    const durations = meta.frames.map((f) => f.durationMs);
+   527→    expect(durations).toEqual([125, 125, 500, 250]); // f0,f1 inherit; f2,f3 override
+   528→    expect(meta.clip.fps).toBe(8);
+   529→    expect(meta.clip.frameCount).toBe(4);
+   530→    expect(meta.clip.tags).toEqual([{ name: 'breathe', from: 1, to: 2 }]);
+   531→    expect(meta.version).toBe(EXPORT_METADATA_VERSION);
+   532→  });
+   533→
+   534→  test('#14 reverse + ping-pong playback metadata (sequence = one full cycle)', () => {
+   535→    const project = mkProject();
+   536→    const walk = buildClipMetadata(project, project.clips[1], { columns: 0, padding: 0 }, 'w.png');
+   537→    expect(walk.playback.mode).toBe('reverse');
+   538→    expect(walk.playback.loop).toBe(true);
+   539→    expect(walk.playback.sequence).toEqual([1, 0]);
+   540→    expect(walk.godot.loop).toBe(true);
+   541→
+   542→    const bounce = buildClipMetadata(project, project.clips[2], { columns: 0, padding: 0 }, 'b.png');
+   543→    expect(bounce.playback.mode).toBe('pingpong');
+   544→    expect(bounce.playback.loop).toBe(false);
+   545→    expect(bounce.playback.sequence).toEqual([0, 1, 2, 1, 0]); // once: returns to frame 0
+   546→    expect(bounce.playback.frameDurationsMs).toEqual([100, 100, 100, 100, 100]);
+   547→    expect(bounce.playback.cycleMs).toBe(500);
+   548→    expect(bounce.playback.interpretation).toContain('stops on the final entry');
+   549→  });
+   550→});
+   551→
+   552→// ---------------------------------------------------------------------------
+   553→// golden #15–#16 — exact rects; export→extract→pixel-compare round-trip
+   554→// ---------------------------------------------------------------------------
+   555→
+   556→describe('golden: rect math + extraction round-trip', () => {
+   557→  test('#15 metadata rect origins match decoded sheet marker positions exactly', async () => {
+   558→    const project = mkProject();
+   559→    // Give every idle frame a unique marker pixel at a known in-frame spot.
+   560→    const clip = project.clips[0];
+   561→    clip.frames.forEach((f) => {
+   562→      const celRef = f.cels['lay_fg'] ?? f.cels['lay_bg'];
+   563→      const idx = (5 * W + 3) * 4; // (3,5)
+   564→      celRef.buffer[idx] = MARKER[0];
+   565→      celRef.buffer[idx + 1] = MARKER[1];
+   566→      celRef.buffer[idx + 2] = MARKER[2];
+   567→      celRef.buffer[idx + 3] = MARKER[3];
+   568→    });
+   569→    const opts = { columns: 2, padding: 2, spacing: 3 };
+   570→    const meta = buildClipMetadata(project, clip, opts, 'golden-forge_idle_sheet.png');
+   571→    const [sheet] = await buildAllArtifacts(planExport(project, { scope: 'clip', format: 'sheet', sheet: opts }));
+   572→    const decoded = await decodeArtifact(sheet.bytes);
+   573→    for (const rect of meta.frames) {
+   574→      expect(rect.x).toBe(sheetFrameOrigin(resolveSheetLayout(project, clip, opts), rect.index).x);
+   575→      expect(rect.w).toBe(W);
+   576→      expect(rect.h).toBe(H);
+   577→      // the marker must sit at rect.x+3, rect.y+5 in the decoded sheet
+   578→      expect(pixel(decoded.rgba, decoded.width, rect.x + 3, rect.y + 5)).toEqual(MARKER);
+   579→    }
+   580→  });
+   581→
+   582→  test('#16 export sheet → extract frames by metadata rects → pixel-compare vs frame PNGs', async () => {
+   583→    const project = mkProject();
+   584→    const clip = project.clips[1]; // walk: alpha variety incl. semi pixels
+   585→    const opts = { columns: 2, padding: 1, spacing: 1 };
+   586→    const framePngs = await buildAllArtifacts(
+   587→      planExport(project, { scope: 'clip', clipId: 'clip_walk', format: 'png-frames' }),
+   588→    );
+   589→    const [sheet] = await buildAllArtifacts(
+   590→      planExport(project, { scope: 'clip', clipId: 'clip_walk', format: 'sheet', sheet: opts }),
+   591→    );
+   592→    const sheetDecoded = await decodeArtifact(sheet.bytes);
+   593→    const meta = buildClipMetadata(project, clip, opts, 'golden-forge_walk_sheet.png');
+   594→
+   595→    expect(framePngs).toHaveLength(2);
+   596→    for (let i = 0; i < clip.frames.length; i++) {
+   597→      const frameDecoded = await decodeArtifact(framePngs[i].bytes);
+   598→      const rect = meta.frames[i];
+   599→      for (let y = 0; y < rect.h; y++) {
+   600→        const si = ((rect.y + y) * sheetDecoded.width + rect.x) * 4;
+   601→        const sliced = sheetDecoded.rgba.subarray(si, si + rect.w * 4);
+   602→        const fi = y * rect.w * 4;
+   603→        expectBuffersEqual(sliced, frameDecoded.rgba.subarray(fi, fi + rect.w * 4), `extract f${i} y${y}`);
+   604→      }
+   605→    }
+   606→  });
+   607→});
+   608→
+   609→// ---------------------------------------------------------------------------
+   610→// reliability §7 — invalid input, guards, no-mutation, atomic writes
+   611→// ---------------------------------------------------------------------------
+   612→
+   613→describe('export reliability', () => {
+   614→  test('error codes: EMPTY_PROJECT / EMPTY_CLIP / INVALID_OPTIONS / SHEET_TOO_LARGE / BAD_CEL_BUFFER', async () => {
+   615→    const project = mkProject();
+   616→    await expectExportError(() => planExport({ ...project, clips: [] }, { scope: 'clip', format: 'png-frames' }), 'EMPTY_PROJECT');
+   617→    const noFrames = mkProject();
+   618→    noFrames.clips = [{ ...noFrames.clips[0], frames: [] }];
+   619→    await expectExportError(() => planExport(noFrames, { scope: 'clip', format: 'png-frames' }), 'EMPTY_CLIP');
+   620→    await expectExportError(() => planExport(project, { scope: 'clip', format: 'sheet', sheet: { columns: -1, padding: 0 } }), 'INVALID_OPTIONS');
+   621→    await expectExportError(() => planExport(project, { scope: 'clip', format: 'sheet', sheet: { columns: 1.5, padding: 0 } }), 'INVALID_OPTIONS');
+   622→    await expectExportError(() => planExport(project, { scope: 'clip', format: 'sheet', sheet: { columns: 2, padding: -3 } }), 'INVALID_OPTIONS');
+   623→    await expectExportError(() => planExport(project, { scope: 'frame', frameIndex: 99, format: 'png-frames' }), 'INVALID_OPTIONS');
+   624→    await expectExportError(
+   625→      () => planExport(project, { scope: 'clip', format: 'sheet', sheet: { columns: 0, padding: 0 }, zeroPadFrames: 9 }),
+   626→      'INVALID_OPTIONS',
+   627→    );
+   628→    // 256×256 × 100 frames horizontal → 25600px wide, over the 16384 side guard
+   629→    const big = mkProject();
+   630→    const bigClip: Clip = { ...big.clips[0], frames: Array.from({ length: 100 }, (_, i) => frame(`bf${i}`, {})) };
+   631→    big.clips = [{ ...bigClip, layers: [layer('l', 'l')] }];
+   632→    big.width = 256;
+   633→    big.height = 256;
+   634→    await expectExportError(() => planExport(big, { scope: 'clip', format: 'sheet', sheet: { columns: 0, padding: 0 } }), 'SHEET_TOO_LARGE');
+   635→    // corrupt cel buffer (wrong byte length) surfaces with code + context
+   636→    const corrupt = mkProject();
+   637→    corrupt.clips = [
+   638→      {
+   639→        ...corrupt.clips[2],
+   640→        frames: [frame('cb', { lay_b: { buffer: new Uint8ClampedArray(10), linked: false } })],
+   641→      },
+   642→    ];
+   643→    await expectExportError(() => composeFrameRgba(corrupt, corrupt.clips[0], corrupt.clips[0].frames[0]), 'BAD_CEL_BUFFER');
+   644→  });
+   645→
+   646→  test('source document is never mutated by planning + building', async () => {
+   647→    const project = mkProject();
+   648→    const before = structuredClone(project);
+   649→    const plan = planExport(project, { scope: 'all-clips', format: 'sheet', sheet: { columns: 2, padding: 2 }, includeJson: true });
+   650→    await buildAllArtifacts(plan);
+   651→    expect(project).toEqual(before);
+   652→    // linked cel buffer identity survives (no buffer swapping)
+   653→    expect(project.clips[0].frames[0].cels['lay_bg']!.buffer).toBe(project.clips[0].frames[3].cels['lay_bg']!.buffer);
+   654→  });
+   655→
+   656→  test('identical requests produce byte-identical artifacts (determinism)', async () => {
+   657→    const project = mkProject();
+   658→    const opts = { scope: 'clip' as const, format: 'sheet' as const, sheet: { columns: 2, padding: 1 }, includeJson: true };
+   659→    const a = await buildAllArtifacts(planExport(project, opts));
+   660→    const b = await buildAllArtifacts(planExport(project, opts));
+   661→    expect(a.length).toBe(b.length);
+   662→    for (let i = 0; i < a.length; i++) {
+   663→      expect(a[i].filename).toBe(b[i].filename);
+   664→      expectBuffersEqual(a[i].bytes, b[i].bytes, `determinism ${a[i].filename}`);
+   665→    }
+   666→  });
+   667→
+   668→  test('writeExportPlan over MemoryFs: writes, conflict preflight, overwrite, atomicity', async () => {
+   669→    const project = mkProject();
+   670→    const files = await buildAllArtifacts(
+   671→      planExport(project, { scope: 'clip', format: 'sheet', sheet: { columns: 2, padding: 0 }, includeJson: true }),
+   672→    );
+   673→    const fs = new MemoryFs();
+   674→
+   675→    const ok = await writeExportPlan(fs, '/dest', files);
+   676→    expect(ok.status).toBe('ok');
+   677→    if (ok.status !== 'ok') throw new Error('unreachable'); // narrows for TS
+   678→    expect(ok.written).toHaveLength(2);
+   679→    for (const f of files) {
+   680→      const back = await fs.readFile(`/dest/${f.filename}`);
+   681→      expectBuffersEqual(back, f.bytes, `roundtrip ${f.filename}`);
+   682→    }
+   683→
+   684→    // re-write without overwrite → conflict, nothing touched
+   685→    const again = await writeExportPlan(fs, '/dest', files);
+   686→    expect(again.status).toBe('conflicts');
+   687→    expect((again as { conflicts: string[] }).conflicts).toEqual(files.map((f) => f.filename));
+   688→    const unchanged = await fs.readFile(`/dest/${files[0].filename}`);
+   689→    expectBuffersEqual(unchanged, files[0].bytes, 'conflict leaves original');
+   690→
+   691→    // overwrite: true → ok again
+   692→    expect((await writeExportPlan(fs, '/dest', files, { overwrite: true })).status).toBe('ok');
+   693→
+   694→    // no `.tmp` leftovers after any path
+   695→    const listing = await fs.listDir('/dest');
+   696→    expect(listing.every((n) => !n.endsWith('.tmp'))).toBe(true);
+   697→  });
+   698→
+   699→  test('writeExportPlan partial failure: completed files stay, failed target uncorrupted, tmp cleaned', async () => {
+   700→    const project = mkProject();
+   701→    const files = await buildAllArtifacts(planExport(project, { scope: 'clip', format: 'png-frames' }));
+   702→    expect(files.length).toBeGreaterThanOrEqual(2);
+   703→    const fs = new MemoryFs();
+   704→    const failOn = files[1].filename;
+   705→    // pre-seed the failing target with OLD content (must survive the failure)
+   706→    const oldBytes = new TextEncoder().encode('OLD-CONTENT');
+   707→    await fs.writeFile(`/dest/${failOn}`, oldBytes);
+   708→
+   709→    const flaky: FileFs = {
+   710→      readFile: (p) => fs.readFile(p),
+   711→      writeFile: async (p, data) => {
+   712→        if (p.endsWith(`${failOn}.tmp`)) throw new Error('E_DISK_FULL (injected)');
+   713→        await fs.writeFile(p, data);
+   714→      },
+   715→      rename: (a, b) => fs.rename(a, b),
+   716→      unlink: (p) => fs.unlink(p),
+   717→      exists: (p) => fs.exists(p),
+   718→      mkdir: (p) => fs.mkdir(p),
+   719→      listDir: (p) => fs.listDir(p),
+   720→      stat: async () => null,
+   721→    };
+   722→
+   723→    const result = await writeExportPlan(flaky, '/dest', files, { overwrite: true });
+   724→    expect(result.status).toBe('partial');
+   725→    if (result.status === 'partial') {
+   726→      expect(result.written).toContain(`/dest/${files[0].filename}`);
+   727→      expect(result.failures.map((f) => f.filename)).toEqual([failOn]);
+   728→      expect(result.failures[0].message).toContain('E_DISK_FULL');
+   729→    }
+   730→    // old file intact (atomic rename never corrupted it)
+   731→    expectBuffersEqual(await fs.readFile(`/dest/${failOn}`), oldBytes, 'failed target uncorrupted');
+   732→    // no tmp leftovers
+   733→    const listing = await fs.listDir('/dest');
+   734→    expect(listing.every((n) => !n.endsWith('.tmp'))).toBe(true);
+   735→  });
+   736→
+   737→  test('writeExportPlan rejects unsafe filenames before touching the filesystem', async () => {
+   738→    const fs = new MemoryFs();
+   739→    const evil = [{ filename: '../evil.png', bytes: new Uint8Array([1, 2, 3]) }];
+   740→    await expectExportError(() => writeExportPlan(fs, '/dest', evil, { overwrite: true }), 'INVALID_FILENAME');
+   741→    await expectExportError(() => writeExportPlan(fs, '/dest', [{ filename: 'a/b.png', bytes: new Uint8Array([1]) }], { overwrite: true }), 'INVALID_FILENAME');
+   742→  });
+   743→
+   744→  test('metadata JSON parses and references its image artifact exactly', async () => {
+   745→    const project = mkProject();
+   746→    const plan = planExport(project, { scope: 'clip', format: 'sheet', sheet: { columns: 2, padding: 1 }, includeJson: true });
+   747→    const built = await buildAllArtifacts(plan);
+   748→    const jsonArtifact = built.find((b) => b.kind === 'json')!;
+   749→    const meta = JSON.parse(new TextDecoder().decode(jsonArtifact.bytes));
+   750→    expect(meta.image).toBe('golden-forge_idle_sheet.png');
+   751→    expect(meta.godot.sheet).toBe('golden-forge_idle_sheet.png');
+   752→    expect(meta.layout).toBe('grid');
+   753→    expect(meta.frames).toHaveLength(4);
+   754→    expect(meta.playback.sequence.length).toBeGreaterThanOrEqual(4);
+   755→  });
+   756→});
+   757→

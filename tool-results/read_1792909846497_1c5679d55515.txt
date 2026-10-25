@@ -1,0 +1,706 @@
+     1→// PixelForge AI — AI Studio panel (Task 9).
+     2→//
+     3→// Complete candidate workflow per plan §3.2:
+     4→//   Prompt (+ recipe preset, size, palette mode, count) → Generate →
+     5→//   Normalize v2 (worker) → Review (original vs normalized, provenance) →
+     6→//   Accept as layer / Accept as frame / Discard — and re-run normalization
+     7→//   with adjusted parameters at any time.
+     8→//
+     9→// NEVER overwrites existing artwork: imports are additive CommandBus
+    10→// transactions (new layer on the active frame / new frame in the clip).
+    11→// Cost numbers are ESTIMATES ("≈ $x.xx") or "n/a" — never exact charges.
+    12→
+    13→'use client'
+    14→
+    15→import {
+    16→  estimateCostUsd,
+    17→  requestSizeFor,
+    18→  RECIPE_PRESETS,
+    19→  SIZE_PRESETS,
+    20→  type Normalize2Options,
+    21→  type PaletteMode,
+    22→} from '@pixelforge/core'
+    23→
+    24→import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+    25→import { useEditor, getActiveClip } from '@/lib/pixelforge/store'
+    26→import { useAppSettings, getActiveProvider } from '@/lib/pixelforge/settings'
+    27→import { isDesktop } from '@/lib/pixelforge/desktop-bridge'
+    28→import {
+    29→  aiCandidateStore,
+    30→  loadAiHistoryFor,
+    31→  persistAiHistory,
+    32→  registerAcceptedTarget,
+    33→  useAiCandidates,
+    34→  type AiCandidate,
+    35→} from '@/lib/pixelforge/ai/candidates'
+    36→import { normalizeCandidate, cancelGeneration, submitGeneration } from '@/lib/pixelforge/ai/generate'
+    37→import { uid } from '@/lib/pixelforge/factory'
+    38→import { Button } from '@/components/ui/button'
+    39→import { Textarea } from '@/components/ui/textarea'
+    40→import { Switch } from '@/components/ui/switch'
+    41→import { Slider } from '@/components/ui/slider'
+    42→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+    43→import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+    44→import { useToast } from '@/hooks/use-toast'
+    45→import { Sparkles, Upload, Trash2, ImagePlus, Layers, Film, Loader2, History, RotateCcw, Ban, RefreshCw } from 'lucide-react'
+    46→
+    47→const SUGGESTIONS = [
+    48→  '32x32 farmer character, overalls and straw hat, front view, idle stance',
+    49→  'cute slime monster, green, bouncing pose',
+    50→  'space marine hero, chunky armor, side view',
+    51→  'treasure chest, closed, wooden with gold trim',
+    52→]
+    53→
+    54→/** Small PNG thumbnail of a normalized buffer (history strip). */
+    55→function makeThumb(buffer: Uint8ClampedArray, w: number, h: number): string {
+    56→  const canvas = document.createElement('canvas')
+    57→  canvas.width = w
+    58→  canvas.height = h
+    59→  const ctx = canvas.getContext('2d')
+    60→  if (!ctx) return ''
+    61→  ctx.putImageData(new ImageData(new Uint8ClampedArray(buffer), w, h), 0, 0)
+    62→  return canvas.toDataURL('image/png')
+    63→}
+    64→
+    65→function fmtCost(usd: number | null): string {
+    66→  if (usd === null) return 'cost n/a'
+    67→  if (usd === 0) return 'cost $0 (cache)'
+    68→  return `≈ $${usd.toFixed(3)} (estimate)`
+    69→}
+    70→
+    71→export function AiPanel() {
+    72→  const project = useEditor((s) => s.project)
+    73→  const importCandidateAsLayer = useEditor((s) => s.importCandidateAsLayer)
+    74→  const importCandidateAsFrame = useEditor((s) => s.importCandidateAsFrame)
+    75→  const { toast } = useToast()
+    76→  const [prompt, setPrompt] = useState('')
+    77→  const [recipeId, setRecipeId] = useState('character')
+    78→  const [size, setSize] = useState<{ w: number; h: number }>({ w: project.width, h: project.height })
+    79→  const [paletteMode, setPaletteMode] = useState<PaletteMode>('auto')
+    80→  const [maxColors, setMaxColors] = useState(16)
+    81→  const [removeBg, setRemoveBg] = useState(true)
+    82→  const [bgTolerance, setBgTolerance] = useState(48)
+    83→  const [outlineCleanup, setOutlineCleanup] = useState(true)
+    84→  const [count, setCount] = useState(1)
+    85→  const [seedOn, setSeedOn] = useState(false)
+    86→  const [seed, setSeed] = useState(1)
+    87→  const [busy, setBusy] = useState(false)
+    88→  const [selectedId, setSelectedId] = useState<string | null>(null)
+    89→  const [compare, setCompare] = useState(true)
+    90→  const [usageSpend, setUsageSpend] = useState<number | null>(null)
+    91→  const fileRef = useRef<HTMLInputElement>(null)
+    92→
+    93→  const candidates = useAiCandidates((s) => s.candidates)
+    94→  const history = useAiCandidates((s) => s.history)
+    95→
+    96→  // active generation engine (Settings → AI & MCP); null = built-in Z.AI
+    97→  const aiProviders = useAppSettings((s) => s.aiProviders)
+    98→  const activeProviderId = useAppSettings((s) => s.activeProviderId)
+    99→  const activeProvider = getActiveProvider({ aiProviders, activeProviderId })
+   100→  const secureMode = useAppSettings((s) => s.secureMode)
+   101→  const keyStatus = useAppSettings((s) => s.keyStatus)
+   102→  const aiMonthlyLimitUsd = useAppSettings((s) => s.aiMonthlyLimitUsd)
+   103→
+   104→  // Desktop: the renderer never holds key material, so getActiveProvider's
+   105→  // key check cannot see vault-stored keys — keyStatus (hasKey booleans from
+   106→  // main) is the source of truth there. Web: the legacy inline key decides.
+   107→  const desktopProvider = secureMode
+   108→    ? (aiProviders.find((p) => p.id === activeProviderId && p.enabled && p.kind !== 'anthropic' && (p.kind === 'zai' || keyStatus[p.id]?.hasKey)) ?? null)
+   109→    : null
+   110→  const effectiveProvider = activeProvider ?? desktopProvider
+   111→  const effectiveProviderId = effectiveProvider?.id ?? (secureMode ? activeProviderId || 'zai' : 'zai')
+   112→
+   113→  const selected = candidates.find((c) => c.id === selectedId) ?? candidates[0] ?? null
+   114→
+   115→  // per-project history lifecycle
+   116→  useEffect(() => {
+   117→    const pid = project.id
+   118→    if (!pid) return
+   119→    loadAiHistoryFor(pid)
+   120→    return () => persistAiHistory(pid)
+   121→  }, [project.id])
+   122→
+   123→  // desktop usage meter (bridge → main-process usage records)
+   124→  useEffect(() => {
+   125→    const bridgeAi = typeof window !== 'undefined' && isDesktop() ? window.pixelforge?.ai : undefined
+   126→    if (!bridgeAi) return
+   127→    let alive = true
+   128→    bridgeAi
+   129→      .usage()
+   130→      .then((u) => {
+   131→        if (alive) setUsageSpend(u.monthSpendUsd)
+   132→      })
+   133→      .catch(() => undefined)
+   134→    return () => {
+   135→      alive = false
+   136→    }
+   137→  }, [candidates.length])
+   138→
+   139→  const normalizeOpts: Normalize2Options = useMemo(
+   140→    () => ({
+   141→      targetW: size.w,
+   142→      targetH: size.h,
+   143→      removeBg,
+   144→      bgTolerance,
+   145→      paletteMode,
+   146→      palette: paletteMode === 'project' ? project.palette : [],
+   147→      maxColors,
+   148→      outlineCleanup,
+   149→    }),
+   150→    [size.w, size.h, removeBg, bgTolerance, paletteMode, project.palette, maxColors, outlineCleanup],
+   151→  )
+   152→
+   153→  // pre-flight cost estimate (ESTIMATE — provider pricing table; null = n/a)
+   154→  const preflightEstimate = effectiveProvider ? estimateCostUsd(effectiveProvider.kind, effectiveProvider.model, count) : null
+   155→
+   156→  const generate = useCallback(async () => {
+   157→    const text = prompt.trim()
+   158→    if (!text || busy) return
+   159→    setBusy(true)
+   160→    try {
+   161→      await submitGeneration(
+   162→        {
+   163→          prompt: text,
+   164→          recipeId,
+   165→          width: size.w,
+   166→          height: size.h,
+   167→          count,
+   168→          ...(seedOn && seed > 0 ? { seed } : {}),
+   169→          providerId: effectiveProviderId,
+   170→          providerLabel: effectiveProvider?.label ?? 'Z.AI (built-in)',
+   171→          model: effectiveProvider?.model ?? 'auto',
+   172→          normalize: normalizeOpts,
+   173→        },
+   174→        {
+   175→          // web prototype residual (13a): the key rides per-request; desktop
+   176→          // ignores these — the main process resolves the vault key itself
+   177→          webApiKey: effectiveProvider?.apiKey,
+   178→          webBaseUrl: effectiveProvider?.baseUrl,
+   179→          webProviderKind: effectiveProvider?.kind,
+   180→        },
+   181→      )
+   182→      toast({ title: 'Candidates ready', description: 'Review, then import as layer or frame.' })
+   183→      setSelectedId(aiCandidateStore.getState().candidates[0]?.id ?? null)
+   184→    } catch (err) {
+   185→      const msg = err instanceof Error ? err.message : 'Unknown error'
+   186→      // provider-side hiccups (5xx, "network error, retry later", connection
+   187→      // drops) are usually transient — say so instead of showing raw text
+   188→      const transient =
+   189→        /status 5\d\d|网络错误|请稍后|temporar|unavailable|ECONN|ETIMEDOUT|fetch failed|timeout|503|overloaded/i.test(msg)
+   190→      toast({
+   191→        title: 'Generation failed',
+   192→        description: transient
+   193→          ? 'The image service had a temporary network error — your connection is fine. Press Generate again in a moment.'
+   194→          : msg,
+   195→        variant: 'destructive',
+   196→      })
+   197→    } finally {
+   198→      setBusy(false)
+   199→    }
+   200→  }, [prompt, busy, recipeId, size, count, seedOn, seed, effectiveProvider, effectiveProviderId, normalizeOpts, toast])
+   201→
+   202→  const importFile = async (file: File) => {
+   203→    try {
+   204→      const src = await new Promise<string>((resolve, reject) => {
+   205→        const r = new FileReader()
+   206→        r.onload = () => resolve(r.result as string)
+   207→        r.onerror = () => reject(new Error('Could not read file'))
+   208→        r.readAsDataURL(file)
+   209→      })
+   210→      const candidate: AiCandidate = {
+   211→        id: uid('ai'),
+   212→        prompt: `import: ${file.name.slice(0, 60)}`,
+   213→        providerId: 'import',
+   214→        providerLabel: 'file import',
+   215→        model: '—',
+   216→        seed: null,
+   217→        requestSize: '—',
+   218→        width: size.w,
+   219→        height: size.h,
+   220→        createdAt: new Date().toISOString(),
+   221→        jobDurationMs: null,
+   222→        costEstimateUsd: null,
+   223→        cacheHit: false,
+   224→        recipe: 'free',
+   225→        originalSrc: src,
+   226→        // dimensions come from the decode inside normalizeCandidate
+   227→        originalW: 0,
+   228→        originalH: 0,
+   229→        normalizeOpts: normalizeOpts as unknown as Record<string, unknown>,
+   230→        normalized: null,
+   231→        status: 'normalizing',
+   232→        error: null,
+   233→      }
+   234→      aiCandidateStore.getState().upsert(candidate)
+   235→      setSelectedId(candidate.id)
+   236→      await normalizeCandidate(candidate.id, normalizeOpts)
+   237→      toast({ title: 'Image imported', description: 'Normalized — import as layer or frame.' })
+   238→    } catch (err) {
+   239→      toast({
+   240→        title: 'Import failed',
+   241→        description: err instanceof Error ? err.message : 'Unknown error',
+   242→        variant: 'destructive',
+   243→      })
+   244→    }
+   245→  }
+   246→
+   247→  const acceptAsLayer = (c: AiCandidate) => {
+   248→    if (!c.normalized) return
+   249→    const name = `AI: ${c.prompt.slice(0, 24)}`
+   250→    const ref = importCandidateAsLayer(new Uint8ClampedArray(c.normalized.buffer), name)
+   251→    if (!ref) return
+   252→    // re-import stays locked while the import exists; undo/delete unlocks it
+   253→    // (reconcileAcceptedCandidates flips the status back to 'review')
+   254→    registerAcceptedTarget(c.id, ref)
+   255→    aiCandidateStore.getState().patch(c.id, { status: 'accepted' })
+   256→    aiCandidateStore.getState().recordHistory({ ...c, thumbSrc: makeThumb(c.normalized.buffer, c.normalized.w, c.normalized.h) })
+   257→    if (project.id) persistAiHistory(project.id)
+   258→    toast({ title: 'Imported as new layer', description: 'Edit freely, undo, or delete the layer to discard.' })
+   259→  }
+   260→
+   261→  const acceptAsFrame = (c: AiCandidate) => {
+   262→    if (!c.normalized) return
+   263→    const st = useEditor.getState()
+   264→    const clip = getActiveClip(st)
+   265→    const insertAt = Math.min(st.activeFrameIndex, clip.frames.length - 1) + 1
+   266→    const name = `AI: ${c.prompt.slice(0, 24)}`
+   267→    const ref = importCandidateAsFrame(new Uint8ClampedArray(c.normalized.buffer), name)
+   268→    if (!ref) return
+   269→    registerAcceptedTarget(c.id, ref)
+   270→    aiCandidateStore.getState().patch(c.id, { status: 'accepted' })
+   271→    aiCandidateStore.getState().recordHistory({ ...c, thumbSrc: makeThumb(c.normalized.buffer, c.normalized.w, c.normalized.h) })
+   272→    if (project.id) persistAiHistory(project.id)
+   273→    toast({ title: 'Imported as new frame', description: `Inserted at position ${insertAt + 1}.` })
+   274→  }
+   275→
+   276→  const discard = (id: string) => {
+   277→    aiCandidateStore.getState().patch(id, { status: 'rejected' })
+   278→    aiCandidateStore.getState().remove(id)
+   279→    if (selectedId === id) setSelectedId(null)
+   280→  }
+   281→
+   282→  const renormalize = async (c: AiCandidate) => {
+   283→    const updated = await normalizeCandidate(c.id, normalizeOpts)
+   284→    if (updated?.status === 'error') {
+   285→      toast({ title: 'Normalization failed', description: updated.error ?? undefined, variant: 'destructive' })
+   286→    } else {
+   287→      toast({ title: 'Re-normalized with current settings' })
+   288→    }
+   289→  }
+   290→
+   291→  const restoreRecipe = (entry: (typeof history)[number]) => {
+   292→    setPrompt(entry.prompt)
+   293→    setRecipeId(entry.recipe)
+   294→    setSize({ w: entry.width, h: entry.height })
+   295→    toast({ title: 'Recipe restored', description: 'Press Generate to re-run this recipe.' })
+   296→  }
+   297→
+   298→  const busyCandidate = candidates.some((c) => c.status === 'normalizing')
+   299→
+   300→  return (
+   301→    <TooltipProvider delayDuration={200}>
+   302→      <div className="mx-auto flex h-full w-full max-w-[520px] flex-col gap-3 overflow-y-auto pixelforge-scroll p-3">
+   303→        {/* ------------------------------------------------ prompt + recipe */}
+   304→        <div>
+   305→          <div className="mb-1.5 flex items-center gap-1.5 font-mono text-xs uppercase tracking-wider text-zinc-400">
+   306→            <Sparkles className="h-3.5 w-3.5 text-teal-400" /> Text → sprite
+   307→          </div>
+   308→          <Textarea
+   309→            value={prompt}
+   310→            onChange={(e) => setPrompt(e.target.value)}
+   311→            placeholder={`Describe a sprite for the ${size.w}×${size.h} canvas…`}
+   312→            className="min-h-[64px] resize-none border-zinc-800 bg-zinc-900 font-mono text-xs"
+   313→            aria-label="Sprite description"
+   314→          />
+   315→          <div className="mt-1.5 flex flex-wrap gap-1">
+   316→            {SUGGESTIONS.map((s) => (
+   317→              <button
+   318→                key={s}
+   319→                type="button"
+   320→                onClick={() => setPrompt(s)}
+   321→                className="rounded-full border border-zinc-800 bg-zinc-900 px-2 py-0.5 text-[10px] text-zinc-400 hover:border-teal-500/50 hover:text-teal-300"
+   322→              >
+   323→                {s.split(',')[0]}
+   324→              </button>
+   325→            ))}
+   326→          </div>
+   327→
+   328→          {/* recipe presets */}
+   329→          <div className="mt-2 grid grid-cols-2 gap-1">
+   330→            {RECIPE_PRESETS.map((r) => (
+   331→              <button
+   332→                key={r.id}
+   333→                type="button"
+   334→                onClick={() => setRecipeId(r.id)}
+   335→                title={r.description}
+   336→                aria-pressed={recipeId === r.id}
+   337→                className={`rounded-md border px-2 py-1 text-left font-mono text-[10px] ${
+   338→                  recipeId === r.id ? 'border-teal-500/60 bg-teal-900/30 text-teal-300' : 'border-zinc-800 bg-zinc-900 text-zinc-400 hover:border-zinc-700'
+   339→                }`}
+   340→              >
+   341→                {r.label}
+   342→              </button>
+   343→            ))}
+   344→          </div>
+   345→
+   346→          {/* size presets */}
+   347→          <div className="mt-2 flex items-center gap-1.5">
+   348→            <span className="w-14 shrink-0 font-mono text-[10px] text-zinc-400">SIZE</span>
+   349→            <Select
+   350→              value={`${size.w}x${size.h}`}
+   351→              onValueChange={(v) => {
+   352→                const [w, h] = v.split('x').map((n) => parseInt(n, 10))
+   353→                if (w && h) setSize({ w, h })
+   354→              }}
+   355→            >
+   356→              <SelectTrigger className="h-7 flex-1 border-zinc-800 bg-zinc-900 font-mono text-[11px]" aria-label="Sprite size">
+   357→                <SelectValue />
+   358→              </SelectTrigger>
+   359→              <SelectContent>
+   360→                {SIZE_PRESETS.map((p) => (
+   361→                  <SelectItem key={p.label} value={`${p.w}x${p.h}`} className="font-mono text-[11px]">
+   362→                    {p.label}
+   363→                  </SelectItem>
+   364→                ))}
+   365→                {!SIZE_PRESETS.some((p) => p.w === project.width && p.h === project.height) && (
+   366→                  <SelectItem value={`${project.width}x${project.height}`} className="font-mono text-[11px]">
+   367→                    canvas {project.width}×{project.height}
+   368→                  </SelectItem>
+   369→                )}
+   370→              </SelectContent>
+   371→            </Select>
+   372→            <Button
+   373→              variant="ghost"
+   374→              size="sm"
+   375→              className="h-7 shrink-0 px-2 font-mono text-[10px] text-zinc-400"
+   376→              onClick={() => setSize({ w: project.width, h: project.height })}
+   377→              title="Use the canvas size"
+   378→            >
+   379→              canvas
+   380→            </Button>
+   381→          </div>
+   382→
+   383→          {/* count + seed */}
+   384→          <div className="mt-1.5 flex items-center gap-1.5">
+   385→            <span className="w-14 shrink-0 font-mono text-[10px] text-zinc-400">CANDIDATES</span>
+   386→            {[1, 2, 3, 4].map((n) => (
+   387→              <button
+   388→                key={n}
+   389→                type="button"
+   390→                onClick={() => setCount(n)}
+   391→                aria-pressed={count === n}
+   392→                className={`h-6 w-6 rounded border font-mono text-[10px] ${
+   393→                  count === n ? 'border-teal-500/60 bg-teal-900/30 text-teal-300' : 'border-zinc-800 bg-zinc-900 text-zinc-400'
+   394→                }`}
+   395→              >
+   396→                {n}
+   397→              </button>
+   398→            ))}
+   399→            <label className="ml-auto flex items-center gap-1 font-mono text-[10px] text-zinc-400">
+   400→              seed
+   401→              <Switch checked={seedOn} onCheckedChange={setSeedOn} aria-label="Use seed" className="scale-90" />
+   402→            </label>
+   403→            {seedOn && (
+   404→              <input
+   405→                value={seed}
+   406→                onChange={(e) => setSeed(Math.max(1, Math.min(999999, parseInt(e.target.value, 10) || 1)))}
+   407→                inputMode="numeric"
+   408→                aria-label="Seed value"
+   409→                className="h-6 w-14 rounded border border-zinc-800 bg-zinc-900 px-1 font-mono text-[10px] text-zinc-200"
+   410→              />
+   411→            )}
+   412→          </div>
+   413→
+   414→          <Button
+   415→            onClick={generate}
+   416→            disabled={busy || !prompt.trim()}
+   417→            className="mt-2 h-8 w-full bg-teal-600 font-mono text-xs text-white hover:bg-teal-500"
+   418→          >
+   419→            {busy || busyCandidate ? (
+   420→              <>
+   421→                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> Generating…
+   422→              </>
+   423→            ) : (
+   424→              <>
+   425→                <Sparkles className="mr-1.5 h-3.5 w-3.5" /> Generate sprite
+   426→              </>
+   427→            )}
+   428→          </Button>
+   429→          {(busy || busyCandidate) && (
+   430→            <Button variant="outline" className="mt-1 h-7 w-full border-zinc-800 font-mono text-[10px] text-zinc-400" onClick={() => { cancelGeneration(); setBusy(false) }}>
+   431→              <Ban className="mr-1 h-3 w-3" /> Cancel
+   432→            </Button>
+   433→          )}
+   434→          <p className="mt-1 text-center font-mono text-[9px] leading-relaxed text-zinc-400">
+   435→            engine: {effectiveProvider ? effectiveProvider.label : 'Z.AI built-in'} · {requestSizeFor(size.w, size.h)} request
+   436→            <br />
+   437→            {fmtCost(preflightEstimate)}
+   438→            {usageSpend !== null && aiMonthlyLimitUsd > 0 ? ` · month ≈ $${usageSpend.toFixed(2)} / $${aiMonthlyLimitUsd.toFixed(2)}` : ''}
+   439→            {secureMode ? '' : ' · change in Settings → AI & MCP'}
+   440→          </p>
+   441→        </div>
+   442→
+   443→        <div className="flex items-center gap-2">
+   444→          <div className="h-px flex-1 bg-zinc-800" />
+   445→          <span className="font-mono text-[10px] text-zinc-400">OR IMPORT</span>
+   446→          <div className="h-px flex-1 bg-zinc-800" />
+   447→        </div>
+   448→        <input
+   449→          ref={fileRef}
+   450→          type="file"
+   451→          accept="image/png,image/jpeg,image/webp"
+   452→          className="hidden"
+   453→          onChange={(e) => {
+   454→            const f = e.target.files?.[0]
+   455→            if (f) void importFile(f)
+   456→            e.target.value = ''
+   457→          }}
+   458→        />
+   459→        <Button variant="outline" className="h-8 border-zinc-800 font-mono text-xs text-zinc-300" onClick={() => fileRef.current?.click()}>
+   460→          <Upload className="mr-1.5 h-3.5 w-3.5" /> Import image file
+   461→        </Button>
+   462→
+   463→        {/* ------------------------------------------------ normalize pipeline */}
+   464→        <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-2.5">
+   465→          <div className="mb-2 font-mono text-[10px] uppercase tracking-wider text-zinc-400">Normalize v2 pipeline</div>
+   466→          <div className="space-y-2 text-xs">
+   467→            <label className="flex items-center justify-between gap-2">
+   468→              <span className="text-zinc-300">Remove background</span>
+   469→              <Switch checked={removeBg} onCheckedChange={setRemoveBg} aria-label="Remove background" />
+   470→            </label>
+   471→            {removeBg && (
+   472→              <div className="flex items-center gap-2">
+   473→                <span className="w-16 font-mono text-[10px] text-zinc-400">TOLERANCE</span>
+   474→                <Slider value={[bgTolerance]} min={4} max={128} step={4} onValueChange={(v) => setBgTolerance(v[0] ?? 48)} aria-label="Background tolerance" />
+   475→                <span className="w-7 text-right font-mono text-[10px] text-zinc-400">{bgTolerance}</span>
+   476→              </div>
+   477→            )}
+   478→            <div className="flex items-center gap-2">
+   479→              <span className="w-16 shrink-0 font-mono text-[10px] text-zinc-400">PALETTE</span>
+   480→              <Select value={paletteMode} onValueChange={(v) => setPaletteMode(v as PaletteMode)}>
+   481→                <SelectTrigger className="h-7 flex-1 border-zinc-800 bg-zinc-900 font-mono text-[11px]" aria-label="Palette mode">
+   482→                  <SelectValue />
+   483→                </SelectTrigger>
+   484→                <SelectContent>
+   485→                  <SelectItem value="auto" className="font-mono text-[11px]">auto · median cut ≤{maxColors}</SelectItem>
+   486→                  <SelectItem value="project" className="font-mono text-[11px]">project palette ({project.palette.length})</SelectItem>
+   487→                  <SelectItem value="off" className="font-mono text-[11px]">full color</SelectItem>
+   488→                </SelectContent>
+   489→              </Select>
+   490→            </div>
+   491→            {paletteMode === 'auto' && (
+   492→              <div className="flex items-center gap-2">
+   493→                <span className="w-16 font-mono text-[10px] text-zinc-400">COLORS</span>
+   494→                <Slider value={[maxColors]} min={2} max={64} step={1} onValueChange={(v) => setMaxColors(v[0] ?? 16)} aria-label="Maximum colors" />
+   495→                <span className="w-7 text-right font-mono text-[10px] text-zinc-400">{maxColors}</span>
+   496→              </div>
+   497→            )}
+   498→            <label className="flex items-center justify-between gap-2">
+   499→              <span className="text-zinc-300">Outline cleanup</span>
+   500→              <Switch checked={outlineCleanup} onCheckedChange={setOutlineCleanup} aria-label="Outline fringe cleanup" />
+   501→            </label>
+   502→            <Button
+   503→              variant="ghost"
+   504→              size="sm"
+   505→              className="h-6 w-full font-mono text-[10px] text-zinc-400"
+   506→              onClick={() => selected && void renormalize(selected)}
+   507→              disabled={!selected || !selected.originalSrc}
+   508→            >
+   509→              <RefreshCw className="mr-1 h-3 w-3" /> Re-run on selected
+   510→            </Button>
+   511→          </div>
+   512→        </div>
+   513→
+   514→        {/* ------------------------------------------------ candidates */}
+   515→        {candidates.length > 0 && (
+   516→          <div>
+   517→            <div className="mb-1.5 font-mono text-xs uppercase tracking-wider text-zinc-400">Candidates ({candidates.length})</div>
+   518→            {/* py-2 keeps the corner discard badges inside the scroll clip */}
+   519→            <div className="pixelforge-scroll flex gap-2 overflow-x-auto py-2">
+   520→              {candidates.map((c) => (
+   521→                <div key={c.id} className="relative shrink-0">
+   522→                  <button
+   523→                    type="button"
+   524→                    onClick={() => setSelectedId(c.id)}
+   525→                    className={`block h-16 w-16 overflow-hidden rounded-md border ${
+   526→                      c.id === selected?.id ? 'border-teal-400 ring-1 ring-teal-400/60' : 'border-zinc-700'
+   527→                    }`}
+   528→                    aria-label={`Candidate from ${c.createdAt}`}
+   529→                    aria-pressed={c.id === selected?.id}
+   530→                  >
+   531→                    {c.normalized ? (
+   532→                      <img src={makeThumb(c.normalized.buffer, c.normalized.w, c.normalized.h)} alt="Normalized candidate" className="pixelforge-checker h-full w-full object-contain" />
+   533→                    ) : c.originalSrc ? (
+   534→                      <img src={c.originalSrc} alt="Original candidate" className="h-full w-full object-cover" />
+   535→                    ) : (
+   536→                      <span className="flex h-full w-full items-center justify-center text-[9px] text-zinc-500">…</span>
+   537→                    )}
+   538→                  </button>
+   539→                  {c.status === 'normalizing' && <span className="absolute left-1 top-1"><Loader2 className="h-3 w-3 animate-spin text-teal-300" /></span>}
+   540→                  <button
+   541→                    type="button"
+   542→                    onClick={() => discard(c.id)}
+   543→                    className="absolute -right-1.5 -top-1.5 flex h-6 w-6 items-center justify-center rounded-full border border-zinc-600 bg-zinc-900 text-zinc-200 shadow-md before:absolute before:-inset-1.5 before:rounded-full before:content-[''] hover:border-red-400/60 hover:bg-red-500/20 hover:text-red-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 touch-manipulation"
+   544→                    aria-label="Discard candidate"
+   545→                    title="Discard candidate"
+   546→                  >
+   547→                    <Trash2 className="h-3.5 w-3.5" />
+   548→                  </button>
+   549→                </div>
+   550→              ))}
+   551→            </div>
+   552→          </div>
+   553→        )}
+   554→
+   555→        {/* ------------------------------------------------ review card */}
+   556→        {selected && (
+   557→          <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-2.5">
+   558→            <div className="mb-2 flex items-center justify-between">
+   559→              <span className="font-mono text-[10px] uppercase tracking-wider text-zinc-400">Review</span>
+   560→              <label className="flex items-center gap-1 font-mono text-[10px] text-zinc-400">
+   561→                compare
+   562→                <Switch checked={compare} onCheckedChange={setCompare} aria-label="Compare original and normalized" className="scale-90" />
+   563→              </label>
+   564→            </div>
+   565→            <div className="flex items-stretch gap-2">
+   566→              <figure className="min-w-0 flex-1">
+   567→                <div className="pixelforge-checker h-20 overflow-hidden rounded-md border border-zinc-700">
+   568→                  {selected.originalSrc ? (
+   569→                    <img src={selected.originalSrc} alt="Original generated image" className="h-full w-full object-contain" />
+   570→                  ) : (
+   571→                    <span className="flex h-full items-center justify-center font-mono text-[9px] text-zinc-500">no image</span>
+   572→                  )}
+   573→                </div>
+   574→                <figcaption className="mt-0.5 text-center font-mono text-[9px] text-zinc-500">original{selected.originalW ? ` ${selected.originalW}×${selected.originalH}` : ''}</figcaption>
+   575→              </figure>
+   576→              {compare && (
+   577→                <figure className="min-w-0 flex-1">
+   578→                  <div className="pixelforge-checker h-20 overflow-hidden rounded-md border border-teal-700/60">
+   579→                    {selected.normalized ? (
+   580→                      <img src={makeThumb(selected.normalized.buffer, selected.normalized.w, selected.normalized.h)} alt="Normalized pixel art" className="h-full w-full object-contain [image-rendering:pixelated]" />
+   581→                    ) : (
+   582→                      <span className="flex h-full items-center justify-center font-mono text-[9px] text-zinc-500">normalizing…</span>
+   583→                    )}
+   584→                  </div>
+   585→                  <figcaption className="mt-0.5 text-center font-mono text-[9px] text-teal-300/80">
+   586→                    v2 · {size.w}×{size.h}
+   587→                    {selected.normalized ? ` · ${selected.normalized.colors} colors` : ''}
+   588→                  </figcaption>
+   589→                </figure>
+   590→              )}
+   591→            </div>
+   592→            {/* provenance (plan §3.4) */}
+   593→            <p className="mt-1.5 font-mono text-[9px] leading-relaxed text-zinc-500">
+   594→              {selected.providerLabel} · {selected.model} · {selected.recipe} · {selected.requestSize}
+   595→              {selected.seed !== null ? ` · seed ${selected.seed}` : ''}
+   596→              {selected.cacheHit ? ' · cache hit ($0)' : ''}
+   597→              {selected.jobDurationMs !== null ? ` · ${(selected.jobDurationMs / 1000).toFixed(1)}s` : ''}
+   598→              <br />
+   599→              {fmtCost(selected.costEstimateUsd)} · {new Date(selected.createdAt).toLocaleTimeString()}
+   600→            </p>
+   601→            {selected.error && <p className="mt-1 font-mono text-[9px] leading-relaxed text-red-400">{selected.error}</p>}
+   602→            <div className="mt-2 grid grid-cols-2 gap-1.5">
+   603→              <Tooltip>
+   604→                <TooltipTrigger asChild>
+   605→                  <Button
+   606→                    className="h-8 bg-teal-600 font-mono text-xs text-white hover:bg-teal-500"
+   607→                    onClick={() => acceptAsLayer(selected)}
+   608→                    disabled={!selected.normalized || selected.status === 'accepted'}
+   609→                  >
+   610→                    <Layers className="mr-1 h-3.5 w-3.5" /> As layer
+   611→                  </Button>
+   612→                </TooltipTrigger>
+   613→                <TooltipContent>
+   614→                  {selected.status === 'accepted'
+   615→                    ? 'Already imported — undo (Ctrl+Z) or delete the layer to import again'
+   616→                    : 'New top layer in current frame (undoable)'}
+   617→                </TooltipContent>
+   618→              </Tooltip>
+   619→              <Tooltip>
+   620→                <TooltipTrigger asChild>
+   621→                  <Button
+   622→                    variant="outline"
+   623→                    className="h-8 border-teal-700/60 font-mono text-xs text-teal-300 hover:bg-teal-900/30"
+   624→                    onClick={() => acceptAsFrame(selected)}
+   625→                    disabled={!selected.normalized || selected.status === 'accepted'}
+   626→                  >
+   627→                    <Film className="mr-1 h-3.5 w-3.5" /> As frame
+   628→                  </Button>
+   629→                </TooltipTrigger>
+   630→                <TooltipContent>
+   631→                  {selected.status === 'accepted'
+   632→                    ? 'Already imported — undo (Ctrl+Z) or delete the frame to import again'
+   633→                    : 'New frame in current clip (undoable)'}
+   634→                </TooltipContent>
+   635→              </Tooltip>
+   636→            </div>
+   637→          </div>
+   638→        )}
+   639→
+   640→        {/* ------------------------------------------------ history */}
+   641→        {history.length > 0 && (
+   642→          <div>
+   643→            <div className="mb-1.5 flex items-center gap-1.5 font-mono text-xs uppercase tracking-wider text-zinc-400">
+   644→              <History className="h-3.5 w-3.5" /> History ({history.length})
+   645→            </div>
+   646→            <div className="pixelforge-scroll max-h-40 space-y-1 overflow-y-auto pr-1">
+   647→              {history.map((h) => (
+   648→                <div key={h.id} className="flex items-center gap-2 rounded-md border border-zinc-800 bg-zinc-900/60 p-1.5">
+   649→                  {h.thumbSrc ? (
+   650→                    <img src={h.thumbSrc} alt="Generation history thumbnail" className="pixelforge-checker h-8 w-8 rounded border border-zinc-800 object-contain [image-rendering:pixelated]" />
+   651→                  ) : (
+   652→                    <span className="h-8 w-8 rounded border border-zinc-800" />
+   653→                  )}
+   654→                  <div className="min-w-0 flex-1">
+   655→                    <p className="truncate font-mono text-[10px] text-zinc-300">{h.prompt.slice(0, 48)}</p>
+   656→                    <p className="font-mono text-[9px] text-zinc-500">
+   657→                      {h.providerLabel} · {h.width}×{h.height} · {new Date(h.createdAt).toLocaleDateString()}
+   658→                    </p>
+   659→                  </div>
+   660→                  <Button variant="ghost" size="sm" className="h-6 shrink-0 px-1.5 font-mono text-[9px] text-zinc-400" onClick={() => restoreRecipe(h)} title="Restore this recipe into the form">
+   661→                    <RotateCcw className="h-3 w-3" />
+   662→                  </Button>
+   663→                </div>
+   664→              ))}
+   665→            </div>
+   666→          </div>
+   667→        )}
+   668→
+   669→        {candidates.length === 0 && (
+   670→          <div className="flex flex-1 flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-zinc-800 p-6 text-center">
+   671→            <ImagePlus className="h-6 w-6 text-zinc-500" />
+   672→            <p className="max-w-[220px] font-mono text-[10px] leading-relaxed text-zinc-400">
+   673→              Candidates appear here. Imports are always added as new editable layers or frames — your existing art is
+   674→              never overwritten.
+   675→            </p>
+   676→          </div>
+   677→        )}
+   678→      </div>
+   679→    </TooltipProvider>
+   680→  )
+   681→}
+   682→
+   683→// dev/smoke probe: the Electron AI smoke drives the REAL pipeline —
+   684→// submitGeneration → bridge → main job runner → events → candidate store →
+   685→// CommandBus import/undo — without touching React internals
+   686→if (typeof window !== 'undefined') {
+   687→  ;(window as unknown as Record<string, unknown>).__pfAi = {
+   688→    store: aiCandidateStore,
+   689→    submit: submitGeneration,
+   690→    normalize: normalizeCandidate,
+   691→    cancel: cancelGeneration,
+   692→    importAsLayer: (buffer: Uint8ClampedArray, name: string) => useEditor.getState().importCandidateAsLayer(buffer, name),
+   693→    importAsFrame: (buffer: Uint8ClampedArray, name: string) => useEditor.getState().importCandidateAsFrame(buffer, name),
+   694→    undo: () => useEditor.getState().undo(),
+   695→    snapshot: () => {
+   696→      const p = useEditor.getState().project
+   697→      return {
+   698→        clips: p.clips.length,
+   699→        layers: p.clips.reduce((n, c) => n + c.layers.length, 0),
+   700→        frames: p.clips.reduce((n, c) => n + c.frames.length, 0),
+   701→        topLayerName: p.clips[0]?.layers.at(-1)?.name ?? null,
+   702→      }
+   703→    },
+   704→  }
+   705→}
+   706→

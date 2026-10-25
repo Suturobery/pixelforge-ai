@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!-- Strict enforcing CSP for the bundled shell (v3.1 §12 Task 1).
+         The dev-server renderer keeps Report-Only until the Task 4 port. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'"
+    />
+    <title>PixelForge AI — Desktop Shell</title>
+    <link rel="stylesheet" href="shell.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header>
+        <span class="mark" aria-hidden="true"></span>
+        <h1>PixelForge AI</h1>
+      </header>
+      <p class="sub">Desktop shell ready — the editor renderer ports into this window in Task 4 (v3.1 §12).</p>
+      <section class="status" aria-label="Preload bridge status">
+        <h2>Preload bridge</h2>
+        <dl id="status">
+          <div><dt>bridge</dt><dd id="st-bridge">checking…</dd></div>
+          <div><dt>ping</dt><dd id="st-ping">—</dd></div>
+          <div><dt>version</dt><dd id="st-version">—</dd></div>
+          <div><dt>electron</dt><dd id="st-electron">—</dd></div>
+          <div><dt>platform</dt><dd id="st-platform">—</dd></div>
+        </dl>
+      </section>
+      <p class="hint" id="hint"></p>
+    </main>
+    <script src="shell.js"></script>
+  </body>
+</html>
