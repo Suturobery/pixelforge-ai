@@ -14,24 +14,23 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Z.ai Code Scaffold - AI-Powered Development",
-  description: "Modern Next.js scaffold optimized for AI-powered development with Z.ai. Built with TypeScript, Tailwind CSS, and shadcn/ui.",
-  keywords: ["Z.ai", "Next.js", "TypeScript", "Tailwind CSS", "shadcn/ui", "AI development", "React"],
-  authors: [{ name: "Z.ai Team" }],
+  title: "PixelForge AI — Motion Lab",
+  description: "Pixel art editor with part-based motion composer: five animation presets, heuristic motion QA, and sprite sheet / GIF export.",
+  keywords: ["PixelForge AI", "pixel art", "sprite animation", "motion presets", "pixel editor", "sprite sheet", "GIF export"],
+  authors: [{ name: "PixelForge AI" }],
   icons: {
     icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
   },
   openGraph: {
-    title: "Z.ai Code Scaffold",
-    description: "AI-powered development with modern React stack",
-    url: "https://chat.z.ai",
-    siteName: "Z.ai",
+    title: "PixelForge AI — Motion Lab",
+    description: "Pixel art editor with part-based motion composer and animation presets",
+    siteName: "PixelForge AI",
     type: "website",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Z.ai Code Scaffold",
-    description: "AI-powered development with modern React stack",
+    title: "PixelForge AI — Motion Lab",
+    description: "Pixel art editor with part-based motion composer and animation presets",
   },
 };
 
