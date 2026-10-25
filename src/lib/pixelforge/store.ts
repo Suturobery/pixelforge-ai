@@ -10,7 +10,7 @@ import type {
 } from './types'
 import type { PresetVersion } from './presets'
 import { cloneGrid } from './sprite'
-import { DEFAULT_PARAMS } from './presets'
+import { DEFAULT_PARAMS, getPresetSet } from './presets'
 import type { PlaybackMode } from './playback'
 import { getFixture, type FixtureId } from './fixtures'
 
@@ -77,6 +77,8 @@ export interface EditorStore {
   setPartRect: (partId: string, rect: Rect) => void
 
   loadTemplate: (id: FixtureId) => void
+  /** Load an AI-generated (or imported) grid with a rig; undo-safe + autosaved. */
+  loadGrid: (grid: PixelGrid, rig: Rig) => void
   save: () => void
   load: () => boolean
   undo: () => void
@@ -197,6 +199,22 @@ export const useEditor = create<EditorStore>((set, get) => ({
       grid,
       rig,
       template: id,
+      durationOverrides: [],
+      currentStep: 0,
+      undoStack: [...s.undoStack.slice(-MAX_UNDO + 1), snapshot],
+      redoStack: [],
+      savedAt: null,
+    })
+    get().save()
+  },
+
+  loadGrid: (grid, rig) => {
+    const s = get()
+    const snapshot = pushUndo(s)
+    set({
+      grid,
+      rig,
+      template: 'custom',
       durationOverrides: [],
       currentStep: 0,
       undoStack: [...s.undoStack.slice(-MAX_UNDO + 1), snapshot],

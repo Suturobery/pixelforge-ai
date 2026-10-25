@@ -14,6 +14,7 @@ import { PreviewPlayer } from '@/components/pixelforge/preview-player'
 import { MotionPanel } from '@/components/pixelforge/motion-panel'
 import { RigPanel } from '@/components/pixelforge/rig-panel'
 import { FramesStrip } from '@/components/pixelforge/frames-strip'
+import { AiPanel } from '@/components/pixelforge/ai-panel'
 
 const TEMPLATES: { id: FixtureId; label: string }[] = [
   { id: 'simple', label: 'Simple humanoid 32×32' },
@@ -79,10 +80,10 @@ export default function Home() {
       <header className="sticky top-0 z-20 border-b border-stone-200 bg-white/95 backdrop-blur">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-2 px-4 py-2.5">
           <h1 className="text-sm font-bold tracking-tight">
-            PixelForge <span className="text-emerald-600">Motion Lab</span>
+            PixelForge <span className="text-emerald-600">AI</span>
           </h1>
           <span className="hidden text-[11px] text-stone-400 sm:inline">
-            Task 10 · five presets · part-based composer · heuristic QA
+            AI sprite generation · five motion presets · part-based composer · heuristic QA
           </span>
           <div className="ml-auto flex items-center gap-1.5">
             <select
@@ -126,8 +127,9 @@ export default function Home() {
 
       {/* Main */}
       <main className="mx-auto grid w-full max-w-7xl flex-1 grid-cols-1 gap-4 p-4 lg:grid-cols-[minmax(0,5fr)_minmax(0,4fr)] xl:grid-cols-[minmax(0,5fr)_minmax(0,3fr)_minmax(0,4fr)]">
-        {/* Left: editor */}
+        {/* Left: AI generation + editor */}
         <section aria-label="Sprite editor" className="flex flex-col gap-3">
+          <AiPanel />
           <div className="flex flex-wrap items-center gap-1.5 rounded-lg border bg-white p-2">
             {(['pencil', 'eraser', 'picker'] as const).map((t) => (
               <button
