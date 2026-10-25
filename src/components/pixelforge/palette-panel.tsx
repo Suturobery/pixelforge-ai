@@ -16,6 +16,7 @@ import { useAppSettings } from '@/lib/pixelforge/settings'
 import { savePanelRaw, onPanelsHydrated } from '@/lib/pixelforge/panel-storage'
 import { FloatPill } from '@/components/pixelforge/float-pill'
 import { ColorPickerContent } from '@/components/pixelforge/color-picker'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
   Select,
@@ -210,83 +211,104 @@ export function PalettePanel() {
         <span className="min-w-0 flex-1 truncate font-mono text-[10px] uppercase tracking-wider text-zinc-300">
           Palette {palette.length}
         </span>
-        <button
-          type="button"
-          className="shrink-0 rounded p-0.5 text-zinc-500 hover:text-zinc-200"
-          onClick={() => setOpen(false)}
-          aria-label="Hide palette panel"
-          title="Hide (click the palette pill to bring it back)"
-        >
-          <EyeOff className="h-3 w-3" />
-        </button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              className="shrink-0 rounded p-0.5 text-zinc-400 hover:text-zinc-100"
+              onClick={() => setOpen(false)}
+              aria-label="Hide palette panel"
+            >
+              <EyeOff className="h-3 w-3" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="left">Hide — click the palette pill to bring it back</TooltipContent>
+        </Tooltip>
       </div>
 
       {/* fg / bg pair + swap */}
       <div className="flex items-center justify-center gap-2 px-2.5 pb-1 pt-2">
         <Popover>
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              className="h-9 w-9 rounded-md border border-zinc-600 shadow-inner"
-              style={{ background: primary }}
-              aria-label={`Primary color ${primary} — click to edit`}
-              title="Primary color — click to edit"
-            />
-          </PopoverTrigger>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  className="h-9 w-9 rounded-md border border-zinc-600 shadow-inner"
+                  style={{ background: primary }}
+                  aria-label={`Primary color ${primary} — click to edit`}
+                />
+              </PopoverTrigger>
+            </TooltipTrigger>
+            <TooltipContent side="right">Primary color — click to edit</TooltipContent>
+          </Tooltip>
           <PopoverContent side="right" align="start" className="w-56 p-3" onOpenAutoFocus={(e) => e.preventDefault()}>
             <ColorPickerContent color={primary} onChange={setPrimary} />
           </PopoverContent>
         </Popover>
         <Popover>
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              className="-ml-4 mt-5 h-7 w-7 rounded-md border border-zinc-600"
-              style={{ background: secondary }}
-              aria-label={`Secondary color ${secondary} — click to edit`}
-              title="Secondary color — click to edit"
-            />
-          </PopoverTrigger>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  className="-ml-4 mt-5 h-7 w-7 rounded-md border border-zinc-600"
+                  style={{ background: secondary }}
+                  aria-label={`Secondary color ${secondary} — click to edit`}
+                />
+              </PopoverTrigger>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Secondary color — click to edit</TooltipContent>
+          </Tooltip>
           <PopoverContent side="right" align="start" className="w-56 p-3" onOpenAutoFocus={(e) => e.preventDefault()}>
             <ColorPickerContent color={secondary} onChange={setSecondary} />
           </PopoverContent>
         </Popover>
-        <button
-          type="button"
-          className="ml-auto rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-teal-300"
-          onClick={swapColors}
-          aria-label="Swap primary and secondary colors"
-          title="Swap colors (X)"
-        >
-          <ArrowLeftRight className="h-3.5 w-3.5" />
-        </button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              className="ml-auto rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-teal-300"
+              onClick={swapColors}
+              aria-label="Swap primary and secondary colors"
+            >
+              <ArrowLeftRight className="h-3.5 w-3.5" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="left">Swap colors (X)</TooltipContent>
+        </Tooltip>
       </div>
 
       {/* document swatches — click: primary · right-click: secondary */}
       <div className="px-2.5 pb-1">
         <div className="grid grid-cols-2 gap-1" role="listbox" aria-label="Document palette">
           {palette.map((c) => (
-            <button
-              key={c}
-              type="button"
-              role="option"
-              aria-selected={primary === c}
-              aria-label={`Color ${c}`}
-              title={`${c} — click: primary · right-click: secondary`}
-              onClick={() => setPrimary(c)}
-              onContextMenu={(e) => {
-                e.preventDefault()
-                setSecondary(c)
-              }}
-              className={`h-7 w-full rounded-md border transition ${
-                primary === c
-                  ? 'border-teal-300 ring-1 ring-teal-300/60'
-                  : secondary === c
-                    ? 'border-zinc-400 ring-1 ring-zinc-400/50'
-                    : 'border-zinc-700 hover:border-zinc-500'
-              }`}
-              style={{ background: c }}
-            />
+            <Tooltip key={c}>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={primary === c}
+                  aria-label={`Color ${c}`}
+                  onClick={() => setPrimary(c)}
+                  onContextMenu={(e) => {
+                    e.preventDefault()
+                    setSecondary(c)
+                  }}
+                  className={`h-7 w-full rounded-md border transition ${
+                    primary === c
+                      ? 'border-teal-300 ring-1 ring-teal-300/60'
+                      : secondary === c
+                        ? 'border-zinc-400 ring-1 ring-zinc-400/50'
+                        : 'border-zinc-700 hover:border-zinc-500'
+                  }`}
+                  style={{ background: c }}
+                />
+              </TooltipTrigger>
+              <TooltipContent side="left" className="font-mono">
+                {c.toUpperCase()} — click: primary · right-click: secondary
+              </TooltipContent>
+            </Tooltip>
           ))}
         </div>
       </div>
@@ -296,16 +318,20 @@ export function PalettePanel() {
       <div className="border-t border-zinc-800 px-2 py-1.5">
         <div className="flex items-center gap-1">
           <Popover>
-            <PopoverTrigger asChild>
-              <button
-                type="button"
-                className="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-teal-300"
-                aria-label="Add color to palette"
-                title="Add color to palette"
-              >
-                <Plus className="h-3.5 w-3.5" />
-              </button>
-            </PopoverTrigger>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <PopoverTrigger asChild>
+                  <button
+                    type="button"
+                    className="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-teal-300"
+                    aria-label="Add color to palette"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </button>
+                </PopoverTrigger>
+              </TooltipTrigger>
+              <TooltipContent side="top">Add color to palette</TooltipContent>
+            </Tooltip>
             <PopoverContent side="top" align="start" className="w-56 p-3" onOpenAutoFocus={(e) => e.preventDefault()}>
               <ColorPickerContent
                 color={addColor}
@@ -315,16 +341,20 @@ export function PalettePanel() {
               />
             </PopoverContent>
           </Popover>
-          <button
-            type="button"
-            className="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-red-300"
-            onClick={() => removePaletteColor(primary)}
-            disabled={palette.length <= 1}
-            aria-label="Remove primary color from palette"
-            title="Remove the primary color from the palette"
-          >
-            <Minus className="h-3.5 w-3.5" />
-          </button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                className="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-red-300"
+                onClick={() => removePaletteColor(primary)}
+                disabled={palette.length <= 1}
+                aria-label="Remove primary color from palette"
+              >
+                <Minus className="h-3.5 w-3.5" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top">Remove the primary color from the palette</TooltipContent>
+          </Tooltip>
         </div>
         <Select
           value=""
@@ -333,13 +363,17 @@ export function PalettePanel() {
             if (preset) setPalette(preset.colors, `Palette: ${preset.name}`)
           }}
         >
-          <SelectTrigger
-            className="mt-1 h-6 w-full border-zinc-800 bg-zinc-950 px-1.5 font-mono text-[10px] text-zinc-300"
-            aria-label="Apply a palette preset"
-            title="Apply a palette preset"
-          >
-            <SelectValue placeholder={currentPaletteName} />
-          </SelectTrigger>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <SelectTrigger
+                className="mt-1 h-6 w-full border-zinc-800 bg-zinc-950 px-1.5 font-mono text-[10px] text-zinc-300"
+                aria-label="Apply a palette preset"
+              >
+                <SelectValue placeholder={currentPaletteName} />
+              </SelectTrigger>
+            </TooltipTrigger>
+            <TooltipContent side="top">Apply a palette preset</TooltipContent>
+          </Tooltip>
           <SelectContent>
             {PALETTES.map((p) => (
               <SelectItem key={p.id} value={p.id} className="font-mono text-[11px]">

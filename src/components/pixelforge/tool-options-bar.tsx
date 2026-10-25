@@ -148,7 +148,7 @@ export function ToolOptionsBar() {
               />
               Filled
             </button>
-            <span className="hidden px-1 font-mono text-[10px] text-zinc-500 @[560px]:inline">
+            <span className="hidden px-1 font-mono text-[10px] text-zinc-400 @[560px]:inline">
               outline = primary · fill = secondary · Shift inverts
             </span>
           </>
@@ -157,7 +157,7 @@ export function ToolOptionsBar() {
         {tool === 'marquee' && (
           <>
             {!selection && (
-              <span className="px-1.5 font-mono text-[10px] text-zinc-500 hidden @[560px]:inline">
+              <span className="px-1.5 font-mono text-[10px] text-zinc-400 hidden @[560px]:inline">
                 drag on the canvas to select — drag inside to move pixels
               </span>
             )}
@@ -166,7 +166,7 @@ export function ToolOptionsBar() {
                 <span className="px-1 font-mono text-[10px] text-zinc-400">
                   {selection.w}×{selection.h}
                 </span>
-                <span className="px-0.5 font-mono text-[10px] text-zinc-500" aria-hidden>
+                <span className="px-0.5 font-mono text-[10px] text-zinc-400" aria-hidden>
                   →
                 </span>
                 <StepperInput
@@ -179,7 +179,7 @@ export function ToolOptionsBar() {
                   ariaLabel="Target selection width"
                   size="sm"
                 />
-                <span className="px-0.5 font-mono text-[10px] text-zinc-500" aria-hidden>
+                <span className="px-0.5 font-mono text-[10px] text-zinc-400" aria-hidden>
                   ×
                 </span>
                 <StepperInput
@@ -243,7 +243,7 @@ export function ToolOptionsBar() {
               </>
             )}
             <Separator orientation="vertical" className="mx-0.5 h-5 bg-zinc-800" />
-            <span className="px-1 font-mono text-[10px] uppercase tracking-wider text-zinc-500">
+            <span className="px-1 font-mono text-[10px] uppercase tracking-wider text-zinc-400">
               cel
             </span>
             {transformButtons('cel').map((b) => (

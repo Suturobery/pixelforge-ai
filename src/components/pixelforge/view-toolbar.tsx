@@ -11,6 +11,7 @@ import { useAppSettings } from '@/lib/pixelforge/settings'
 import { savePanelRaw, onPanelsHydrated } from '@/lib/pixelforge/panel-storage'
 import { FloatPill } from '@/components/pixelforge/float-pill'
 import { Button } from '@/components/ui/button'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Scan, ZoomIn, ZoomOut, Grid3X3, EyeOff, SlidersHorizontal } from 'lucide-react'
 
 const STORE_KEY = 'pixelforge-viewbar-v1'
@@ -190,39 +191,71 @@ export function ViewToolbar({
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
     >
-      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onZoomBy(1 / 1.25)} aria-label="Zoom out">
-        <ZoomOut className="h-4 w-4" />
-      </Button>
-      <span className="w-12 text-center font-mono text-[11px] text-zinc-400" title="Drag to move the toolbar">
-        {zoomPct}%
-      </span>
-      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onZoomBy(1.25)} aria-label="Zoom in">
-        <ZoomIn className="h-4 w-4" />
-      </Button>
-      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onFit} aria-label="Fit view" title="Fit view">
-        <Scan className="h-4 w-4" />
-      </Button>
-      <Button
-        variant={showGrid ? 'secondary' : 'ghost'}
-        size="icon"
-        className="h-7 w-7"
-        onClick={() => setShowGrid(!showGrid)}
-        aria-label="Toggle grid"
-        aria-pressed={showGrid}
-        title="Toggle grid"
-      >
-        <Grid3X3 className="h-4 w-4" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-7 w-7 text-zinc-400 hover:text-zinc-100"
-        onClick={() => setHidden(true)}
-        aria-label="Hide view toolbar"
-        title="Hide (click the sliders pill to bring it back)"
-      >
-        <EyeOff className="h-4 w-4" />
-      </Button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onZoomBy(1 / 1.25)} aria-label="Zoom out">
+            <ZoomOut className="h-4 w-4" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="top">Zoom out</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span
+            className="w-12 cursor-grab text-center font-mono text-[11px] text-zinc-400"
+            title="Drag to move the toolbar"
+            aria-label="Zoom level — drag to move the toolbar"
+          >
+            {zoomPct}%
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="top">Drag to move the toolbar</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onZoomBy(1.25)} aria-label="Zoom in">
+            <ZoomIn className="h-4 w-4" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="top">Zoom in</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onFit} aria-label="Fit view">
+            <Scan className="h-4 w-4" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="top">Fit view</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant={showGrid ? 'secondary' : 'ghost'}
+            size="icon"
+            className="h-7 w-7"
+            onClick={() => setShowGrid(!showGrid)}
+            aria-label="Toggle grid"
+            aria-pressed={showGrid}
+          >
+            <Grid3X3 className="h-4 w-4" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="top">Toggle grid</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 text-zinc-400 hover:text-zinc-100"
+            onClick={() => setHidden(true)}
+            aria-label="Hide view toolbar"
+          >
+            <EyeOff className="h-4 w-4" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="top">Hide — click the sliders pill to bring it back</TooltipContent>
+      </Tooltip>
     </div>
   )
 }

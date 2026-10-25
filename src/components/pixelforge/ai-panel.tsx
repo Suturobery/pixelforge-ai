@@ -370,15 +370,19 @@ export function AiPanel() {
                 )}
               </SelectContent>
             </Select>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 shrink-0 px-2 font-mono text-[10px] text-zinc-400"
-              onClick={() => setSize({ w: project.width, h: project.height })}
-              title="Use the canvas size"
-            >
-              canvas
-            </Button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 shrink-0 px-2 font-mono text-[10px] text-zinc-400"
+                  onClick={() => setSize({ w: project.width, h: project.height })}
+                >
+                  canvas
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Use the canvas size</TooltipContent>
+            </Tooltip>
           </div>
 
           {/* count + seed */}
@@ -534,19 +538,23 @@ export function AiPanel() {
                     ) : c.originalSrc ? (
                       <img src={c.originalSrc} alt="Original candidate" className="h-full w-full object-cover" />
                     ) : (
-                      <span className="flex h-full w-full items-center justify-center text-[9px] text-zinc-500">…</span>
+                      <span className="flex h-full w-full items-center justify-center text-[9px] text-zinc-400">…</span>
                     )}
                   </button>
                   {c.status === 'normalizing' && <span className="absolute left-1 top-1"><Loader2 className="h-3 w-3 animate-spin text-teal-300" /></span>}
-                  <button
-                    type="button"
-                    onClick={() => discard(c.id)}
-                    className="absolute -right-1.5 -top-1.5 flex h-6 w-6 items-center justify-center rounded-full border border-zinc-600 bg-zinc-900 text-zinc-200 shadow-md before:absolute before:-inset-1.5 before:rounded-full before:content-[''] hover:border-red-400/60 hover:bg-red-500/20 hover:text-red-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 touch-manipulation"
-                    aria-label="Discard candidate"
-                    title="Discard candidate"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={() => discard(c.id)}
+                        className="absolute -right-1.5 -top-1.5 flex h-6 w-6 items-center justify-center rounded-full border border-zinc-600 bg-zinc-900 text-zinc-200 shadow-md before:absolute before:-inset-1.5 before:rounded-full before:content-[''] hover:border-red-400/60 hover:bg-red-500/20 hover:text-red-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 touch-manipulation"
+                        aria-label="Discard candidate"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent>Discard candidate</TooltipContent>
+                  </Tooltip>
                 </div>
               ))}
             </div>
@@ -569,10 +577,10 @@ export function AiPanel() {
                   {selected.originalSrc ? (
                     <img src={selected.originalSrc} alt="Original generated image" className="h-full w-full object-contain" />
                   ) : (
-                    <span className="flex h-full items-center justify-center font-mono text-[9px] text-zinc-500">no image</span>
+                    <span className="flex h-full items-center justify-center font-mono text-[9px] text-zinc-400">no image</span>
                   )}
                 </div>
-                <figcaption className="mt-0.5 text-center font-mono text-[9px] text-zinc-500">original{selected.originalW ? ` ${selected.originalW}×${selected.originalH}` : ''}</figcaption>
+                <figcaption className="mt-0.5 text-center font-mono text-[9px] text-zinc-400">original{selected.originalW ? ` ${selected.originalW}×${selected.originalH}` : ''}</figcaption>
               </figure>
               {compare && (
                 <figure className="min-w-0 flex-1">
@@ -580,7 +588,7 @@ export function AiPanel() {
                     {selected.normalized ? (
                       <img src={makeThumb(selected.normalized.buffer, selected.normalized.w, selected.normalized.h)} alt="Normalized pixel art" className="h-full w-full object-contain [image-rendering:pixelated]" />
                     ) : (
-                      <span className="flex h-full items-center justify-center font-mono text-[9px] text-zinc-500">normalizing…</span>
+                      <span className="flex h-full items-center justify-center font-mono text-[9px] text-zinc-400">normalizing…</span>
                     )}
                   </div>
                   <figcaption className="mt-0.5 text-center font-mono text-[9px] text-teal-300/80">
@@ -591,7 +599,7 @@ export function AiPanel() {
               )}
             </div>
             {/* provenance (plan §3.4) */}
-            <p className="mt-1.5 font-mono text-[9px] leading-relaxed text-zinc-500">
+            <p className="mt-1.5 font-mono text-[9px] leading-relaxed text-zinc-400">
               {selected.providerLabel} · {selected.model} · {selected.recipe} · {selected.requestSize}
               {selected.seed !== null ? ` · seed ${selected.seed}` : ''}
               {selected.cacheHit ? ' · cache hit ($0)' : ''}
@@ -654,13 +662,18 @@ export function AiPanel() {
                   )}
                   <div className="min-w-0 flex-1">
                     <p className="truncate font-mono text-[10px] text-zinc-300">{h.prompt.slice(0, 48)}</p>
-                    <p className="font-mono text-[9px] text-zinc-500">
+                    <p className="font-mono text-[9px] text-zinc-400">
                       {h.providerLabel} · {h.width}×{h.height} · {new Date(h.createdAt).toLocaleDateString()}
                     </p>
                   </div>
-                  <Button variant="ghost" size="sm" className="h-6 shrink-0 px-1.5 font-mono text-[9px] text-zinc-400" onClick={() => restoreRecipe(h)} title="Restore this recipe into the form">
-                    <RotateCcw className="h-3 w-3" />
-                  </Button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button variant="ghost" size="sm" className="h-6 shrink-0 px-1.5 font-mono text-[9px] text-zinc-400" onClick={() => restoreRecipe(h)}>
+                        <RotateCcw className="h-3 w-3" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Restore this recipe into the form</TooltipContent>
+                  </Tooltip>
                 </div>
               ))}
             </div>
@@ -669,7 +682,7 @@ export function AiPanel() {
 
         {candidates.length === 0 && (
           <div className="flex flex-1 flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-zinc-800 p-6 text-center">
-            <ImagePlus className="h-6 w-6 text-zinc-500" />
+            <ImagePlus className="h-6 w-6 text-zinc-400" />
             <p className="max-w-[220px] font-mono text-[10px] leading-relaxed text-zinc-400">
               Candidates appear here. Imports are always added as new editable layers or frames — your existing art is
               never overwritten.

@@ -146,7 +146,7 @@ function FrameThumb({
             className={`absolute -top-1.5 -right-0.5 flex h-4 items-center gap-0.5 rounded-full border px-1 font-mono text-[8px] leading-none transition-colors ${
               ms > 0
                 ? 'border-amber-500/60 bg-amber-500/15 text-amber-300 hover:bg-amber-500/25'
-                : 'border-zinc-700 bg-zinc-900 text-zinc-500 hover:text-zinc-300'
+                : 'border-zinc-700 bg-zinc-900 text-zinc-400 hover:text-zinc-300'
             }`}
             aria-label={`Edit duration of frame ${index + 1}`}
             title="Frame duration (0 = inherit clip FPS)"
@@ -169,7 +169,7 @@ function FrameThumb({
             ariaLabel={`Duration of frame ${index + 1} in milliseconds`}
             size="sm"
           />
-          <p className="mt-1.5 text-[10px] leading-snug text-zinc-500">
+          <p className="mt-1.5 text-[10px] leading-snug text-zinc-400">
             {ms > 0 ? (
               <>Overrides the clip FPS for this frame.</>
             ) : (
@@ -268,7 +268,7 @@ function Scrubber({ clip, activeIndex }: { clip: Clip; activeIndex: number }) {
           className="pointer-events-none absolute inset-y-0 left-0 w-0.5 bg-teal-400 shadow-[0_0_6px_rgba(45,212,191,0.8)]"
         />
       </div>
-      <div className="mt-0.5 flex justify-between font-mono text-[9px] text-zinc-500">
+      <div className="mt-0.5 flex justify-between font-mono text-[9px] text-zinc-400">
         <span>
           {hoverMs != null ? `scrub ${formatMs(hoverMs)}` : `${clip.frames.length} frames`}
         </span>
@@ -324,7 +324,7 @@ function TintField({
           sideOffset={8}
           className="w-56 border-zinc-800 bg-zinc-950 p-3"
         >
-          <p className="mb-1.5 font-mono text-[9px] uppercase tracking-widest text-zinc-500">
+          <p className="mb-1.5 font-mono text-[9px] uppercase tracking-widest text-zinc-400">
             {label}
           </p>
           <div className="mb-2 grid grid-cols-5 gap-1" role="listbox" aria-label={`${label} quick picks`}>
@@ -439,7 +439,7 @@ function OnionPopover() {
             onChange={(hex) => setSetting('onionNextTint', hex)}
           />
         </div>
-        <p className="mt-2 text-[10px] leading-snug text-zinc-500">
+        <p className="mt-2 text-[10px] leading-snug text-zinc-400">
           Range (prev/next) is saved with the project; tint &amp; opacity are studio
           preferences. Ghosts never appear in exports.
         </p>
@@ -617,7 +617,7 @@ export function Timeline() {
             <span
               role="status"
               className={`mr-1 hidden shrink-0 rounded px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider sm:inline ${
-                playing ? 'bg-teal-500/15 text-teal-300' : 'bg-zinc-800 text-zinc-500'
+                playing ? 'bg-teal-500/15 text-teal-300' : 'bg-zinc-800 text-zinc-400'
               }`}
               aria-live="polite"
             >

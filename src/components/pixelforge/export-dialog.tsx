@@ -273,7 +273,7 @@ export function ExportDialog({
                 />
               )}
             </div>
-            <p className="font-mono text-[10px] text-zinc-500">
+            <p className="font-mono text-[10px] text-zinc-400">
               {previewDims
                 ? `Preview ${previewDims.w}×${previewDims.h} px · native size · transparent background`
                 : 'Preview unavailable'}
@@ -283,7 +283,7 @@ export function ExportDialog({
           {/* scope + format */}
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
-              <span className="font-mono text-[10px] uppercase tracking-wide text-zinc-500">Scope</span>
+              <span className="font-mono text-[10px] uppercase tracking-wide text-zinc-400">Scope</span>
               <Segmented
                 className="grid-cols-1"
                 ariaLabel="Export scope"
@@ -297,7 +297,7 @@ export function ExportDialog({
               />
             </div>
             <div className="space-y-1">
-              <span className="font-mono text-[10px] uppercase tracking-wide text-zinc-500">Format</span>
+              <span className="font-mono text-[10px] uppercase tracking-wide text-zinc-400">Format</span>
               <Segmented
                 className="grid-cols-1"
                 ariaLabel="Export format"
@@ -315,7 +315,7 @@ export function ExportDialog({
             <div className="space-y-3 rounded-md border border-zinc-800 bg-zinc-900/40 p-3">
               <div className="grid grid-cols-2 gap-2">
                 <div className="space-y-1">
-                  <span className="font-mono text-[10px] uppercase tracking-wide text-zinc-500">Layout</span>
+                  <span className="font-mono text-[10px] uppercase tracking-wide text-zinc-400">Layout</span>
                   <Segmented
                     className="grid-cols-2"
                     ariaLabel="Sheet layout"
@@ -328,7 +328,7 @@ export function ExportDialog({
                   />
                 </div>
                 <div className="space-y-1">
-                  <span className="font-mono text-[10px] uppercase tracking-wide text-zinc-500">Columns</span>
+                  <span className="font-mono text-[10px] uppercase tracking-wide text-zinc-400">Columns</span>
                   <StepperInput
                     value={columns}
                     onChange={(v) => setColumns(Math.max(1, Math.min(64, v)))}
@@ -342,7 +342,7 @@ export function ExportDialog({
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <div className="space-y-1">
-                  <span className="font-mono text-[10px] uppercase tracking-wide text-zinc-500">Padding (outer)</span>
+                  <span className="font-mono text-[10px] uppercase tracking-wide text-zinc-400">Padding (outer)</span>
                   <StepperInput
                     value={padding}
                     onChange={(v) => setPadding(Math.max(0, Math.min(64, v)))}
@@ -353,7 +353,7 @@ export function ExportDialog({
                   />
                 </div>
                 <div className="space-y-1">
-                  <span className="font-mono text-[10px] uppercase tracking-wide text-zinc-500">Spacing (between)</span>
+                  <span className="font-mono text-[10px] uppercase tracking-wide text-zinc-400">Spacing (between)</span>
                   <StepperInput
                     value={spacing}
                     onChange={(v) => setSpacing(Math.max(0, Math.min(64, v)))}
@@ -376,18 +376,18 @@ export function ExportDialog({
           {/* naming */}
           <div className="grid grid-cols-[1fr_auto] items-end gap-2">
             <div className="space-y-1">
-              <span className="font-mono text-[10px] uppercase tracking-wide text-zinc-500">File name base</span>
+              <span className="font-mono text-[10px] uppercase tracking-wide text-zinc-400">File name base</span>
               <Input
                 value={baseName}
                 onChange={(e) => setBaseName(e.target.value)}
                 placeholder={slugify(project.name)}
                 aria-label="Export file name base"
-                className="h-8 border-zinc-800 bg-zinc-900 font-mono text-xs text-zinc-200 placeholder:text-zinc-600"
+                className="h-8 border-zinc-800 bg-zinc-900 font-mono text-xs text-zinc-200 placeholder:text-zinc-400"
               />
             </div>
             {format === 'png-frames' && (
               <div className="space-y-1">
-                <span className="font-mono text-[10px] uppercase tracking-wide text-zinc-500">Frame # digits</span>
+                <span className="font-mono text-[10px] uppercase tracking-wide text-zinc-400">Frame # digits</span>
                 <Select value={zeroPad} onValueChange={setZeroPad}>
                   {/* same-variant height override: the base trigger ships
                       data-[size=default]:h-9 which beats a plain h-7 */}
@@ -410,7 +410,7 @@ export function ExportDialog({
 
           {/* destination */}
           <div className="space-y-1 rounded-md border border-zinc-800 bg-zinc-900/40 p-3">
-            <div className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wide text-zinc-500">
+            <div className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wide text-zinc-400">
               <FolderDown className="h-3 w-3" /> Destination
             </div>
             <p className="font-mono text-[10px] leading-relaxed text-zinc-400">
@@ -449,13 +449,13 @@ export function ExportDialog({
             </p>
           ) : (
             <p
-              className="line-clamp-2 break-all font-mono text-[10px] leading-relaxed text-zinc-500"
+              className="line-clamp-2 break-all font-mono text-[10px] leading-relaxed text-zinc-400"
               title={namesPreview.join('\n')}
             >
               {namesPreview.length} file{namesPreview.length > 1 ? 's' : ''}: {namesPreview.join(', ')}
             </p>
           )}
-          <p className="flex items-center gap-1 font-mono text-[10px] text-zinc-600">
+          <p className="flex items-center gap-1 font-mono text-[10px] text-zinc-400">
             <FileImage className="h-3 w-3" /> Files never overwrite silently — conflicts are reported before writing.
           </p>
         </div>

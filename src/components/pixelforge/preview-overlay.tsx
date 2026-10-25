@@ -16,6 +16,7 @@ import { savePanelRaw, onPanelsHydrated } from '@/lib/pixelforge/panel-storage'
 import { renderFrameScaled } from '@/lib/pixelforge/render'
 import { FloatPill } from '@/components/pixelforge/float-pill'
 import { Button } from '@/components/ui/button'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Clapperboard, Pause, Play, X, ZoomIn, ZoomOut } from 'lucide-react'
 
 const STORE_KEY = 'pixelforge-preview-v1'
@@ -320,25 +321,35 @@ export function PreviewOverlay() {
           <Clapperboard className="h-3 w-3 text-teal-400" aria-hidden /> Preview
         </span>
         <div className="flex items-center">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-5 w-5 text-zinc-400 hover:text-teal-300"
-            onClick={() => setLoopOn(!loopOn)}
-            aria-label={loopOn ? 'Pause preview loop' : 'Resume preview loop'}
-            aria-pressed={loopOn}
-          >
-            {loopOn ? <Pause className="h-3 w-3" /> : <Play className="h-3 w-3" />}
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-5 w-5 text-zinc-400 hover:text-zinc-300"
-            onClick={() => setOpen(false)}
-            aria-label="Hide preview"
-          >
-            <X className="h-3 w-3" />
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-5 w-5 text-zinc-400 hover:text-teal-300"
+                onClick={() => setLoopOn(!loopOn)}
+                aria-label={loopOn ? 'Pause preview loop' : 'Resume preview loop'}
+                aria-pressed={loopOn}
+              >
+                {loopOn ? <Pause className="h-3 w-3" /> : <Play className="h-3 w-3" />}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{loopOn ? 'Pause preview loop' : 'Resume preview loop'}</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-5 w-5 text-zinc-400 hover:text-zinc-300"
+                onClick={() => setOpen(false)}
+                aria-label="Hide preview"
+              >
+                <X className="h-3 w-3" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Hide — click the Preview pill to bring it back</TooltipContent>
+          </Tooltip>
         </div>
       </div>
 

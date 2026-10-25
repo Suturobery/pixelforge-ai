@@ -300,7 +300,7 @@ export function McpConnections() {
                 {Math.floor(secsLeft / 60)}:{String(secsLeft % 60).padStart(2, '0')}
               </span>
             </p>
-            <p className="font-mono text-[10px] leading-tight text-zinc-500">
+            <p className="font-mono text-[10px] leading-tight text-zinc-400">
               The client connects to <span className="text-zinc-300">{bridge.server?.endpoint ?? 'http://127.0.0.1:3030/mcp'}</span> with
               <span className="text-zinc-300"> Authorization: Bearer &lt;code&gt;</span> and calls{' '}
               <span className="text-zinc-300">pair_client</span> — the returned token replaces the code immediately.
@@ -313,7 +313,7 @@ export function McpConnections() {
       <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-2.5">
         <div className="flex items-center justify-between">
           <p className="font-mono text-xs text-zinc-100">Connected clients</p>
-          <span className="font-mono text-[10px] text-zinc-500">{activeClients.length} active</span>
+          <span className="font-mono text-[10px] text-zinc-400">{activeClients.length} active</span>
         </div>
         {clients.length === 0 ? (
           <p className="mt-1.5 font-mono text-[10px] text-zinc-400">No assistants paired yet.</p>
@@ -326,7 +326,7 @@ export function McpConnections() {
                     {c.name}
                     {c.revoked && <span className="ml-1.5 text-[9px] uppercase text-red-400">revoked</span>}
                   </p>
-                  <p className="font-mono text-[9px] text-zinc-500">
+                  <p className="font-mono text-[9px] text-zinc-400">
                     {c.tier} · last seen {timeAgo(c.lastSeen)} · paired {new Date(c.createdAt).toLocaleDateString()}
                   </p>
                 </div>
@@ -360,7 +360,7 @@ export function McpConnections() {
                   <span className={`font-mono text-[10px] ${op.ok ? 'text-teal-300' : 'text-red-300'}`}>
                     {op.ok ? '✓' : '✗'} {op.tool}
                   </span>
-                  <span className="font-mono text-[9px] text-zinc-500">
+                  <span className="font-mono text-[9px] text-zinc-400">
                     {op.clientName} · {op.durationMs} ms · {new Date(op.ts).toLocaleTimeString()}
                   </span>
                 </div>

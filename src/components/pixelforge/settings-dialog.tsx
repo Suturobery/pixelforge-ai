@@ -473,7 +473,7 @@ function ProviderCard({
             </p>
           )}
           {secureMode && !hasSessionKey && keyStatus?.hasKey && (
-            <p className="mt-1 font-mono text-[10px] leading-tight text-zinc-500">
+            <p className="mt-1 font-mono text-[10px] leading-tight text-zinc-400">
               Key stored securely — re-enter it once to unlock this session. (The AI engine moves
               in-process in Task 9, removing this step.)
             </p>

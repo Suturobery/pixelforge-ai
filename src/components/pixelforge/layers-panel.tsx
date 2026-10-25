@@ -87,27 +87,31 @@ function FrameChip({
     renderFrameScaled(canvas, clip, frame, w, h)
   }, [clip, frame, w, h, tick])
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`relative shrink-0 rounded border p-0.5 transition-colors ${
-        active
-          ? 'border-teal-400 bg-teal-500/10 ring-1 ring-teal-400/50'
-          : 'border-zinc-700 bg-zinc-900 hover:border-zinc-500'
-      }`}
-      aria-label={`Frame ${index + 1}`}
-      aria-pressed={active}
-      title={`Frame ${index + 1}`}
-    >
-      <canvas
-        ref={ref}
-        width={28}
-        height={28}
-        className="pixelforge-checker h-7 w-7 rounded-sm"
-        aria-hidden
-      />
-      <span className="absolute bottom-0 right-0.5 font-mono text-[9px] text-zinc-200">{index + 1}</span>
-    </button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          onClick={onClick}
+          className={`relative shrink-0 rounded border p-0.5 transition-colors ${
+            active
+              ? 'border-teal-400 bg-teal-500/10 ring-1 ring-teal-400/50'
+              : 'border-zinc-700 bg-zinc-900 hover:border-zinc-500'
+          }`}
+          aria-label={`Frame ${index + 1}`}
+          aria-pressed={active}
+        >
+          <canvas
+            ref={ref}
+            width={28}
+            height={28}
+            className="pixelforge-checker h-7 w-7 rounded-sm"
+            aria-hidden
+          />
+          <span className="absolute bottom-0 right-0.5 font-mono text-[9px] text-zinc-200">{index + 1}</span>
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">Frame {index + 1}</TooltipContent>
+    </Tooltip>
   )
 }
 

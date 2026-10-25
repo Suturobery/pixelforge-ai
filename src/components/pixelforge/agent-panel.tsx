@@ -98,7 +98,7 @@ export function AgentPanel() {
   if (!agentApiEnabled) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
-        <Bot className="h-6 w-6 text-zinc-500" />
+        <Bot className="h-6 w-6 text-zinc-400" />
         <p className="max-w-[240px] font-mono text-[10px] leading-relaxed text-zinc-400">
           The Agent API (MCP) is currently disabled. Enable it in{' '}
           <span className="text-teal-300">Settings → MCP</span> to run editor tools here or
@@ -188,7 +188,7 @@ export function AgentPanel() {
       <div className="border-t border-zinc-800 pt-2">
         <div className="mb-1.5 flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-zinc-400">
           <History className="h-3 w-3" /> Session log
-          <span className="ml-auto normal-case text-zinc-500">server-wide log: Settings → MCP</span>
+          <span className="ml-auto normal-case text-zinc-400">server-wide log: Settings → MCP</span>
         </div>
         {ops.length === 0 ? (
           <p className="font-mono text-[10px] text-zinc-400">No tool runs this session.</p>

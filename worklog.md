@@ -84,3 +84,23 @@ Stage Summary:
 - One silent data-level bug (palette.replaceAll missing from core) and one interaction-level bug (portal pointer-capture steal) fixed — both were real user-facing breakage, not just styling
 - Original studio look preserved; palette + right dock now match the reference screenshots more closely than before
 - Task 10 motion audit remains untouched/shelved as instructed
+
+---
+Task ID: uiux-audit-2
+Agent: Z.ai Code (main)
+Task: User follow-up: "WHAT YUNG MGA DETAILS NA HOVER KASI YUNG MGA TEXT HINDI MAKITA PERO YUNG IBA MAKITA RIN KASO HINDI NICE YUNG COLOR MATCH" — fix hover details, invisible text, and color-match inconsistencies
+
+Work Log:
+- Root-caused the invisible-text / color-match complaint: <html> had NO `dark` class while the studio is hardcoded dark zinc — every shadcn primitive (Tooltip bg-primary, Popover/Select/Dialog bg-popover, Button ghost hover:bg-accent) resolved through the LIGHT token set: white popovers/dialogs with dark hardcoded inputs (deep-bg + near-black text = unreadable), near-black tooltips blending into the dark shell, and ghost-button hover flashing a near-white chip with dark text
+- FIX 1 (root cause): layout.tsx <html className="dark"> — one-line fix that switches all semantic tokens; tooltips now render as light chips with dark text (visible on dark UI), popovers/selects/dialogs render dark and coherent, ghost hover = subtle dark chip
+- FIX 2 (hover-details inconsistency): replaced remaining native `title`-only hover hints with styled shadcn Tooltips and added missing ones — view-toolbar (Zoom out/in, zoom% grip, Fit, Toggle grid, Hide — had NO hover hint at all), palette-panel (hide eye, fg/bg chips via Tooltip+PopoverTrigger nesting like the tool-rail brush control, swap, add/remove, preset select, every swatch shows "HEX — click: primary · right-click: secondary"), ai-panel (canvas-size button, discard-candidate badge, restore-recipe), preview-overlay (loop play/pause, hide), layers-panel FrameChip
+- FIX 3 (low-contrast text): bumped dim zinc-500/zinc-600 labels to zinc-400/zinc-500 across timeline (duration badge, scrubber readouts, hints, paused chip), export-dialog (all section labels + placeholder), ai-panel (9px captions, provenance, empty-state icon), mcp-settings, settings-dialog, tool-options-bar, agent-panel
+- Regression guard during palette-panel edit: first MultiEdit partially applied and briefly replaced the primary chip's Popover with a Tooltip-only block — caught by re-read, restored the Tooltip+Popover composition (both editors still open the color picker)
+- Verified tsc (src: 0 errors; only pre-existing packages/core bun:test module errors remain) + bun run lint clean
+- Browser E2E (agent-browser, 1440×900 + 390×844, artifacts/uiux-audit/): 01 initial dark studio; 02 hover Eraser → light tooltip chip "Eraser [E]" visible over palette; 03 swatch hover → "#5D275D — click: primary · right-click: secondary"; 04 color-picker popover dark with readable hex/RGB values; 05 Export dialog fully dark + readable labels/switches/inputs; 06 loop-mode Select dropdown dark (Forward/Reverse/Ping-pong); 07 "Zoom out" tooltip visible above view toolbar; 08 AI panel readable; 09 Settings dialog dark + coherent; 10 ghost-button hover = subtle dark chip (no more white flash); 11 mobile 390×844 layout holds; console + dev.log zero errors
+
+Stage Summary:
+- Hover details are now consistent app-wide: every interactive control shows the same styled tooltip (light chip on dark), native titles only remain on pure drag-handle readouts (preview header/grip, scrubber, clip tab, duration badge)
+- Invisible-text class of bugs eliminated at the token level — any future shadcn primitive (popover/dialog/tooltip/select) now inherits correct dark styling automatically
+- Color match fixed for hover states, overlays, dialogs and dropdowns; no functional regressions (draw/undo/save/export/AI flows untouched, zero page errors)
+- Screenshots: artifacts/uiux-audit/01..11; prior audit context in Task ID uiux-audit-1
