@@ -9,7 +9,13 @@ import type {
   Rig,
 } from './types'
 import type { PresetVersion } from './presets'
-import { cloneGrid } from './sprite'
+import {
+  cloneGrid,
+  floodFill as spriteFloodFill,
+  drawRectOutline,
+  flipH as spriteFlipH,
+  linePoints,
+} from './sprite'
 import { DEFAULT_PARAMS, getPresetSet } from './presets'
 import type { PlaybackMode } from './playback'
 import { getFixture, type FixtureId } from './fixtures'
@@ -17,12 +23,15 @@ import { getFixture, type FixtureId } from './fixtures'
 const STORAGE_KEY = 'pixelforge-motion-v1'
 const MAX_UNDO = 60
 
-export type Tool = 'pencil' | 'eraser' | 'picker'
+export type Tool = 'pencil' | 'eraser' | 'picker' | 'fill' | 'line' | 'rect'
 
 interface Snapshot {
   grid: PixelGrid
   rig: Rig
 }
+
+/** In-flight shape stroke (line/rect): start cell + pre-stroke snapshot. */
+let shapeStart: { x: number; y: number; snapshot: PixelGrid } | null = null
 
 interface PersistShape {
   width: number
@@ -34,6 +43,7 @@ interface PersistShape {
   presetId: PresetId
   presetVersion: PresetVersion
   color: string
+  secondaryColor: string
 }
 
 export interface EditorStore {
@@ -42,6 +52,7 @@ export interface EditorStore {
   template: FixtureId | 'custom'
   tool: Tool
   color: string
+  secondaryColor: string
   zoom: number
   showRects: boolean
   activePart: string | null
@@ -58,6 +69,9 @@ export interface EditorStore {
 
   setTool: (t: Tool) => void
   setColor: (c: string) => void
+  setSecondaryColor: (c: string) => void
+  swapColors: () => void
+  flipHorizontal: () => void
   setZoom: (z: number) => void
   setShowRects: (v: boolean) => void
   setActivePart: (id: string | null) => void
@@ -72,6 +86,10 @@ export interface EditorStore {
   resetDurations: () => void
 
   paintPixel: (x: number, y: number) => void
+  floodFill: (x: number, y: number) => void
+  beginShape: (x: number, y: number) => void
+  previewShape: (x: number, y: number) => void
+  commitShape: () => void
   beginStroke: () => void
   endStroke: () => void
   setPartRect: (partId: string, rect: Rect) => void
@@ -100,6 +118,7 @@ export const useEditor = create<EditorStore>((set, get) => ({
   })(),
   tool: 'pencil',
   color: '#e8b796',
+  secondaryColor: '#56d7e8',
   zoom: 12,
   showRects: true,
   activePart: 'armL',
@@ -116,6 +135,14 @@ export const useEditor = create<EditorStore>((set, get) => ({
 
   setTool: (tool) => set({ tool }),
   setColor: (color) => set({ color }),
+  setSecondaryColor: (secondaryColor) => set({ secondaryColor }),
+  swapColors: () => set((s) => ({ color: s.secondaryColor, secondaryColor: s.color })),
+  flipHorizontal: () =>
+    set((s) => {
+      const g = cloneGrid(s.grid)
+      spriteFlipH(g)
+      return { grid: g, savedAt: null }
+    }),
   setZoom: (zoom) => set({ zoom: Math.min(24, Math.max(4, zoom)) }),
   setShowRects: (showRects) => set({ showRects }),
   setActivePart: (activePart) => set({ activePart }),
@@ -161,7 +188,7 @@ export const useEditor = create<EditorStore>((set, get) => ({
   },
   paintPixel: (x, y) =>
     set((s) => {
-      const { tool, color, grid } = s
+      const { tool, color, secondaryColor, grid } = s
       if (x < 0 || y < 0 || x >= grid.width || y >= grid.height) return {}
       const g = cloneGrid(grid)
       const i = (y * g.width + x) * 4
@@ -180,6 +207,61 @@ export const useEditor = create<EditorStore>((set, get) => ({
         g.data[i + 3] = 0
       }
       return { grid: g }
+    }),
+
+  floodFill: (x, y) =>
+    set((s) => {
+      const { color, grid } = s
+      if (x < 0 || y < 0 || x >= grid.width || y >= grid.height) return {}
+      const snapshot = pushUndo(s)
+      const g = cloneGrid(grid)
+      const hex = color.replace('#', '')
+      const full = hex.length === 3 ? hex.split('').map((c) => c + c).join('') : hex
+      const n = parseInt(full, 16)
+      spriteFloodFill(g, x, y, { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255, a: 255 })
+      return {
+        grid: g,
+        undoStack: [...s.undoStack.slice(-MAX_UNDO + 1), snapshot],
+        redoStack: [],
+        savedAt: null,
+      }
+    }),
+
+  beginShape: (x, y) =>
+    set((s) => {
+      if (s.tool !== 'line' && s.tool !== 'rect') return {}
+      const snapshot = pushUndo(s)
+      shapeStart = { x, y, snapshot: cloneGrid(s.grid) }
+      return {
+        undoStack: [...s.undoStack.slice(-MAX_UNDO + 1), snapshot],
+        redoStack: [],
+        savedAt: null,
+      }
+    }),
+
+  previewShape: (x, y) =>
+    set((s) => {
+      if (!shapeStart || (s.tool !== 'line' && s.tool !== 'rect')) return {}
+      const g = cloneGrid(shapeStart.snapshot)
+      const hex = s.color.replace('#', '')
+      const full = hex.length === 3 ? hex.split('').map((c) => c + c).join('') : hex
+      const n = parseInt(full, 16)
+      const paint = { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255, a: 255 }
+      if (s.tool === 'line') {
+        for (const [px, py] of linePoints(shapeStart.x, shapeStart.y, x, y)) {
+          const i = (py * g.width + px) * 4
+          g.data[i] = paint.r; g.data[i + 1] = paint.g; g.data[i + 2] = paint.b; g.data[i + 3] = 255
+        }
+      } else {
+        drawRectOutline(g, shapeStart.x, shapeStart.y, x, y, paint)
+      }
+      return { grid: g }
+    }),
+
+  commitShape: () =>
+    set((s) => {
+      shapeStart = null
+      return { savedAt: s.savedAt }
     }),
 
   setPartRect: (partId, rect) =>
@@ -236,6 +318,7 @@ export const useEditor = create<EditorStore>((set, get) => ({
       presetId: s.presetId,
       presetVersion: s.presetVersion,
       color: s.color,
+      secondaryColor: s.secondaryColor,
     }
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))

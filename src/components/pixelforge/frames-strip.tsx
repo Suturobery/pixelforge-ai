@@ -33,10 +33,10 @@ export function FramesStrip({ frames, plans, overrides }: Props) {
   const activeFrame = plans[currentStep] ? currentStep : 0
 
   return (
-    <div className="rounded-lg border bg-white p-3" data-testid="frames-strip">
+    <div className="rounded-lg border bg-[#1c1f26] p-3" data-testid="frames-strip">
       <div className="mb-2 flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-stone-800">Generated frames</h3>
-        <span className="text-[11px] text-stone-400">{frames.length} frames · click to inspect</span>
+        <h3 className="text-sm font-semibold text-zinc-100">Generated frames</h3>
+        <span className="text-[11px] text-zinc-600">{frames.length} frames · click to inspect</span>
       </div>
       <div className="flex max-h-48 gap-2 overflow-x-auto pb-1">
         {frames.map((f, i) => {
@@ -51,11 +51,11 @@ export function FramesStrip({ frames, plans, overrides }: Props) {
                 setCurrentStep(i)
               }}
               className={`flex shrink-0 flex-col items-center gap-1 rounded border p-1 ${
-                isActive ? 'border-emerald-600 bg-emerald-50' : 'border-stone-200 hover:bg-stone-50'
+                isActive ? 'border-cyan-500 bg-emerald-950/40' : 'border-[#2e3340] hover:bg-[#15171c]'
               }`}
             >
               <ThumbCanvas grid={f} />
-              <span className={`font-mono text-[10px] ${isActive ? 'text-emerald-700' : 'text-stone-400'}`}>
+              <span className={`font-mono text-[10px] ${isActive ? 'text-emerald-400' : 'text-zinc-600'}`}>
                 f{i + 1} · {overrides[i] ?? plans[i]?.duration ?? 0}ms
               </span>
             </button>

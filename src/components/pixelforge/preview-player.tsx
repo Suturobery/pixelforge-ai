@@ -83,7 +83,7 @@ export function PreviewPlayer({ plans, frames, overrides }: Props) {
   }
 
   return (
-    <div className="rounded-lg border bg-stone-50 p-4" data-testid="preview-player">
+    <div className="rounded-lg border bg-[#15171c] p-4" data-testid="preview-player">
       <div className="flex flex-col items-center gap-3">
         <canvas
           ref={canvasRef}
@@ -97,7 +97,7 @@ export function PreviewPlayer({ plans, frames, overrides }: Props) {
             type="button"
             data-testid="play-btn"
             onClick={() => setPlaying(!playing)}
-            className="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700"
+            className="rounded-md bg-cyan-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-cyan-600"
           >
             {playing ? 'Pause' : 'Play'}
           </button>
@@ -108,7 +108,7 @@ export function PreviewPlayer({ plans, frames, overrides }: Props) {
               data-testid={`mode-${m}`}
               onClick={() => useEditor.getState().setPlaybackMode(m)}
               className={`rounded-md px-2.5 py-1.5 text-xs font-medium capitalize ${
-                mode === m ? 'bg-stone-800 text-white' : 'bg-white text-stone-700 hover:bg-stone-100'
+                mode === m ? 'bg-[#262932] text-cyan-300 ring-1 ring-cyan-500/40' : 'bg-[#1c1f26] text-zinc-300 hover:bg-[#262932]'
               } border`}
             >
               {m}
@@ -125,7 +125,7 @@ export function PreviewPlayer({ plans, frames, overrides }: Props) {
           className="w-full accent-emerald-600"
           aria-label="Scrub frames"
         />
-        <div className="text-xs text-stone-500" data-testid="timing-readout">
+        <div className="text-xs text-zinc-500" data-testid="timing-readout">
           step {Math.min(currentStep, seq.length - 1) + 1}/{seq.length} · frame {seq[Math.min(currentStep, seq.length - 1)] ? seq[Math.min(currentStep, seq.length - 1)].frame + 1 : 0}/{frames.length} · cycle {total}ms ({(1000 / Math.max(1, total / seq.length)).toFixed(1)} fps avg) · {presetId} {presetVersion}
         </div>
       </div>

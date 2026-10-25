@@ -226,3 +226,94 @@ export function scaleNearest(grid: PixelGrid, factor: number): PixelGrid {
   }
   return out
 }
+
+/**
+ * 4-connected flood fill: replace all pixels matching the target color at
+ * (x,y) with `color`. Matches exact RGBA (transparent included as a target).
+ * Deterministic; returns number of pixels changed.
+ */
+export function floodFill(grid: PixelGrid, x: number, y: number, color: RGBA): number {
+  if (!inBounds(grid, x, y)) return 0
+  const target = getPixel(grid, x, y)
+  const same = (a: RGBA, b: RGBA) =>
+    a.r === b.r && a.g === b.g && a.b === b.b && a.a === b.a
+  if (same(target, color)) return 0
+  const total = grid.width * grid.height
+  const seen = new Uint8Array(total)
+  const stack = [y * grid.width + x]
+  seen[y * grid.width + x] = 1
+  let changed = 0
+  while (stack.length > 0) {
+    const cur = stack.pop() as number
+    const cx = cur % grid.width
+    const cy = (cur - cx) / grid.width
+    setPixel(grid, cx, cy, color)
+    changed++
+    const neighbors: Array<[number, number]> = [
+      [cx - 1, cy],
+      [cx + 1, cy],
+      [cx, cy - 1],
+      [cx, cy + 1],
+    ]
+    for (const [nx, ny] of neighbors) {
+      if (!inBounds(grid, nx, ny)) continue
+      const ni = ny * grid.width + nx
+      if (seen[ni]) continue
+      if (!same(getPixel(grid, nx, ny), target)) continue
+      seen[ni] = 1
+      stack.push(ni)
+    }
+  }
+  return changed
+}
+
+/** Bresenham line into an out-grid; returns the list of painted points. */
+export function linePoints(x0: number, y0: number, x1: number, y1: number): Array<[number, number]> {
+  const pts: Array<[number, number]> = []
+  let dx = Math.abs(x1 - x0)
+  let dy = -Math.abs(y1 - y0)
+  const sx = x0 < x1 ? 1 : -1
+  const sy = y0 < y1 ? 1 : -1
+  let err = dx + dy
+  let x = x0
+  let y = y0
+  for (;;) {
+    pts.push([x, y])
+    if (x === x1 && y === y1) break
+    const e2 = 2 * err
+    if (e2 >= dy) { err += dy; x += sx }
+    if (e2 <= dx) { err += dx; y += sy }
+  }
+  return pts
+}
+
+/** Draw a 1px outline rectangle (corner to corner), clipped to the grid. */
+export function drawRectOutline(grid: PixelGrid, x0: number, y0: number, x1: number, y1: number, color: RGBA): void {
+  const lx = Math.min(x0, x1)
+  const rx = Math.max(x0, x1)
+  const ty = Math.min(y0, y1)
+  const by = Math.max(y0, y1)
+  for (let x = lx; x <= rx; x++) {
+    setPixel(grid, x, ty, color)
+    setPixel(grid, x, by, color)
+  }
+  for (let y = ty; y <= by; y++) {
+    setPixel(grid, lx, y, color)
+    setPixel(grid, rx, y, color)
+  }
+}
+
+/** Mirror the grid horizontally in place. */
+export function flipH(grid: PixelGrid): void {
+  for (let y = 0; y < grid.height; y++) {
+    for (let x = 0; x < Math.floor(grid.width / 2); x++) {
+      const a = idx(grid, x, y)
+      const b = idx(grid, grid.width - 1 - x, y)
+      for (let k = 0; k < 4; k++) {
+        const tmp = grid.data[a + k]
+        grid.data[a + k] = grid.data[b + k]
+        grid.data[b + k] = tmp
+      }
+    }
+  }
+}

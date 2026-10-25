@@ -22,12 +22,16 @@ interface Props {
 
 export function PixelCanvas({ grid, rig }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const painting = useRef(false)
+  const dragging = useRef(false)
   const tool = useEditor((s) => s.tool)
   const zoom = useEditor((s) => s.zoom)
   const showRects = useEditor((s) => s.showRects)
   const activePart = useEditor((s) => s.activePart)
   const paintPixel = useEditor((s) => s.paintPixel)
+  const floodFill = useEditor((s) => s.floodFill)
+  const beginShape = useEditor((s) => s.beginShape)
+  const previewShape = useEditor((s) => s.previewShape)
+  const commitShape = useEditor((s) => s.commitShape)
   const beginStroke = useEditor((s) => s.beginStroke)
   const endStroke = useEditor((s) => s.endStroke)
   const setColor = useEditor((s) => s.setColor)
@@ -40,11 +44,11 @@ export function PixelCanvas({ grid, rig }: Props) {
     const s = zoom
     canvas.width = grid.width * s
     canvas.height = grid.height * s
-    // checkerboard
+    // dark checkerboard (original PixelForge studio look)
     const cs = Math.max(4, s)
     for (let y = 0; y < canvas.height; y += cs) {
       for (let x = 0; x < canvas.width; x += cs) {
-        ctx.fillStyle = ((x / cs + y / cs) % 2) === 0 ? '#e5e5e5' : '#cfcfcf'
+        ctx.fillStyle = ((x / cs + y / cs) % 2) === 0 ? '#31343e' : '#262932'
         ctx.fillRect(x, y, cs, cs)
       }
     }
@@ -59,7 +63,7 @@ export function PixelCanvas({ grid, rig }: Props) {
     }
     // grid lines at high zoom
     if (s >= 10) {
-      ctx.strokeStyle = 'rgba(0,0,0,0.06)'
+      ctx.strokeStyle = 'rgba(255,255,255,0.06)'
       ctx.lineWidth = 1
       for (let x = 0; x <= grid.width; x++) {
         ctx.beginPath(); ctx.moveTo(x * s + 0.5, 0); ctx.lineTo(x * s + 0.5, canvas.height); ctx.stroke()
@@ -107,31 +111,56 @@ export function PixelCanvas({ grid, rig }: Props) {
       }
       return
     }
-    painting.current = true
+    if (tool === 'fill') {
+      floodFill(cell.x, cell.y)
+      useEditor.getState().save()
+      return
+    }
+    if (tool === 'line' || tool === 'rect') {
+      dragging.current = true
+      beginShape(cell.x, cell.y)
+      return
+    }
+    dragging.current = true
     beginStroke()
     paintPixel(cell.x, cell.y)
   }
 
   const onMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!painting.current) return
+    if (!dragging.current) return
     const cell = cellFromEvent(e)
-    if (cell) paintPixel(cell.x, cell.y)
+    if (!cell) return
+    if (tool === 'line' || tool === 'rect') {
+      previewShape(cell.x, cell.y)
+      return
+    }
+    paintPixel(cell.x, cell.y)
   }
 
   const onUp = () => {
-    if (painting.current) {
-      painting.current = false
-      endStroke()
+    if (dragging.current) {
+      dragging.current = false
+      if (tool === 'line' || tool === 'rect') {
+        commitShape()
+        useEditor.getState().save()
+      } else {
+        endStroke()
+      }
     }
   }
 
+  const cursor =
+    tool === 'picker' ? 'crosshair'
+    : tool === 'fill' ? 'cell'
+    : 'cell'
+
   return (
-    <div className="overflow-auto rounded-lg border bg-white p-2 max-h-[60vh]" data-testid="canvas-wrap">
+    <div className="overflow-auto rounded-lg border border-[#2e3340] bg-[#1c1f26] p-2 max-h-[60vh]" data-testid="canvas-wrap">
       <canvas
         ref={canvasRef}
         data-testid="pixel-canvas"
         className="touch-none select-none"
-        style={{ imageRendering: 'pixelated', cursor: tool === 'picker' ? 'crosshair' : 'cell' }}
+        style={{ imageRendering: 'pixelated', cursor }}
         onMouseDown={onDown}
         onMouseMove={onMove}
         onMouseUp={onUp}

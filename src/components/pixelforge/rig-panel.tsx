@@ -27,9 +27,9 @@ export function RigPanel({ grid, rig }: Props) {
 
   return (
     <div className="flex flex-col gap-3" data-testid="rig-panel">
-      <section className="rounded-lg border bg-white p-4">
+      <section className="rounded-lg border bg-[#1c1f26] p-4">
         <div className="mb-2 flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-stone-800">Body parts (rig)</h3>
+          <h3 className="text-sm font-semibold text-zinc-100">Body parts (rig)</h3>
           <button
             type="button"
             data-testid="auto-rig"
@@ -44,13 +44,13 @@ export function RigPanel({ grid, rig }: Props) {
                 }))
               }
             }}
-            className="text-xs text-stone-500 underline hover:text-stone-800"
+            className="text-xs text-zinc-500 underline hover:text-zinc-100"
           >
             Auto-rig
           </button>
         </div>
         {validation.warnings.map((w, i) => (
-          <p key={i} className="mb-1 text-[11px] text-amber-700">⚠ {w}</p>
+          <p key={i} className="mb-1 text-[11px] text-amber-400">⚠ {w}</p>
         ))}
         {validation.errors.map((e, i) => (
           <p key={i} className="mb-1 text-[11px] text-rose-700">✕ {e}</p>
@@ -63,7 +63,7 @@ export function RigPanel({ grid, rig }: Props) {
                 data-testid={`part-${p.id}`}
                 onClick={() => setActivePart(p.id)}
                 className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs ${
-                  activePart === p.id ? 'bg-stone-800 text-white' : 'hover:bg-stone-100 text-stone-700'
+                  activePart === p.id ? 'bg-[#262932] text-cyan-300 ring-1 ring-cyan-500/40' : 'hover:bg-[#262932] text-zinc-300'
                 }`}
               >
                 <span
@@ -71,7 +71,7 @@ export function RigPanel({ grid, rig }: Props) {
                   style={{ background: PART_COLORS[p.role] ?? PART_COLORS.custom }}
                 />
                 <span className="font-medium">{p.label}</span>
-                <span className={`ml-auto font-mono text-[10px] ${activePart === p.id ? 'text-stone-300' : 'text-stone-400'}`}>
+                <span className={`ml-auto font-mono text-[10px] ${activePart === p.id ? 'text-zinc-600' : 'text-zinc-600'}`}>
                   {p.rect.x},{p.rect.y} {p.rect.w}×{p.rect.h} z{p.zOrder}
                 </span>
               </button>
@@ -84,11 +84,11 @@ export function RigPanel({ grid, rig }: Props) {
         const part = rig.parts.find((p) => p.id === activePart)
         if (!part) return null
         return (
-          <section className="rounded-lg border bg-white p-4">
-            <h3 className="mb-2 text-sm font-semibold text-stone-800">{part.label} rectangle</h3>
+          <section className="rounded-lg border bg-[#1c1f26] p-4">
+            <h3 className="mb-2 text-sm font-semibold text-zinc-100">{part.label} rectangle</h3>
             <div className="grid grid-cols-4 gap-2">
               {(['x', 'y', 'w', 'h'] as const).map((f) => (
-                <label key={f} className="text-[10px] font-medium uppercase text-stone-500">
+                <label key={f} className="text-[10px] font-medium uppercase text-zinc-500">
                   {f}
                   <input
                     type="number"
@@ -96,12 +96,12 @@ export function RigPanel({ grid, rig }: Props) {
                     min={0}
                     value={part.rect[f]}
                     onChange={(e) => update(f, Number(e.target.value))}
-                    className="mt-0.5 w-full rounded border border-stone-300 px-1.5 py-1 text-center text-xs"
+                    className="mt-0.5 w-full rounded border border-[#3a3f4e] px-1.5 py-1 text-center text-xs"
                   />
                 </label>
               ))}
             </div>
-            <p className="mt-2 text-[11px] leading-snug text-stone-500">
+            <p className="mt-2 text-[11px] leading-snug text-zinc-500">
               Include 1–2 shared pixels with the torso at the joint — limbs stay attached while they translate.
             </p>
           </section>
