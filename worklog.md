@@ -60,3 +60,27 @@ Stage Summary:
 - Lost-and-recovered files: types.ts/store.ts/page.tsx rebuilt from usage + tool-results; no original source remained for them
 - Root cause of user's complaint: previous session's Motion Lab rebuild overwrote the original; /tmp snapshot made restoration possible
 - Remaining known gaps: original palette-panel.tsx/pixel-canvas.tsx/frames-strip.tsx/preview-player.tsx/rig-panel.tsx/export-bar.tsx originals overwritten (adapted/reconciled versions in place); apps/desktop Electron not built/run (deps not installed, out of scope); mini-services/mcp-server deps not installed
+
+---
+Task ID: uiux-audit-1
+Agent: Z.ai Code (main)
+Task: User asked "fix the the UI/UX audit all kasi i notice other UI/UX" — full UI/UX audit of the restored original studio + fix everything found
+
+Work Log:
+- Full visual audit via agent-browser: desktop 1280×800 (Layers/AI/Agent tabs), mobile 390×844, export dialog; compared against evidence/task6-playing.png and upload reference crops
+- FOUND & FIXED P0 (mobile): right dock rendered as a shrink-0 column on phones and crushed the canvas to 0 width — page.tsx RightDock is now a slide-over drawer on mobile (default CLOSED, w-[min(85vw,320px)], z-40, dim backdrop tap-to-close, local state so it never touches the desktop rightOpen pref)
+- FOUND & FIXED P1: Next.js dev-mode badges (N over the logo) — devIndicators:false in next.config.ts; confirmed the remaining bottom-left teal circle is the app's own tool-rail palette toggle, not a badge
+- FIXED P2 (palette panel): dropdown label showed "presets" — now shows the matching preset name ("Forge 16" default, "custom" after manual edits) via sameColors() match; footer restructured to match the reference: "+ −" row above a full-width preset select; panel slimmed 176→152px
+- FIXED P3 (right dock): restored "PANELS" header row + PanelRightClose toggle icon; tabs rebuilt as a segmented group with icons (Layers/Sparkles/Bot)
+- FOUND & FIXED P4 (CRITICAL functional bug): clicking palette preset items did nothing — palette-panel's draggable root onPointerDown fired for React-portal children (Radix Select dropdown / ColorPicker Popovers bubble through the React tree), called setPointerCapture on the panel and stole the pointer so items never received pointerup; fix = bail when event target is outside the panel DOM (el.contains check). Verified end-to-end by mouse: Forge 16 → PICO-8 → Sweetie 16 → Forge 16 all select now; color-picker popover hex edit + slider drag also work
+- FOUND & FIXED P5 (core): `palette.replaceAll` was only a store.ts shim registration; added a proper core builtin (packages/core/src/bus/builtins.ts: validate hex array 1..n, apply normalizes lowercase + dedupes, undoable "Replace palette") and removed the store shim (double registration crashed the client — caught and fixed during the same task)
+- Palette on phones now starts CLOSED (local-only, never persisted) so it doesn't cover the canvas; desktop preference untouched
+- Regression suite via agent-browser: draw stroke (footer hover + unsaved state), undo, play/pause ("▶ 1/1" teal + "⇋ playing" strip indicator), Save → "✓ saved HH:MM:SS PM", Export dialog opens, AI tab renders TEXT→SPRITE studio, Agent tab renders tool runner — all pass; zero page errors, zero dev.log errors
+- tsc: src + packages/core/src clean; bun run lint clean
+- Evidence: artifacts/audit/{current-*.png before, fixed-*, final-desktop, final-mobile2, mouse-switch-fixed, palette-select-open, sweetie-applied, playing}.png
+
+Stage Summary:
+- Mobile is now canvas-first (drawer + closed palette) instead of a panel wall covering everything
+- One silent data-level bug (palette.replaceAll missing from core) and one interaction-level bug (portal pointer-capture steal) fixed — both were real user-facing breakage, not just styling
+- Original studio look preserved; palette + right dock now match the reference screenshots more closely than before
+- Task 10 motion audit remains untouched/shelved as instructed

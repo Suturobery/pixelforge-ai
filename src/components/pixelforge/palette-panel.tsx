@@ -29,6 +29,11 @@ import { PALETTES } from '@/lib/pixelforge/palettes'
 
 const STORE_KEY = 'pixelforge-palette-v1'
 
+/** true when both palettes hold the same colors in the same order (case-insensitive) */
+function sameColors(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((c, i) => c.toLowerCase() === b[i].toLowerCase())
+}
+
 interface PxPos {
   x: number
   y: number
@@ -71,14 +76,31 @@ export function PalettePanel() {
   const [pillPos, setPillPos] = useState<PxPos | null>(null)
   const [dragging, setDragging] = useState(false)
   const [addColor, setAddColor] = useState('#2ce8f5')
+  // the select is an "apply preset" control, but it DISPLAYS the palette the
+  // document currently matches ("Forge 16" by default) — matches the original
+  // studio reference; shows "custom" after manual add/remove edits
+  const currentPreset = PALETTES.find((p) => sameColors(p.colors, palette))
+  const currentPaletteName = currentPreset?.name ?? 'custom'
   const rootRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null)
   const hydratedRef = useRef(false)
 
   // load persisted position / visibility once (deferred to rAF like the
-  // other floating panels so the first paint is the stable anchor)
+  // other floating panels so the first paint is the stable anchor).
+  // On phones the floating panel starts CLOSED (it would cover most of the
+  // canvas — mobile audit) but phone sessions never PERSIST that state, so
+  // the desktop preference in storage stays untouched.
   useEffect(() => {
     const raf = requestAnimationFrame(() => {
+      const phone =
+        typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches
+      if (phone) {
+        // local-only closed state; hydratedRef stays false → nothing is saved
+        setOpen(false)
+        setPos(null)
+        setPillPos(null)
+        return
+      }
       const saved = loadSaved()
       setOpen(saved.open)
       setPos(saved.pos)
@@ -88,10 +110,12 @@ export function PalettePanel() {
     return () => cancelAnimationFrame(raf)
   }, [])
 
-  // desktop settings-file hydration (Task 13a)
+  // desktop settings-file hydration (Task 13a) — skipped on phones so the
+  // phone's local-only closed state is never overwritten or persisted
   useEffect(
     () =>
       onPanelsHydrated(() => {
+        if (window.matchMedia('(max-width: 767px)').matches) return
         const saved = loadSaved()
         setOpen(saved.open)
         setPos(saved.pos)
@@ -121,6 +145,11 @@ export function PalettePanel() {
     const el = rootRef.current
     const parent = el?.offsetParent as HTMLElement | null
     if (!el || !parent) return
+    // Portal children (the palette-preset Select dropdown, the color-picker
+    // Popovers) bubble pointer events here through the REACT tree even though
+    // they render outside this panel in the DOM. Starting a drag for them
+    // steals the pointer capture and breaks their clicks entirely — bail.
+    if (!el.contains(e.target as Node)) return
     const rect = el.getBoundingClientRect()
     const pRect = parent.getBoundingClientRect()
     dragRef.current = {
@@ -167,7 +196,7 @@ export function PalettePanel() {
       ref={rootRef}
       data-testid="palette-panel"
       aria-label="Palette panel — drag the header to move, click the eye to hide"
-      className={`absolute left-3 top-3 z-30 w-[176px] touch-none select-none rounded-lg border border-zinc-700/80 bg-zinc-900/95 shadow-xl backdrop-blur ${
+      className={`absolute left-3 top-3 z-30 w-[152px] touch-none select-none rounded-lg border border-zinc-700/80 bg-zinc-900/95 shadow-xl backdrop-blur ${
         dragging ? 'cursor-grabbing' : ''
       }`}
       style={pos ? { left: pos.x, top: pos.y } : undefined}
@@ -262,38 +291,41 @@ export function PalettePanel() {
         </div>
       </div>
 
-      {/* footer: add/remove + palette presets */}
-      <div className="flex items-center gap-1 border-t border-zinc-800 px-2 py-1.5">
-        <Popover>
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              className="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-teal-300"
-              aria-label="Add color to palette"
-              title="Add color to palette"
-            >
-              <Plus className="h-3.5 w-3.5" />
-            </button>
-          </PopoverTrigger>
-          <PopoverContent side="top" align="start" className="w-56 p-3" onOpenAutoFocus={(e) => e.preventDefault()}>
-            <ColorPickerContent
-              color={addColor}
-              onChange={setAddColor}
-              alreadyInPalette={palette.includes(addColor.toLowerCase())}
-              onAddToPalette={() => addPaletteColor(addColor)}
-            />
-          </PopoverContent>
-        </Popover>
-        <button
-          type="button"
-          className="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-red-300"
-          onClick={() => removePaletteColor(primary)}
-          disabled={palette.length <= 1}
-          aria-label="Remove primary color from palette"
-          title="Remove the primary color from the palette"
-        >
-          <Minus className="h-3.5 w-3.5" />
-        </button>
+      {/* footer: add/remove row, then the palette preset select below it
+          (matches the original reference: "Forge 16" dropdown full-width) */}
+      <div className="border-t border-zinc-800 px-2 py-1.5">
+        <div className="flex items-center gap-1">
+          <Popover>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                className="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-teal-300"
+                aria-label="Add color to palette"
+                title="Add color to palette"
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent side="top" align="start" className="w-56 p-3" onOpenAutoFocus={(e) => e.preventDefault()}>
+              <ColorPickerContent
+                color={addColor}
+                onChange={setAddColor}
+                alreadyInPalette={palette.includes(addColor.toLowerCase())}
+                onAddToPalette={() => addPaletteColor(addColor)}
+              />
+            </PopoverContent>
+          </Popover>
+          <button
+            type="button"
+            className="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-red-300"
+            onClick={() => removePaletteColor(primary)}
+            disabled={palette.length <= 1}
+            aria-label="Remove primary color from palette"
+            title="Remove the primary color from the palette"
+          >
+            <Minus className="h-3.5 w-3.5" />
+          </button>
+        </div>
         <Select
           value=""
           onValueChange={(id) => {
@@ -302,10 +334,11 @@ export function PalettePanel() {
           }}
         >
           <SelectTrigger
-            className="ml-auto h-6 w-[104px] border-zinc-800 bg-zinc-950 px-1.5 font-mono text-[10px] text-zinc-300"
+            className="mt-1 h-6 w-full border-zinc-800 bg-zinc-950 px-1.5 font-mono text-[10px] text-zinc-300"
             aria-label="Apply a palette preset"
+            title="Apply a palette preset"
           >
-            <SelectValue placeholder="presets" />
+            <SelectValue placeholder={currentPaletteName} />
           </SelectTrigger>
           <SelectContent>
             {PALETTES.map((p) => (

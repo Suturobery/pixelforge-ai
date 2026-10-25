@@ -1,0 +1,808 @@
+     1→// PixelForge AI — animation timeline (Task 6).
+     2→// Clips row: clip tabs + full transport (restart / step / play / stop),
+     3→// loop mode (forward · reverse · ping-pong), loop on/off, onion-skin
+     4→// popover, FPS. Below: a proportional scrubber (drag anywhere — the shared
+     5→// playback engine maps position ⇄ frame) and the frame strip with
+     6→// thumbnails, per-frame duration badges (0 = inherit fps), HTML5
+     7→// drag-and-drop reordering, and add/duplicate/delete controls.
+     8→//
+     9→// All timing goes through the shared playback controller (single engine for
+    10→// timeline + preview); every document change goes through the CommandBus.
+    11→
+    12→'use client'
+    13→
+    14→import { useEffect, useRef, useState } from 'react'
+    15→import { useEditor, getActiveClip } from '@/lib/pixelforge/store'
+    16→import { useAppSettings } from '@/lib/pixelforge/settings'
+    17→import { editorPlayback } from '@/lib/pixelforge/playback-controller'
+    18→import { renderFrameScaled } from '@/lib/pixelforge/render'
+    19→import { Button } from '@/components/ui/button'
+    20→import { Input } from '@/components/ui/input'
+    21→import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+    22→import { Slider } from '@/components/ui/slider'
+    23→import {
+    24→  Select,
+    25→  SelectContent,
+    26→  SelectItem,
+    27→  SelectTrigger,
+    28→  SelectValue,
+    29→} from '@/components/ui/select'
+    30→import { Switch } from '@/components/ui/switch'
+    31→import { StepperInput } from '@/components/pixelforge/stepper-input'
+    32→import { ColorPickerContent } from '@/components/pixelforge/color-picker'
+    33→import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+    34→import {
+    35→  Play,
+    36→  Pause,
+    37→  Plus,
+    38→  Copy,
+    39→  Trash2,
+    40→  ArrowLeft,
+    41→  ArrowRight,
+    42→  Ghost,
+    43→  Repeat,
+    44→  ChevronDown,
+    45→  ChevronUp,
+    46→  ChevronsLeft,
+    47→  ChevronLeft,
+    48→  Square,
+    49→  Timer,
+    50→  ArrowLeftRight,
+    51→} from 'lucide-react'
+    52→import type { Clip, Frame } from '@/lib/pixelforge/types'
+    53→
+    54→const DURATION_MAX = 60_000
+    55→
+    56→/** Effective duration of a frame for badges/scrubber (mirrors core math). */
+    57→function frameMs(clip: Clip, index: number): number {
+    58→  const f = clip.frames[index]
+    59→  if (!f) return 0
+    60→  if (f.durationMs > 0) return f.durationMs
+    61→  const fps = Math.min(60, Math.max(1, Math.round(clip.fps || 8)))
+    62→  return Math.max(1, Math.round(1000 / fps))
+    63→}
+    64→
+    65→function formatMs(ms: number): string {
+    66→  return ms >= 1000 ? `${(ms / 1000).toFixed(ms % 1000 === 0 ? 0 : 2)}s` : `${ms}ms`
+    67→}
+    68→
+    69→// ------------------------------------------------------------- FrameThumb
+    70→
+    71→function FrameThumb({
+    72→  clip,
+    73→  frame,
+    74→  index,
+    75→  active,
+    76→  dropBefore,
+    77→  w,
+    78→  h,
+    79→  tick,
+    80→  playing,
+    81→  onSelect,
+    82→  onDragStart,
+    83→  onDragOver,
+    84→  onDrop,
+    85→  onDragEnd,
+    86→}: {
+    87→  clip: Clip
+    88→  frame: Frame
+    89→  index: number
+    90→  active: boolean
+    91→  dropBefore: boolean
+    92→  w: number
+    93→  h: number
+    94→  tick: number
+    95→  playing: boolean
+    96→  onSelect: () => void
+    97→  onDragStart: () => void
+    98→  onDragOver: (e: React.DragEvent) => void
+    99→  onDrop: () => void
+   100→  onDragEnd: () => void
+   101→}) {
+   102→  const ref = useRef<HTMLCanvasElement>(null)
+   103→  const [durOpen, setDurOpen] = useState(false)
+   104→  const setFrameDuration = useEditor((s) => s.setFrameDuration)
+   105→  useEffect(() => {
+   106→    const canvas = ref.current
+   107→    if (!canvas) return
+   108→    renderFrameScaled(canvas, clip, frame, w, h)
+   109→  }, [clip, frame, w, h, tick])
+   110→  const ms = frame.durationMs
+   111→  return (
+   112→    <div
+   113→      className={`relative shrink-0 ${dropBefore ? 'before:absolute before:inset-y-0 before:-left-1.5 before:z-10 before:w-1 before:rounded-full before:bg-teal-400' : ''}`}
+   114→      draggable
+   115→      onDragStart={(e) => {
+   116→        e.dataTransfer.setData('text/plain', String(index))
+   117→        e.dataTransfer.effectAllowed = 'move'
+   118→        onDragStart()
+   119→      }}
+   120→      onDragOver={onDragOver}
+   121→      onDrop={(e) => {
+   122→        e.preventDefault()
+   123→        onDrop()
+   124→      }}
+   125→      onDragEnd={onDragEnd}
+   126→    >
+   127→      <button
+   128→        type="button"
+   129→        onClick={onSelect}
+   130→        className={`relative rounded-md border p-1 transition-colors ${
+   131→          active
+   132→            ? 'border-teal-400 bg-teal-500/10 ring-1 ring-teal-400/60'
+   133→            : 'border-zinc-700 bg-zinc-900 hover:border-zinc-500'
+   134→        } ${playing && active ? 'animate-pulse' : ''}`}
+   135→        aria-label={`Frame ${index + 1}${ms > 0 ? `, ${ms} milliseconds` : ', inherited duration'}`}
+   136→        aria-pressed={active}
+   137→      >
+   138→        <canvas ref={ref} width={56} height={56} className="pixelforge-checker h-11 w-11 rounded-sm sm:h-14 sm:w-14" aria-hidden />
+   139→        <span className="absolute bottom-0.5 right-1 font-mono text-[9px] text-zinc-400">{index + 1}</span>
+   140→      </button>
+   141→      {/* duration badge → popover editor (Task 6 §2) */}
+   142→      <Popover open={durOpen} onOpenChange={setDurOpen}>
+   143→        <PopoverTrigger asChild>
+   144→          <button
+   145→            type="button"
+   146→            className={`absolute -top-1.5 -right-0.5 flex h-4 items-center gap-0.5 rounded-full border px-1 font-mono text-[8px] leading-none transition-colors ${
+   147→              ms > 0
+   148→                ? 'border-amber-500/60 bg-amber-500/15 text-amber-300 hover:bg-amber-500/25'
+   149→                : 'border-zinc-700 bg-zinc-900 text-zinc-500 hover:text-zinc-300'
+   150→            }`}
+   151→            aria-label={`Edit duration of frame ${index + 1}`}
+   152→            title="Frame duration (0 = inherit clip FPS)"
+   153→          >
+   154→            <Timer className="h-2 w-2" aria-hidden />
+   155→            {ms > 0 ? `${ms}` : 'auto'}
+   156→          </button>
+   157→        </PopoverTrigger>
+   158→        <PopoverContent side="top" align="center" className="w-56 p-3">
+   159→          <p className="mb-2 font-mono text-[10px] uppercase tracking-wider text-zinc-400">
+   160→            Frame {index + 1} duration
+   161→          </p>
+   162→          <StepperInput
+   163→            value={ms}
+   164→            onChange={(v) => setFrameDuration(index, Math.min(DURATION_MAX, Math.max(0, v)))}
+   165→            min={0}
+   166→            max={DURATION_MAX}
+   167→            step={10}
+   168→            suffix="ms"
+   169→            ariaLabel={`Duration of frame ${index + 1} in milliseconds`}
+   170→            size="sm"
+   171→          />
+   172→          <p className="mt-1.5 text-[10px] leading-snug text-zinc-500">
+   173→            {ms > 0 ? (
+   174→              <>Overrides the clip FPS for this frame.</>
+   175→            ) : (
+   176→              <>
+   177→                <span className="text-amber-400">auto</span> — inherits the clip FPS
+   178→                ({frameMs(clip, index)}ms at {clip.fps}fps).
+   179→              </>
+   180→            )}
+   181→          </p>
+   182→          {ms > 0 && (
+   183→            <Button
+   184→              variant="ghost"
+   185→              size="sm"
+   186→              className="mt-1 h-6 w-full text-[10px] text-zinc-400 hover:text-teal-300"
+   187→              onClick={() => setFrameDuration(index, 0)}
+   188→            >
+   189→              Reset to auto ({clip.fps}fps)
+   190→            </Button>
+   191→          )}
+   192→        </PopoverContent>
+   193→      </Popover>
+   194→    </div>
+   195→  )
+   196→}
+   197→
+   198→// ---------------------------------------------------------------- Scrubber
+   199→
+   200→function Scrubber({ clip, activeIndex }: { clip: Clip; activeIndex: number }) {
+   201→  const trackRef = useRef<HTMLDivElement>(null)
+   202→  const markerRef = useRef<HTMLDivElement>(null)
+   203→  const [hoverMs, setHoverMs] = useState<number | null>(null)
+   204→
+   205→  // Playhead marker follows the shared engine via direct DOM writes — no
+   206→  // React re-render per animation tick (smooth at any fps).
+   207→  useEffect(
+   208→    () =>
+   209→      editorPlayback.onPosition((pos, total) => {
+   210→        const el = markerRef.current
+   211→        if (el) el.style.left = `${total > 0 ? Math.min(100, (pos / total) * 100) : 0}%`
+   212→      }),
+   213→    []
+   214→  )
+   215→
+   216→  const msFromEvent = (clientX: number): number => {
+   217→    const track = trackRef.current
+   218→    if (!track) return 0
+   219→    const rect = track.getBoundingClientRect()
+   220→    const total = clip.frames.reduce((s, _, i) => s + frameMs(clip, i), 0)
+   221→    const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width))
+   222→    return Math.round(ratio * total)
+   223→  }
+   224→
+   225→  const scrub = (clientX: number) => editorPlayback.scrubToMs(msFromEvent(clientX))
+   226→
+   227→  return (
+   228→    <div className="px-2 pb-1">
+   229→      <div
+   230→        ref={trackRef}
+   231→        role="slider"
+   232→        aria-label="Timeline position"
+   233→        aria-valuemin={1}
+   234→        aria-valuemax={clip.frames.length}
+   235→        aria-valuenow={activeIndex + 1}
+   236→        aria-valuetext={`Frame ${activeIndex + 1} of ${clip.frames.length}`}
+   237→        tabIndex={0}
+   238→        className="relative flex h-5 cursor-pointer touch-none items-stretch overflow-hidden rounded-md border border-zinc-800 bg-zinc-900"
+   239→        onPointerDown={(e) => {
+   240→          e.currentTarget.setPointerCapture(e.pointerId)
+   241→          scrub(e.clientX)
+   242→        }}
+   243→        onPointerMove={(e) => {
+   244→          if (e.buttons & 1) scrub(e.clientX)
+   245→          setHoverMs(msFromEvent(e.clientX))
+   246→        }}
+   247→        onPointerLeave={() => setHoverMs(null)}
+   248→        onKeyDown={(e) => {
+   249→          if (e.key === 'ArrowRight') editorPlayback.step(1)
+   250→          else if (e.key === 'ArrowLeft') editorPlayback.step(-1)
+   251→        }}
+   252→      >
+   253→        {/* proportional frame segments (width = effective duration) */}
+   254→        {clip.frames.map((f, i) => (
+   255→          <div
+   256→            key={f.id}
+   257→            title={`Frame ${i + 1} · ${frameMs(clip, i)}ms`}
+   258→            style={{ flexGrow: frameMs(clip, i), flexBasis: 0 }}
+   259→            className={`min-w-[3px] border-r border-zinc-950/80 last:border-r-0 ${
+   260→              i === activeIndex ? 'bg-teal-700/50' : i % 2 === 0 ? 'bg-zinc-800/70' : 'bg-zinc-800/40'
+   261→            }`}
+   262→          />
+   263→        ))}
+   264→        {/* playhead marker */}
+   265→        <div
+   266→          ref={markerRef}
+   267→          aria-hidden
+   268→          className="pointer-events-none absolute inset-y-0 left-0 w-0.5 bg-teal-400 shadow-[0_0_6px_rgba(45,212,191,0.8)]"
+   269→        />
+   270→      </div>
+   271→      <div className="mt-0.5 flex justify-between font-mono text-[9px] text-zinc-500">
+   272→        <span>
+   273→          {hoverMs != null ? `scrub ${formatMs(hoverMs)}` : `${clip.frames.length} frames`}
+   274→        </span>
+   275→        <span>{formatMs(clip.frames.reduce((s, _, i) => s + frameMs(clip, i), 0))} cycle</span>
+   276→      </div>
+   277→    </div>
+   278→  )
+   279→}
+   280→
+   281→// ------------------------------------------------------------- Onion menu
+   282→
+   283→// Quick-pick tints for the onion-skin color fields — a mini palette row so
+   284→// ghost colors are one click away, with the full studio editor below.
+   285→const ONION_TINT_PRESETS = [
+   286→  '#ff5d5d', '#ff9d3b', '#ffd93b', '#3fbf7f', '#3bd6c6',
+   287→  '#4b9dff', '#a06bff', '#ff6bd6', '#f5f5f5', '#18181b',
+   288→] as const
+   289→
+   290→// Palette-style tint field (same interaction as the palette chips): the
+   291→// trigger shows the current color as a swatch + hex, clicking opens the
+   292→// styled color editor (SV square · hue · hex/RGB) instead of the native
+   293→// OS color dialog.
+   294→function TintField({
+   295→  label,
+   296→  color,
+   297→  onChange,
+   298→}: {
+   299→  label: string
+   300→  color: string
+   301→  onChange: (hex: string) => void
+   302→}) {
+   303→  return (
+   304→    <div className="flex flex-col gap-1">
+   305→      <span className="font-mono text-[10px] text-zinc-400">{label}</span>
+   306→      <Popover>
+   307→        <PopoverTrigger asChild>
+   308→          <button
+   309→            type="button"
+   310→            className="flex h-7 w-full items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-900 px-1.5 transition-colors hover:border-teal-400/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+   311→            aria-label={`${label} ${color} — click to open the palette-style color editor`}
+   312→          >
+   313→            <span
+   314→              className="h-4 w-4 shrink-0 rounded-[3px] border border-zinc-500 shadow-inner"
+   315→              style={{ backgroundColor: color }}
+   316→              aria-hidden
+   317→            />
+   318→            <span className="font-mono text-[10px] uppercase text-zinc-300">{color}</span>
+   319→          </button>
+   320→        </PopoverTrigger>
+   321→        <PopoverContent
+   322→          side="right"
+   323→          align="start"
+   324→          sideOffset={8}
+   325→          className="w-56 border-zinc-800 bg-zinc-950 p-3"
+   326→        >
+   327→          <p className="mb-1.5 font-mono text-[9px] uppercase tracking-widest text-zinc-500">
+   328→            {label}
+   329→          </p>
+   330→          <div className="mb-2 grid grid-cols-5 gap-1" role="listbox" aria-label={`${label} quick picks`}>
+   331→            {ONION_TINT_PRESETS.map((hex) => (
+   332→              <button
+   333→                key={hex}
+   334→                type="button"
+   335→                role="option"
+   336→                aria-selected={hex.toLowerCase() === color.toLowerCase()}
+   337→                aria-label={hex}
+   338→                title={hex}
+   339→                className={`h-5 w-full rounded-[3px] border transition-colors hover:border-zinc-400 ${
+   340→                  hex.toLowerCase() === color.toLowerCase()
+   341→                    ? 'border-teal-300 ring-1 ring-teal-400'
+   342→                    : 'border-zinc-700'
+   343→                }`}
+   344→                style={{ backgroundColor: hex }}
+   345→                onClick={() => onChange(hex)}
+   346→              />
+   347→            ))}
+   348→          </div>
+   349→          <div className="border-t border-zinc-800 pt-2">
+   350→            <ColorPickerContent color={color} onChange={onChange} />
+   351→          </div>
+   352→        </PopoverContent>
+   353→      </Popover>
+   354→    </div>
+   355→  )
+   356→}
+   357→
+   358→function OnionPopover() {
+   359→  const project = useEditor((s) => s.project)
+   360→  const onionSkin = useEditor((s) => s.onionSkin)
+   361→  const setOnionSkin = useEditor((s) => s.setOnionSkin)
+   362→  const setOnionRange = useEditor((s) => s.setOnionRange)
+   363→  const setSetting = useAppSettings((s) => s.setSetting)
+   364→  const onionOpacity = useAppSettings((s) => s.onionOpacity)
+   365→  const onionPrevTint = useAppSettings((s) => s.onionPrevTint)
+   366→  const onionNextTint = useAppSettings((s) => s.onionNextTint)
+   367→  const { prev, next } = project.settings.onion
+   368→
+   369→  return (
+   370→    <Popover>
+   371→      <Tooltip>
+   372→        <TooltipTrigger asChild>
+   373→          <PopoverTrigger asChild>
+   374→            <Button
+   375→              variant="ghost"
+   376→              size="icon"
+   377→              className={`h-7 w-7 ${onionSkin ? 'text-teal-300' : 'text-zinc-400'}`}
+   378→              aria-label="Onion skin settings"
+   379→              aria-pressed={onionSkin}
+   380→            >
+   381→              <Ghost className="h-4 w-4" />
+   382→            </Button>
+   383→          </PopoverTrigger>
+   384→        </TooltipTrigger>
+   385→        <TooltipContent>Onion skin</TooltipContent>
+   386→      </Tooltip>
+   387→      <PopoverContent align="end" className="w-72 p-3">
+   388→        <div className="flex items-center justify-between">
+   389→          <p className="font-mono text-[10px] uppercase tracking-wider text-zinc-400">Onion skin</p>
+   390→          <Switch checked={onionSkin} onCheckedChange={setOnionSkin} aria-label="Enable onion skin" />
+   391→        </div>
+   392→        <div className="mt-3 grid grid-cols-2 gap-2">
+   393→          <label className="flex flex-col gap-1">
+   394→            <span className="font-mono text-[10px] text-zinc-400">Previous (0–3)</span>
+   395→            <StepperInput
+   396→              value={prev}
+   397→              onChange={(v) => setOnionRange({ prev: Math.min(3, Math.max(0, v)) })}
+   398→              min={0}
+   399→              max={3}
+   400→              ariaLabel="Onion skin previous frames"
+   401→              size="sm"
+   402→            />
+   403→          </label>
+   404→          <label className="flex flex-col gap-1">
+   405→            <span className="font-mono text-[10px] text-zinc-400">Next (0–3)</span>
+   406→            <StepperInput
+   407→              value={next}
+   408→              onChange={(v) => setOnionRange({ next: Math.min(3, Math.max(0, v)) })}
+   409→              min={0}
+   410→              max={3}
+   411→              ariaLabel="Onion skin next frames"
+   412→              size="sm"
+   413→            />
+   414→          </label>
+   415→        </div>
+   416→        <label className="mt-3 block">
+   417→          <span className="font-mono text-[10px] text-zinc-400">
+   418→            Opacity {Math.round(onionOpacity * 100)}%
+   419→          </span>
+   420→          <Slider
+   421→            value={[Math.round(onionOpacity * 100)]}
+   422→            onValueChange={([v]) => setSetting('onionOpacity', Math.min(0.8, Math.max(0.05, v / 100)))}
+   423→            min={5}
+   424→            max={80}
+   425→            step={5}
+   426→            aria-label="Onion skin opacity"
+   427→            className="mt-1"
+   428→          />
+   429→        </label>
+   430→        <div className="mt-3 grid grid-cols-2 gap-2">
+   431→          <TintField
+   432→            label="Previous tint"
+   433→            color={onionPrevTint}
+   434→            onChange={(hex) => setSetting('onionPrevTint', hex)}
+   435→          />
+   436→          <TintField
+   437→            label="Next tint"
+   438→            color={onionNextTint}
+   439→            onChange={(hex) => setSetting('onionNextTint', hex)}
+   440→          />
+   441→        </div>
+   442→        <p className="mt-2 text-[10px] leading-snug text-zinc-500">
+   443→          Range (prev/next) is saved with the project; tint &amp; opacity are studio
+   444→          preferences. Ghosts never appear in exports.
+   445→        </p>
+   446→      </PopoverContent>
+   447→    </Popover>
+   448→  )
+   449→}
+   450→
+   451→// ---------------------------------------------------------------- Timeline
+   452→
+   453→export function Timeline() {
+   454→  const project = useEditor((s) => s.project)
+   455→  const activeClipId = useEditor((s) => s.activeClipId)
+   456→  const activeFrameIndex = useEditor((s) => s.activeFrameIndex)
+   457→  const renderTick = useEditor((s) => s.renderTick)
+   458→  const playing = useEditor((s) => s.playing)
+   459→  const timelineOpen = useEditor((s) => s.timelineOpen)
+   460→  const selectClip = useEditor((s) => s.selectClip)
+   461→  const selectFrame = useEditor((s) => s.selectFrame)
+   462→  const setTimelineOpen = useEditor((s) => s.setTimelineOpen)
+   463→  const addFrame = useEditor((s) => s.addFrame)
+   464→  const deleteFrame = useEditor((s) => s.deleteFrame)
+   465→  const moveFrame = useEditor((s) => s.moveFrame)
+   466→  const addClip = useEditor((s) => s.addClip)
+   467→  const deleteClip = useEditor((s) => s.deleteClip)
+   468→  const setClipProp = useEditor((s) => s.setClipProp)
+   469→  const [renamingClip, setRenamingClip] = useState<string | null>(null)
+   470→  // drag-and-drop reorder state
+   471→  const dragFromRef = useRef<number | null>(null)
+   472→  const [dropTarget, setDropTarget] = useState<number | null>(null)
+   473→  const stripRef = useRef<HTMLDivElement>(null)
+   474→
+   475→  const clip = getActiveClip(useEditor.getState())
+   476→  const frameIndex = Math.min(activeFrameIndex, clip.frames.length - 1)
+   477→
+   478→  // keep the active thumb visible while playing / scrubbing
+   479→  useEffect(() => {
+   480→    const strip = stripRef.current
+   481→    if (!strip) return
+   482→    const el = strip.querySelector<HTMLElement>(`[data-frame-index="${frameIndex}"]`)
+   483→    el?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: playing ? 'auto' : 'smooth' })
+   484→  }, [frameIndex, playing])
+   485→
+   486→  const commitDrop = (target: number) => {
+   487→    const from = dragFromRef.current
+   488→    dragFromRef.current = null
+   489→    setDropTarget(null)
+   490→    if (from == null || from === target) return
+   491→    moveFrame(from, target)
+   492→  }
+   493→
+   494→  const transport = (
+   495→    <>
+   496→      <Tooltip>
+   497→        <TooltipTrigger asChild>
+   498→          <Button variant="ghost" size="icon" className="h-7 w-7 text-zinc-400" onClick={() => editorPlayback.restart()} aria-label="Restart from first frame">
+   499→            <ChevronsLeft className="h-4 w-4" />
+   500→          </Button>
+   501→        </TooltipTrigger>
+   502→        <TooltipContent>Restart</TooltipContent>
+   503→      </Tooltip>
+   504→      <Tooltip>
+   505→        <TooltipTrigger asChild>
+   506→          <Button variant="ghost" size="icon" className="h-7 w-7 text-zinc-400" onClick={() => editorPlayback.step(-1)} aria-label="Previous frame">
+   507→            <ChevronLeft className="h-4 w-4" />
+   508→          </Button>
+   509→        </TooltipTrigger>
+   510→        <TooltipContent>Previous frame (,)</TooltipContent>
+   511→      </Tooltip>
+   512→      <Tooltip>
+   513→        <TooltipTrigger asChild>
+   514→          <Button
+   515→            variant={playing ? 'secondary' : 'ghost'}
+   516→            size="icon"
+   517→            className={`h-7 w-7 ${playing ? 'bg-teal-500/15 text-teal-300 ring-1 ring-teal-500/40' : 'text-zinc-300'}`}
+   518→            onClick={() => editorPlayback.toggle()}
+   519→            aria-label={playing ? 'Pause animation' : 'Play animation'}
+   520→          >
+   521→            {playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+   522→          </Button>
+   523→        </TooltipTrigger>
+   524→        <TooltipContent>Play / pause (Enter)</TooltipContent>
+   525→      </Tooltip>
+   526→      <Tooltip>
+   527→        <TooltipTrigger asChild>
+   528→          <Button variant="ghost" size="icon" className="h-7 w-7 text-zinc-400" onClick={() => editorPlayback.step(1)} aria-label="Next frame">
+   529→            <ArrowRight className="h-4 w-4" />
+   530→          </Button>
+   531→        </TooltipTrigger>
+   532→        <TooltipContent>Next frame (.)</TooltipContent>
+   533→      </Tooltip>
+   534→      <Tooltip>
+   535→        <TooltipTrigger asChild>
+   536→          <Button variant="ghost" size="icon" className="h-7 w-7 text-zinc-400" onClick={() => editorPlayback.stop()} aria-label="Stop and rewind">
+   537→            <Square className="h-3.5 w-3.5" />
+   538→          </Button>
+   539→        </TooltipTrigger>
+   540→        <TooltipContent>Stop &amp; rewind</TooltipContent>
+   541→      </Tooltip>
+   542→    </>
+   543→  )
+   544→
+   545→  return (
+   546→    <TooltipProvider delayDuration={200}>
+   547→      <section aria-label="Animation timeline" className="shrink-0 border-t border-zinc-800 bg-zinc-950/80">
+   548→        {/* clips + transport row */}
+   549→        <div className="flex h-9 items-center gap-1 overflow-x-auto border-b border-zinc-800 px-2 pixelforge-scroll">
+   550→          {project.clips.map((c) => (
+   551→            <div key={c.id} className="flex shrink-0 items-center">
+   552→              {renamingClip === c.id ? (
+   553→                <Input
+   554→                  autoFocus
+   555→                  defaultValue={c.name}
+   556→                  className="h-6 w-24 border-zinc-700 bg-zinc-900 font-mono text-xs"
+   557→                  onBlur={(e) => {
+   558→                    setClipProp(c.id, { name: e.target.value || c.name })
+   559→                    setRenamingClip(null)
+   560→                  }}
+   561→                  onKeyDown={(e) => {
+   562→                    if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+   563→                    if (e.key === 'Escape') setRenamingClip(null)
+   564→                  }}
+   565→                />
+   566→              ) : (
+   567→                <button
+   568→                  type="button"
+   569→                  onDoubleClick={() => setRenamingClip(c.id)}
+   570→                  onClick={() => selectClip(c.id)}
+   571→                  className={`rounded-t-md border-b-2 px-3 py-1 font-mono text-xs transition-colors ${
+   572→                    c.id === clip.id
+   573→                      ? 'border-teal-400 bg-zinc-900 text-teal-300'
+   574→                      : 'border-transparent text-zinc-400 hover:text-zinc-300'
+   575→                  }`}
+   576→                  title={`${c.name} — ${c.frames.length} frames · double-click to rename`}
+   577→                >
+   578→                  {c.name}
+   579→                  <span className="ml-2 text-[10px] text-zinc-400">{c.frames.length}f</span>
+   580→                </button>
+   581→              )}
+   582→            </div>
+   583→          ))}
+   584→          <Tooltip>
+   585→            <TooltipTrigger asChild>
+   586→              <Button
+   587→                variant="ghost"
+   588→                size="icon"
+   589→                className="h-6 w-6 shrink-0 text-zinc-400"
+   590→                onClick={() => addClip(`clip ${project.clips.length + 1}`)}
+   591→                aria-label="Add clip"
+   592→              >
+   593→                <Plus className="h-3.5 w-3.5" />
+   594→              </Button>
+   595→            </TooltipTrigger>
+   596→            <TooltipContent>New clip</TooltipContent>
+   597→          </Tooltip>
+   598→          {project.clips.length > 1 && (
+   599→            <Tooltip>
+   600→              <TooltipTrigger asChild>
+   601→                <Button
+   602→                  variant="ghost"
+   603→                  size="icon"
+   604→                  className="h-6 w-6 shrink-0 text-red-400/70 hover:text-red-300"
+   605→                  onClick={() => deleteClip(clip.id)}
+   606→                  aria-label="Delete current clip"
+   607→                >
+   608→                  <Trash2 className="h-3.5 w-3.5" />
+   609→                </Button>
+   610→              </TooltipTrigger>
+   611→              <TooltipContent>Delete clip</TooltipContent>
+   612→            </Tooltip>
+   613→          )}
+   614→
+   615→          <div className="ml-auto flex shrink-0 items-center gap-1 pl-3">
+   616→            {/* playback state chip (Task 6 §5 visible playback state) */}
+   617→            <span
+   618→              role="status"
+   619→              className={`mr-1 hidden shrink-0 rounded px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider sm:inline ${
+   620→                playing ? 'bg-teal-500/15 text-teal-300' : 'bg-zinc-800 text-zinc-500'
+   621→              }`}
+   622→              aria-live="polite"
+   623→            >
+   624→              {playing ? `▶ ${frameIndex + 1}/${clip.frames.length}` : `paused ${frameIndex + 1}/${clip.frames.length}`}
+   625→            </span>
+   626→            {transport}
+   627→            {/* loop mode (Task 6 §3): forward · reverse · ping-pong */}
+   628→            <Select
+   629→              value={clip.loopMode}
+   630→              onValueChange={(v) => setClipProp(clip.id, { loopMode: v as Clip['loopMode'] })}
+   631→            >
+   632→              <SelectTrigger
+   633→                // NOTE: the base trigger ships `data-[size=default]:h-9`, whose
+   634→                // attribute-variant specificity beats a plain `h-7` — the same-variant
+   635→                // override here is what actually pins it to the 28px transport row.
+   636→                className="data-[size=default]:h-7 w-[96px] gap-1 border-zinc-800 bg-zinc-900 dark:bg-zinc-900 dark:hover:bg-zinc-800 px-2 font-mono text-[10px] text-zinc-300"
+   637→                aria-label="Playback mode"
+   638→              >
+   639→                <SelectValue />
+   640→              </SelectTrigger>
+   641→              <SelectContent>
+   642→                <SelectItem value="forward">Forward</SelectItem>
+   643→                <SelectItem value="reverse">Reverse</SelectItem>
+   644→                <SelectItem value="pingpong">Ping-pong</SelectItem>
+   645→              </SelectContent>
+   646→            </Select>
+   647→            <Tooltip>
+   648→              <TooltipTrigger asChild>
+   649→                <Button
+   650→                  variant="ghost"
+   651→                  size="icon"
+   652→                  className={`h-7 w-7 ${clip.loop ? 'text-teal-300' : 'text-zinc-400'}`}
+   653→                  onClick={() => setClipProp(clip.id, { loop: !clip.loop })}
+   654→                  aria-label="Loop clip"
+   655→                  aria-pressed={clip.loop}
+   656→                >
+   657→                  <Repeat className="h-4 w-4" />
+   658→                </Button>
+   659→              </TooltipTrigger>
+   660→              <TooltipContent>{clip.loop ? 'Looping' : 'Play once'}</TooltipContent>
+   661→            </Tooltip>
+   662→            <OnionPopover />
+   663→            <label className="flex items-center gap-1.5 font-mono text-[10px] text-zinc-400">
+   664→              FPS
+   665→              <StepperInput
+   666→                size="sm"
+   667→                value={clip.fps}
+   668→                onChange={(v) => setClipProp(clip.id, { fps: Math.min(60, Math.max(1, v)) })}
+   669→                min={1}
+   670→                max={60}
+   671→                ariaLabel="Frames per second"
+   672→              />
+   673→            </label>
+   674→            <Tooltip>
+   675→              <TooltipTrigger asChild>
+   676→                <Button
+   677→                  variant="ghost"
+   678→                  size="icon"
+   679→                  className="h-7 w-7 text-zinc-400"
+   680→                  onClick={() => setTimelineOpen(!timelineOpen)}
+   681→                  aria-label={timelineOpen ? 'Collapse frames strip' : 'Expand frames strip'}
+   682→                  aria-pressed={timelineOpen}
+   683→                >
+   684→                  {timelineOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
+   685→                </Button>
+   686→              </TooltipTrigger>
+   687→              <TooltipContent>{timelineOpen ? 'Collapse frames' : 'Expand frames'}</TooltipContent>
+   688→            </Tooltip>
+   689→          </div>
+   690→        </div>
+   691→
+   692→        {/* frames strip (collapsible to give the canvas more vertical space) */}
+   693→        {timelineOpen && (
+   694→          <>
+   695→            <Scrubber clip={clip} activeIndex={frameIndex} />
+   696→            <div className="flex items-center gap-1 border-b border-zinc-800/60 px-2 py-1">
+   697→              <Tooltip>
+   698→                <TooltipTrigger asChild>
+   699→                  <Button variant="ghost" size="icon" className="h-6 w-6 text-zinc-400" onClick={() => addFrame(false)} aria-label="Add empty frame after current">
+   700→                    <Plus className="h-3.5 w-3.5" />
+   701→                  </Button>
+   702→                </TooltipTrigger>
+   703→                <TooltipContent>Add frame (Alt+N)</TooltipContent>
+   704→              </Tooltip>
+   705→              <Tooltip>
+   706→                <TooltipTrigger asChild>
+   707→                  <Button variant="ghost" size="icon" className="h-6 w-6 text-zinc-400" onClick={() => addFrame(true)} aria-label="Duplicate current frame">
+   708→                    <Copy className="h-3.5 w-3.5" />
+   709→                  </Button>
+   710→                </TooltipTrigger>
+   711→                <TooltipContent>Duplicate frame</TooltipContent>
+   712→              </Tooltip>
+   713→              <Tooltip>
+   714→                <TooltipTrigger asChild>
+   715→                  <Button
+   716→                    variant="ghost"
+   717→                    size="icon"
+   718→                    className="h-6 w-6 text-zinc-400"
+   719→                    onClick={() => moveFrame(frameIndex, frameIndex - 1)}
+   720→                    disabled={frameIndex === 0}
+   721→                    aria-label="Move frame left"
+   722→                  >
+   723→                    <ArrowLeft className="h-3.5 w-3.5" />
+   724→                  </Button>
+   725→                </TooltipTrigger>
+   726→                <TooltipContent>Move left</TooltipContent>
+   727→              </Tooltip>
+   728→              <Tooltip>
+   729→                <TooltipTrigger asChild>
+   730→                  <Button
+   731→                    variant="ghost"
+   732→                    size="icon"
+   733→                    className="h-6 w-6 text-zinc-400"
+   734→                    onClick={() => moveFrame(frameIndex, frameIndex + 1)}
+   735→                    disabled={frameIndex >= clip.frames.length - 1}
+   736→                    aria-label="Move frame right"
+   737→                  >
+   738→                    <ArrowRight className="h-3.5 w-3.5" />
+   739→                  </Button>
+   740→                </TooltipTrigger>
+   741→                <TooltipContent>Move right</TooltipContent>
+   742→              </Tooltip>
+   743→              <Tooltip>
+   744→                <TooltipTrigger asChild>
+   745→                  <Button
+   746→                    variant="ghost"
+   747→                    size="icon"
+   748→                    className="h-6 w-6 text-red-400/80 hover:text-red-300"
+   749→                    onClick={() => deleteFrame(frameIndex)}
+   750→                    disabled={clip.frames.length <= 1}
+   751→                    aria-label="Delete current frame"
+   752→                  >
+   753→                    <Trash2 className="h-3.5 w-3.5" />
+   754→                  </Button>
+   755→                </TooltipTrigger>
+   756→                <TooltipContent>Delete frame</TooltipContent>
+   757→              </Tooltip>
+   758→              <span className="ml-2 flex min-w-0 items-center gap-2 truncate font-mono text-[10px] text-zinc-400">
+   759→                <span>
+   760→                  frame {frameIndex + 1}/{clip.frames.length} · {clip.name} · {clip.fps}fps ·{' '}
+   761→                  {clip.loopMode}
+   762→                  {!clip.loop && ' · once'}
+   763→                </span>
+   764→                {playing && (
+   765→                  <span className="inline-flex items-center gap-1 text-teal-300">
+   766→                    <ArrowLeftRight className="h-3 w-3 animate-pulse" aria-hidden />
+   767→                    playing
+   768→                  </span>
+   769→                )}
+   770→              </span>
+   771→            </div>
+   772→            <div ref={stripRef} className="pixelforge-scroll flex items-center gap-2 overflow-x-auto px-2 py-2">
+   773→              {clip.frames.map((f, i) => (
+   774→                <div key={f.id} data-frame-index={i} className="shrink-0">
+   775→                  <FrameThumb
+   776→                    clip={clip}
+   777→                    frame={f}
+   778→                    index={i}
+   779→                    active={i === frameIndex}
+   780→                    dropBefore={dropTarget === i && dragFromRef.current !== i}
+   781→                    w={project.width}
+   782→                    h={project.height}
+   783→                    tick={renderTick}
+   784→                    playing={playing}
+   785→                    onSelect={() => selectFrame(i)}
+   786→                    onDragStart={() => {
+   787→                      dragFromRef.current = i
+   788→                    }}
+   789→                    onDragOver={(e) => {
+   790→                      e.preventDefault()
+   791→                      if (dragFromRef.current != null && dropTarget !== i) setDropTarget(i)
+   792→                    }}
+   793→                    onDrop={() => commitDrop(i)}
+   794→                    onDragEnd={() => {
+   795→                      dragFromRef.current = null
+   796→                      setDropTarget(null)
+   797→                    }}
+   798→                  />
+   799→                </div>
+   800→              ))}
+   801→            </div>
+   802→          </>
+   803→        )}
+   804→      </section>
+   805→    </TooltipProvider>
+   806→  )
+   807→}
+   808→

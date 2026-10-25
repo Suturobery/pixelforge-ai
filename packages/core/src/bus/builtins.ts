@@ -43,6 +43,7 @@ import {
   getOptionalLoopMode,
   getOptionalString,
   getString,
+  HEX_RE,
 } from './validate';
 
 // ---------------------------------------------------------------------------
@@ -659,6 +660,39 @@ export const paletteRemoveColor: CommandDefinition<{ hex: string }> = {
   },
 };
 
+/** Replace the whole document palette in one undoable step (preset apply). */
+export const paletteReplaceAll: CommandDefinition<{ colors: string[] }> = {
+  type: 'palette.replaceAll',
+  defaultLabel: 'Replace palette',
+  validate(payload) {
+    const p = assertObject(payload, 'palette.replaceAll');
+    if (!Array.isArray(p.colors) || p.colors.length === 0) {
+      fail(`palette.replaceAll: "colors" must be a non-empty array of hex colors`);
+    }
+    for (const c of p.colors as unknown[]) {
+      if (typeof c !== 'string' || !HEX_RE.test(c)) {
+        fail(`palette.replaceAll: every color must be a hex string like #rrggbb`);
+      }
+    }
+  },
+  apply(payload, ctx) {
+    // normalize + dedupe, keep first occurrence order
+    const seen = new Set<string>();
+    const colors: string[] = [];
+    for (const c of payload.colors) {
+      const hex = c.toLowerCase();
+      if (!seen.has(hex)) {
+        seen.add(hex);
+        colors.push(hex);
+      }
+    }
+    return {
+      project: { ...ctx.project, palette: colors },
+      label: 'Replace palette',
+    };
+  },
+};
+
 // ---------------------------------------------------------------------------
 // trash
 // ---------------------------------------------------------------------------
@@ -786,6 +820,7 @@ export function builtinCommands(): CommandDefinition<never>[] {
     layerSetLinked,
     paletteAddColor,
     paletteRemoveColor,
+    paletteReplaceAll,
     settingsSetOnion,
     trashRestore,
     trashPurge,

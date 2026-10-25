@@ -20,12 +20,13 @@
 
 'use client'
 
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useEditor, type RightTab } from '@/lib/pixelforge/store'
 import { useAppSettings } from '@/lib/pixelforge/settings'
 import { useSaveProject } from '@/components/pixelforge/use-save'
 import { useKeyboardShortcuts } from '@/components/pixelforge/use-keyboard'
 import { useIsMobile } from '@/components/pixelforge/use-is-mobile'
+import { Layers, Sparkles, Bot, PanelRightClose } from 'lucide-react'
 import { Header } from '@/components/pixelforge/header'
 import { ToolRail } from '@/components/pixelforge/tool-rail'
 import { CanvasStage } from '@/components/pixelforge/canvas-stage'
@@ -36,10 +37,10 @@ import { AgentPanel } from '@/components/pixelforge/agent-panel'
 import { Footer } from '@/components/pixelforge/footer'
 import { cn } from '@/lib/utils'
 
-const RIGHT_TABS: { id: RightTab; label: string }[] = [
-  { id: 'layers', label: 'Layers' },
-  { id: 'ai', label: 'AI' },
-  { id: 'agent', label: 'Agent' },
+const RIGHT_TABS: { id: RightTab; label: string; icon: React.ReactNode }[] = [
+  { id: 'layers', label: 'Layers', icon: <Layers className="h-3.5 w-3.5" aria-hidden /> },
+  { id: 'ai', label: 'AI', icon: <Sparkles className="h-3.5 w-3.5" aria-hidden /> },
+  { id: 'agent', label: 'Agent', icon: <Bot className="h-3.5 w-3.5" aria-hidden /> },
 ]
 
 function RightDock({ mobile }: { mobile: boolean }) {
@@ -51,11 +52,17 @@ function RightDock({ mobile }: { mobile: boolean }) {
   const setRightWidth = useEditor((s) => s.setRightWidth)
   const dragRef = useRef<{ startX: number; startW: number } | null>(null)
 
-  if (!rightOpen) {
+  // on phones the dock is a slide-over drawer and starts CLOSED so the
+  // canvas + timeline always get the full width (mobile UI audit fix)
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const open = mobile ? drawerOpen : rightOpen
+  const setOpen = (v: boolean) => (mobile ? setDrawerOpen(v) : setRightOpen(v))
+
+  if (!open) {
     return (
       <button
         type="button"
-        onClick={() => setRightOpen(true)}
+        onClick={() => setOpen(true)}
         aria-label="Show panels"
         className="w-6 shrink-0 border-l border-zinc-800 bg-zinc-950/60 font-mono text-[10px] uppercase tracking-widest text-zinc-500 hover:text-teal-300 [writing-mode:vertical-rl]"
       >
@@ -65,46 +72,67 @@ function RightDock({ mobile }: { mobile: boolean }) {
   }
 
   return (
-    <aside
-      aria-label="Panels"
-      className="relative flex min-w-0 shrink-0 flex-col border-l border-zinc-800 bg-zinc-950/60"
-      style={{ width: mobile ? undefined : rightWidth }}
-    >
-      {/* tab bar — [Layers | AI | Agent] */}
-      <div role="tablist" aria-label="Panel tabs" className="flex h-9 shrink-0 items-stretch border-b border-zinc-800">
-        {RIGHT_TABS.map((t) => (
-          <button
-            key={t.id}
-            role="tab"
-            type="button"
-            aria-selected={rightTab === t.id}
-            onClick={() => setRightTab(t.id)}
-            className={`flex-1 border-b-2 px-2 font-mono text-xs transition-colors ${
-              rightTab === t.id
-                ? 'border-teal-400 bg-zinc-900/60 text-teal-300'
-                : 'border-transparent text-zinc-400 hover:text-zinc-200'
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
+    <>
+      {/* phone drawer: dim + tap-outside to close (desktop has no backdrop) */}
+      {mobile && (
         <button
           type="button"
-          onClick={() => setRightOpen(false)}
           aria-label="Hide panels"
-          className="w-7 shrink-0 font-mono text-[11px] text-zinc-500 hover:text-zinc-200"
-          title="Hide panel dock"
-        >
-          ✕
-        </button>
-      </div>
+          tabIndex={-1}
+          onClick={() => setOpen(false)}
+          className="absolute inset-0 z-30 cursor-default bg-black/40"
+        />
+      )}
+      <aside
+        aria-label="Panels"
+        className={
+          mobile
+            ? 'absolute inset-y-0 right-0 z-40 flex w-[min(85vw,320px)] flex-col border-l border-zinc-800 bg-zinc-950 shadow-2xl'
+            : 'relative flex min-w-0 shrink-0 flex-col border-l border-zinc-800 bg-zinc-950/60'
+        }
+        style={mobile ? undefined : { width: rightWidth }}
+      >
+        {/* PANELS header row (original studio chrome) */}
+        <div className="flex h-9 shrink-0 items-center justify-between border-b border-zinc-800 pl-3 pr-1.5">
+          <span className="font-mono text-[10px] uppercase tracking-widest text-zinc-400">Panels</span>
+          <button
+            type="button"
+            onClick={() => setOpen(false)}
+            aria-label="Hide panels"
+            title="Hide panel dock"
+            className="rounded p-1 text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200"
+          >
+            <PanelRightClose className="h-4 w-4" />
+          </button>
+        </div>
 
-      {/* active panel */}
-      <div role="tabpanel" className="min-h-0 flex-1">
-        {rightTab === 'layers' && <LayersPanel />}
-        {rightTab === 'ai' && <AiPanel />}
-        {rightTab === 'agent' && <AgentPanel />}
-      </div>
+        {/* tab bar — [Layers | AI | Agent] segmented group with icons */}
+        <div role="tablist" aria-label="Panel tabs" className="flex shrink-0 gap-1 border-b border-zinc-800 p-1.5">
+          {RIGHT_TABS.map((t) => (
+            <button
+              key={t.id}
+              role="tab"
+              type="button"
+              aria-selected={rightTab === t.id}
+              onClick={() => setRightTab(t.id)}
+              className={`flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 font-mono text-xs transition-colors ${
+                rightTab === t.id
+                  ? 'bg-zinc-800 text-teal-300 ring-1 ring-zinc-700'
+                  : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200'
+              }`}
+            >
+              {t.icon}
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {/* active panel */}
+        <div role="tabpanel" className="min-h-0 flex-1">
+          {rightTab === 'layers' && <LayersPanel />}
+          {rightTab === 'ai' && <AiPanel />}
+          {rightTab === 'agent' && <AgentPanel />}
+        </div>
 
       {/* width drag handle (desktop) */}
       {!mobile && (
@@ -127,7 +155,8 @@ function RightDock({ mobile }: { mobile: boolean }) {
           }}
         />
       )}
-    </aside>
+      </aside>
+    </>
   )
 }
 

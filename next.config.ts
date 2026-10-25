@@ -14,6 +14,8 @@ const nextConfig: NextConfig = {
     ignoreBuildErrors: true,
   },
   reactStrictMode: false,
+  // keep the studio chrome clean — no dev-mode badge/icon overlays
+  devIndicators: false,
   turbopack: {
     resolveAlias: {
       "@pixelforge/core": CORE_ALIAS,

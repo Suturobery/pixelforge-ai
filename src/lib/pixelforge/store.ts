@@ -125,30 +125,9 @@ useAppSettings.subscribe((s, prev) => {
   }
 })
 
-// Shim-registered command: palette presets replace the whole palette in ONE
-// undoable step (built-ins only add/remove single colors).
-bus.register({
-  type: 'palette.replaceAll',
-  defaultLabel: 'Apply palette',
-  validate(payload) {
-    const p = payload as { colors?: unknown }
-    const colors = p?.colors
-    if (!Array.isArray(colors) || colors.length === 0 || colors.length > 256) {
-      throw new CommandError('VALIDATION_FAILED', 'palette.replaceAll: colors must be a 1..256 array')
-    }
-    for (const c of colors) {
-      if (typeof c !== 'string' || !/^#[0-9a-f]{6}([0-9a-f]{2})?$/i.test(c)) {
-        throw new CommandError('VALIDATION_FAILED', `palette.replaceAll: bad hex "${String(c)}"`)
-      }
-    }
-  },
-  apply(payload, ctx) {
-    return {
-      project: { ...ctx.project, palette: [...(payload as { colors: string[] }).colors] },
-      label: 'Apply palette',
-    }
-  },
-})
+// NOTE: `palette.replaceAll` (preset apply, one undoable step) now ships as a
+// core builtin — the old shim registration here was removed (it crashed with
+// "already registered" after the command moved into packages/core).
 
 // ---------------------------------------------------------------------------
 // state
