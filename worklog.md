@@ -104,3 +104,25 @@ Stage Summary:
 - Invisible-text class of bugs eliminated at the token level — any future shadcn primitive (popover/dialog/tooltip/select) now inherits correct dark styling automatically
 - Color match fixed for hover states, overlays, dialogs and dropdowns; no functional regressions (draw/undo/save/export/AI flows untouched, zero page errors)
 - Screenshots: artifacts/uiux-audit/01..11; prior audit context in Task ID uiux-audit-1
+
+---
+Task ID: recovery-audit-1
+Agent: Z.ai Code (main)
+Task: Read-only recovery audit requested by user — verify which P0/P1 features actually survived recovery, run safe tests, protect data, report before ANY new implementation
+
+Work Log:
+- Git: branch main, working tree CLEAN, 9 commits (restore fbd42d1 + 2 post-audit commits), NO remote configured
+- Compared every restored tree byte-for-byte against the /tmp/my-project snapshot: packages/, apps/, mini-services/, docs/, evidence/ are 100% identical; src/ differs only by 2 snapshot-only dead files (pixel-canvas.tsx, rig-panel.tsx — zero imports, obsolete Motion Lab files)
+- Snapshot /tmp/my-project was re-synced 2026-10-25 14:22 (same nanosecond mtimes as working tree) → it is a CURRENT backup including all uiux-audit-1/2 fixes
+- Verified in source: Normalize v2.1 (border-ring bg sampling, source-res stray removal, contain fit + paddingPct, enclosed residue cleanup, AA fringe cleanup), quality.ts analyzeSpriteQuality, empty-sprite golden regression guard ("trivially true when nothing survives" + #T3), 5 motion preset ids, part metadata in persist/serialize.ts, MCP catalog 43 tools (36 original + 4 Task 9 candidate/normalize + 3 Task 10 motion), generate_sprite UNREGISTERED pending Task 11 (contract-asserted)
+- EXECUTED: packages/core bun test → 317 pass / 0 fail (matches historical baseline 317/317); apps/desktop bun test tests/ → 46 pass / 0 fail; core typecheck + test:typecheck → PASS; root tsc → 0 errors under src/; bun run lint → PASS
+- NOT RUN (blocked, no side effects attempted): MCP contract suite (mini-services/mcp-server node_modules absent), MCP live E2E + Electron smokes (need live stack/Xvfb/npm ci), ci:local (script missing)
+- Data protection: db/custom.db intact — 2 user projects (untitled 32×32, latest ts 1792937744691); .env present + gitignored (contents never printed); no destructive commands issued; no paid AI calls made
+- Missing files identified: .github/workflows/ci.yml, scripts/{ci-local.sh,smoke-stack.sh,seed-sample.ts,bench-open.ts} — all recoverable byte-identical from /tmp snapshot; PixelForge_AI_Project_Plan_v3.1.md NOT FOUND anywhere (only upload/PixelForge_AI_Desktop_App_Project_Plan.docx)
+- Dead Motion Lab remnants confirmed zero-referenced: src/app/api/generate/route.ts, src/lib/pixelforge/normalize.ts, src/lib/pixelforge/fixtures.ts (candidates for removal — NOT removed per audit rules)
+- Post-restore UI/UX fixes verified present in working tree: layout.tsx className="dark", drawer/mobile fixes, styled tooltips (artifacts/uiux-audit/01..11)
+
+Stage Summary:
+- Recovery is substantially COMPLETE and verified: all P0 + Task 9 + Task 10 code and tests are present; 317 core + 46 desktop tests pass clean on the recovered source
+- Gaps are infrastructure-only (CI workflow/scripts missing from copy, two dependency trees uninstalled, v3.1 plan md lost) — no feature code lost beyond the two dead Motion Lab files
+- No code modified during this audit (read-only + this worklog entry); awaiting user approval for the recommended restore/install/backup actions
