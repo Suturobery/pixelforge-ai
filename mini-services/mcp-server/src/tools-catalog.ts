@@ -1,19 +1,16 @@
 /**
- * PixelForge AI — MCP tool catalog (v3.1 §5.2/§5.3, P0 scope: L0 + L1).
+ * PixelForge AI — MCP tool catalog (v3.1 §5.2/§5.3).
  *
  * Every non-server-side tool is a RELAY: the MCP server validates identity +
- * tier + rate budget, then forwards the call to the PixelForge renderer,
- * which executes it on the REAL CommandBus — the same bus, validation and
- * undo history as manual editing. Nothing here mutates a document directly.
+ * tier + rate budget (+ the paid-op approval gate), then forwards the call to
+ * the PixelForge renderer, which executes it on the REAL CommandBus — the
+ * same bus, validation and undo history as manual editing. Nothing here
+ * mutates a document directly.
  *
- * DEFERRED tools (v3.1 dependencies — NOT registered, NOT advertised):
- *   L2 (resize_canvas, save_project-as, export_*, purge_trash) → P1
- *     approval center (Task 11); L3 (generate_sprite) → Task 11 (paid ops
- *     require the approval workflow — NEVER an unrestricted tool; v3.1 §5.2).
- * Task 9 registered the candidate-review set (get_candidates L0;
- * accept/reject_candidate + apply_normalize L1) — no paid generation here.
- * Task 10 registers the motion set (suggest_motion_preset L0; set_parts +
- * apply_motion_preset L1) — deterministic, $0, executed on the real bus.
+ * Tiers registered: L0 read · L1 undoable writes · L2 destructive/disk
+ * (Task 11) · L3 generate_sprite, the one paid tool (approval card before
+ * anything is spent — v3.1 §5.2/§5.4). Task 8b/8c added the embedded
+ * knowledge skill set (get_knowledge L0, study_reference L1).
  */
 
 import { z } from 'zod';
@@ -912,6 +909,16 @@ export const TOOL_CATALOG: ToolDef[] = [
       styleName: z.string().trim().min(1).max(60).optional().describe('Short style name, e.g. "chibi-jrpg".'),
       notes: z.string().trim().min(1).max(500).optional().describe('What the art depicts; observations worth keeping.'),
     },
+  },
+  {
+    name: 'save_project',
+    title: 'Save project',
+    description:
+      'Persist the ACTIVE project to its current .pixelforgeproj file (atomic save + journal). If the project has ' +
+      'no file yet, the app shows the native Save As dialog — the human picks the destination. Returns the saved path.',
+    tier: 'L2',
+    relay: true,
+    inputSchema: {},
   },
 ];
 

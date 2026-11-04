@@ -8,8 +8,11 @@
 // builtin commands with origin 'mcp', and whole-document replacement only via
 // the store's load path.
 //
-// DEFERRED (not implemented here, per v3.1 dependencies):
-//   L2/L3 tools → P1 approval center (Task 11) — structurally unregistered.
+// DEFERRED (not implemented here, per v3.1 dependencies): approval
+// persistence stays in-memory v1 until the desktop job queue integration.
+// Task 11 landed the L2/L3 set + approval center; Task 8b/8c added the
+// knowledge skill set (get_knowledge / study_reference served by the MCP
+// server itself, no editor round-trip).
 // Task 9 adds get_candidates (L0) + accept_candidate / reject_candidate /
 // apply_normalize (L1) over the shared AI candidate store — the paid
 // generation itself stays OFF the MCP surface until the Task 11 approval
@@ -41,6 +44,7 @@ import {
 import { getBus, useEditor } from './store'
 import { hexToRgba } from './color'
 import { importLegacyProjectJson, isSerializedProject } from './project-io'
+import { saveProjectFile } from './project-files'
 import { describeApiErrorInline } from './api-error'
 import { rememberLastProject } from './last-session'
 import { followCommandTarget } from './mcp-follow'
@@ -1589,6 +1593,14 @@ const handlers: Record<string, ToolHandler> = {
       { redid: result.ok, label: result.label ?? null, skipped: result.skipped ?? 0, canUndo: getBus().canUndo(), canRedo: getBus().canRedo() },
       { summary: result.ok ? `Redid: ${result.label ?? 'change'}` : 'Nothing to redo' }
     )
+  },
+
+  async save_project() {
+    const saved = await saveProjectFile()
+    if (!saved) {
+      return fail('save_canceled', 'Save did not complete — no file chosen (dialog dismissed) or running on web.', 'Call again and pick a destination in the Save As dialog.')
+    }
+    return withStateHash({}, { undoable: false, summary: 'Project saved to its .pixelforgeproj file' })
   },
 }
 

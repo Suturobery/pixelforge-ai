@@ -1,11 +1,10 @@
 /**
  * PixelForge AI — MCP server shared types (v3.1 §5).
  *
- * Permission tiers (v3.1 §5.2): Task 8 registers L0 (read) and L1
- * (undoable writes) tools ONLY. L2 (destructive/disk) and L3 (paid AI)
- * are structurally absent from the catalog — a client cannot call what is
- * not registered, and the tier check would reject it even if a name were
- * guessed (UNKNOWN_TOOL before any relay happens).
+ * Permission tiers (v3.1 §5.2): L0 read · L1 undoable writes ·
+ * L2 destructive/disk · L3 paid AI (generate_sprite, approval-gated).
+ * Task 11 registered the L2/L3 set — the paid tool parks on the approval
+ * center until the human approves; tier + rate limits still apply.
  */
 
 export type Tier = 'L0' | 'L1' | 'L2' | 'L3';

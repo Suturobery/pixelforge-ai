@@ -266,7 +266,8 @@ describe('pairing + tool workflow (real MCP protocol)', () => {
     expect(names).toContain('generate_sprite');
     expect(names).toContain('import_frame_strip');
     expect(names).toContain('macro_run');
-    expect(names).not.toContain('save_project');
+    // Task 11 completion: save_project registered (L2)
+    expect(names).toContain('save_project');
     // L2 export/purge/resize suite + batch/quota (agent tooling) are registered
     expect(names).toContain('purge_trash');
     expect(names).toContain('resize_canvas');
@@ -908,7 +909,33 @@ describe('skill knowledge (get_knowledge / study_reference)', () => {
     const names = listed.tools.map((t) => t.name);
     expect(names).toContain('get_knowledge');
     expect(names).toContain('study_reference');
+    expect(names).toContain('save_project');
     await pc.close();
+  });
+
+  test('save_project is L2-gated and relays to the editor', async () => {
+    // L0 pairing: tier check rejects before any relay happens.
+    const l0 = await pairedClient('L0', 'save-reader');
+    const denied = textEnvelope(await l0.callTool({ name: 'save_project', arguments: {} }));
+    expect(denied.ok).toBe(false);
+    expect(denied.error?.code).toBe('permission_denied');
+    await l0.close();
+
+    // L1 pairing: still below L2.
+    const l1 = await pairedClient('L1', 'save-writer-l1');
+    const denied1 = textEnvelope(await l1.callTool({ name: 'save_project', arguments: {} }));
+    expect(denied1.ok).toBe(false);
+    expect(denied1.error?.code).toBe('permission_denied');
+    await l1.close();
+
+    // L2 pairing + mock editor answering the relay: happy path.
+    toolResponders.set('save_project', () => ({ saved: true, path: 'C:/tmp/x.pixelforgeproj' }));
+    const l2 = await pairedClient('L2', 'save-writer-l2');
+    const env = textEnvelope(await l2.callTool({ name: 'save_project', arguments: {} }));
+    expect(env.ok).toBe(true);
+    expect((env.data as { saved: boolean }).saved).toBe(true);
+    expect((env.data as { path: string }).path).toContain('.pixelforgeproj');
+    await l2.close();
   });
 
   test('L0 get_knowledge serves shipped palettes', async () => {
