@@ -193,6 +193,169 @@ function jumpCurves(frameCount: number): PresetCurves {
 }
 
 // ---------------------------------------------------------------------------
+// spin — 4 frames: horizontal shifts fake a turn (dx [0,2,0,−2]), armR raised
+// on the "back turned" frames; head follows body.
+// ---------------------------------------------------------------------------
+
+function spinCurves(): PresetCurves {
+  const body = [
+    { dx: 0, dy: 0 },
+    { dx: 2, dy: 0 },
+    { dx: 0, dy: 0 },
+    { dx: -2, dy: 0 },
+  ];
+  return {
+    body,
+    head: body.map((o) => ({ ...o })),
+    armR: [
+      { dx: 0, dy: -1 },
+      { dx: 1, dy: -2 },
+      { dx: 0, dy: -1 },
+      { dx: -1, dy: 0 },
+    ],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// duck — 4 frames: crouch and recover. body dy [0,1,2,1] with squash [1,2]
+// on the deepest frames; head = body (drops with the crouch).
+// ---------------------------------------------------------------------------
+
+function duckCurves(): PresetCurves {
+  const body = [
+    { dx: 0, dy: 0 },
+    { dx: 0, dy: 1, squash: 1 },
+    { dx: 0, dy: 2, squash: 2 },
+    { dx: 0, dy: 1, squash: 1 },
+  ];
+  return { body, head: body.map((o) => ({ ...o })) };
+}
+
+// ---------------------------------------------------------------------------
+// hurt — 4 frames: recoil. body dx [0,−1,−2,−1] (knocked back), head shake
+// dx [0,−1,0,−1]; arms flail up 1 px.
+// ---------------------------------------------------------------------------
+
+function hurtCurves(): PresetCurves {
+  const body = [
+    { dx: 0, dy: 0 },
+    { dx: -1, dy: 0 },
+    { dx: -2, dy: -1 },
+    { dx: -1, dy: 0 },
+  ];
+  return {
+    body,
+    head: [
+      { dx: 0, dy: 0 },
+      { dx: -1, dy: -1 },
+      { dx: 0, dy: -1 },
+      { dx: -1, dy: 0 },
+    ],
+    armL: [
+      { dx: 0, dy: -1 },
+      { dx: -1, dy: -2 },
+      { dx: -2, dy: -1 },
+      { dx: -1, dy: 0 },
+    ],
+    armR: [
+      { dx: 0, dy: -1 },
+      { dx: -1, dy: -2 },
+      { dx: -2, dy: -1 },
+      { dx: -1, dy: 0 },
+    ],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// swim — 6 frames: armL/armR alternate breast-stroke arcs, body dy wave
+// [0,−1,0,1,0,−1], legs small flutter.
+// ---------------------------------------------------------------------------
+
+const SWIM_ARM_L: PartOffset[] = [
+  { dx: -2, dy: -1 },
+  { dx: 0, dy: -2 },
+  { dx: 2, dy: -1 },
+  { dx: 2, dy: 0 },
+  { dx: 0, dy: 0 },
+  { dx: -2, dy: 0 },
+];
+const SWIM_ARM_R: PartOffset[] = [
+  { dx: 2, dy: 0 },
+  { dx: 2, dy: -1 },
+  { dx: 0, dy: -2 },
+  { dx: -2, dy: -1 },
+  { dx: -2, dy: 0 },
+  { dx: 0, dy: 0 },
+];
+
+function swimCurves(): PresetCurves {
+  const body = [
+    { dx: 0, dy: 0 },
+    { dx: 0, dy: -1 },
+    { dx: 0, dy: 0 },
+    { dx: 0, dy: 1 },
+    { dx: 0, dy: 0 },
+    { dx: 0, dy: -1 },
+  ];
+  const legs = [
+    { dx: 0, dy: 1 },
+    { dx: 1, dy: 0 },
+    { dx: 0, dy: -1 },
+    { dx: -1, dy: 0 },
+    { dx: 0, dy: 1 },
+    { dx: 1, dy: 0 },
+  ];
+  return {
+    body,
+    head: body.map((o) => ({ ...o })),
+    armL: SWIM_ARM_L.map((o) => ({ ...o })),
+    armR: SWIM_ARM_R.map((o) => ({ ...o })),
+    legL: legs.map((o) => ({ ...o })),
+    legR: legs.map((o) => ({ dx: -o.dx, dy: o.dy })),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// death — 5 frames, play-once: collapse forward and down. body dy [0,1,2,3,3]
+// with growing squash; head lags 1 frame; arms drop to the sides.
+// ---------------------------------------------------------------------------
+
+function deathCurves(): PresetCurves {
+  const body = [
+    { dx: 0, dy: 0 },
+    { dx: 0, dy: 1, squash: 1 },
+    { dx: 1, dy: 2, squash: 1 },
+    { dx: 1, dy: 3, squash: 2 },
+    { dx: 1, dy: 3, squash: 2 },
+  ];
+  const head = [
+    { dx: 0, dy: 0 },
+    { dx: 0, dy: 1 },
+    { dx: 1, dy: 2 },
+    { dx: 1, dy: 3, squash: 1 },
+    { dx: 1, dy: 3, squash: 1 },
+  ];
+  return {
+    body,
+    head,
+    armL: [
+      { dx: 0, dy: 0 },
+      { dx: -1, dy: 1 },
+      { dx: -2, dy: 2 },
+      { dx: -2, dy: 3 },
+      { dx: -2, dy: 3 },
+    ],
+    armR: [
+      { dx: 0, dy: 0 },
+      { dx: 1, dy: 1 },
+      { dx: 2, dy: 2 },
+      { dx: 2, dy: 3 },
+      { dx: 2, dy: 3 },
+    ],
+  };
+}
+
+// ---------------------------------------------------------------------------
 // registry
 // ---------------------------------------------------------------------------
 
@@ -247,9 +410,70 @@ export const MOTION_PRESETS: Record<MotionPresetId, PresetDef> = {
     description:
       'Parabola with preparation/ascent/apex/descent/landing phases and [1,2] px squash on takeoff/land. Play-once suggested.',
   },
+  spin: {
+    id: 'spin',
+    label: 'Spin',
+    frameCounts: [4],
+    defaultFrameCount: 4,
+    playOnceSuggested: false,
+    curvesFor: () => spinCurves(),
+    description:
+      'Turn-in-place illusion: body dx [0,2,0,−2], armR raises on the back-turned frames. Loop-compatible.',
+  },
+  duck: {
+    id: 'duck',
+    label: 'Duck',
+    frameCounts: [4],
+    defaultFrameCount: 4,
+    playOnceSuggested: false,
+    curvesFor: () => duckCurves(),
+    description:
+      'Crouch and recover: body dy [0,1,2,1] with [1,2] px squash on the deepest frames. Loop-compatible.',
+  },
+  hurt: {
+    id: 'hurt',
+    label: 'Hurt',
+    frameCounts: [4],
+    defaultFrameCount: 4,
+    playOnceSuggested: true,
+    curvesFor: () => hurtCurves(),
+    description:
+      'Knockback recoil: body dx [0,−1,−2,−1], head shake, arms flail up. Play-once suggested.',
+  },
+  swim: {
+    id: 'swim',
+    label: 'Swim',
+    frameCounts: [6],
+    defaultFrameCount: 6,
+    playOnceSuggested: false,
+    curvesFor: () => swimCurves(),
+    description:
+      'Breast-stroke: armL/armR alternate arcs, body dy wave, leg flutter. Loop-compatible.',
+  },
+  death: {
+    id: 'death',
+    label: 'Death',
+    frameCounts: [5],
+    defaultFrameCount: 5,
+    playOnceSuggested: true,
+    curvesFor: () => deathCurves(),
+    description:
+      'Collapse forward: body dy [0,1,2,3,3] with growing squash, head lags, arms drop. Play-once only.',
+  },
 };
 
-export const PRESET_IDS: readonly MotionPresetId[] = ['idle', 'walk', 'run', 'attack', 'jump'];
+export const PRESET_IDS: readonly MotionPresetId[] = [
+  'idle',
+  'walk',
+  'run',
+  'attack',
+  'jump',
+  'spin',
+  'duck',
+  'hurt',
+  'swim',
+  'death',
+];
 
 export function getPreset(id: string): PresetDef | undefined {
   return (PRESET_IDS as string[]).includes(id)

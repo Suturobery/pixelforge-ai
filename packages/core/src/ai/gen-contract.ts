@@ -22,7 +22,7 @@ import { sha256Hex } from '../persist/digest';
 
 // ------------------------------------------------------------------ types
 
-export type ProviderKind = 'zai' | 'openai' | 'anthropic' | 'custom';
+export type ProviderKind = 'zai' | 'openai' | 'custom';
 
 export interface ProviderCapabilities {
   /** text → image generation */
@@ -42,8 +42,7 @@ export interface ProviderCapabilities {
 }
 
 /**
- * Capability matrix per provider KIND (v3.1 §3.1 ships Z.AI + OpenAI-compat;
- * Anthropic stays chat-only — verified: no image API).
+ * Capability matrix per provider KIND (v3.1 §3.1 ships Z.AI + OpenAI-compat).
  *
  * Verification status (Task 9, honest record):
  *   • zai          — verified LIVE in this sandbox (images.generations,
@@ -53,7 +52,6 @@ export interface ProviderCapabilities {
  *                    img2img+mask via the separate edits endpoint — Task 9
  *                    does not call edits). NOT live-tested in this sandbox
  *                    (no API key) — contract tests only, marked below.
- *   • anthropic    — verified: no image-generation API (chat only).
  *   • custom       — OpenAI-compatible dialect assumed; capabilities are the
  *                    conservative subset (n unsupported unless configured).
  */
@@ -75,15 +73,6 @@ export const PROVIDER_CAPABILITIES: Record<ProviderKind, ProviderCapabilities> =
     n: true,
     builtIn: false,
     notes: 'Images API: prompt/size/n/quality. No seed param. img2img+mask via /images/edits (not used by Task 9). Contract-tested, not live-tested.',
-  },
-  anthropic: {
-    imageGeneration: false,
-    img2img: false,
-    seed: false,
-    mask: false,
-    n: false,
-    builtIn: false,
-    notes: 'Verified: chat-only provider — no image-generation API.',
   },
   custom: {
     imageGeneration: true,
@@ -251,7 +240,6 @@ export const PRICE_TABLE: Record<string, PriceEntry> = {
  */
 export function estimateCostUsd(providerKind: ProviderKind, model: string, images: number): number | null {
   if (providerKind === 'zai') return null; // built-in sandbox service — no public pricing
-  if (providerKind === 'anthropic') return null;
   const entry = PRICE_TABLE[model.trim().toLowerCase()];
   if (!entry) return null;
   return entry.usdPerImage * Math.max(1, images);

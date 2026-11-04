@@ -25,6 +25,7 @@ export { uid } from './id';
 // document model (types v2)
 // ---------------------------------------------------------------------------
 export type {
+  BlendMode,
   CellBuffer,
   Cel,
   Clip,
@@ -123,11 +124,17 @@ export {
   drawLinePixels,
   drawRectPixels,
   floodFill,
+  floodFillDither,
   getPixel,
+  inBrushDisc,
   inBounds,
   moveBuffer,
+  pixelPerfectStroke,
+  beautifyLayer,
   stampBrush,
+  stampCustomBuffer,
 } from './pixels/ops';
+export type { BrushShape, CustomBrush, PixelPerfectState } from './pixels/ops';
 export {
   drawEllipsePixels,
   ellipseOutlinePoints,
@@ -194,6 +201,7 @@ export {
   layerDuplicate,
   layerMergeDown,
   layerMove,
+  layerReorder,
   layerSetLinked,
   layerSetProps,
   paletteAddColor,
@@ -202,6 +210,7 @@ export {
   settingsSetOnion,
   trashPurge,
   trashRestore,
+  blendChannel,
 } from './bus/builtins';
 export { applyPixelOpsCommand } from './bus/pixel-commands';
 export type { ApplyPixelOpsPayload, PixelOp, PixelPoint } from './bus/pixel-commands';
@@ -297,6 +306,7 @@ export {
   floodRemoveBackground,
   floodRemoveBackgroundWithColor,
   medianCutPalette,
+  harvestPalette,
   nearestNeighborContain,
   normalizeV2,
   quantizeToPalette,

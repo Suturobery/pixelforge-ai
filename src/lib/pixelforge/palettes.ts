@@ -4,6 +4,8 @@ export interface PalettePreset {
   id: string
   name: string
   colors: string[]
+  notes?: string
+  author?: string
 }
 
 export const PALETTES: PalettePreset[] = [
@@ -45,3 +47,17 @@ export const PALETTES: PalettePreset[] = [
 ]
 
 export const DEFAULT_PALETTE = PALETTES[0].colors
+
+/**
+ * The full named-palette library (classic consoles + Lospec most-downloaded,
+ * with author + notes provenance). Loaded lazily on first use — the ~1.1 MB
+ * JSON lands in its own chunk instead of the startup bundle.
+ */
+export async function loadLibrary(): Promise<PalettePreset[]> {
+  const lib = (await import('./palette-library.json')).default as {
+    presets: Record<string, { name: string; author?: string; size: number; notes?: string; colors: string[] }>
+  }
+  return Object.entries(lib.presets)
+    .map(([id, p]) => ({ id, name: p.name, colors: p.colors, notes: p.notes, author: p.author }))
+    .sort((a, b) => a.name.localeCompare(b.name))
+}

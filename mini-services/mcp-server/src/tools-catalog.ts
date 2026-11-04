@@ -47,6 +47,8 @@ export interface ToolDef {
   tier: Tier;
   /** false = handled inside the MCP server (no editor round-trip). */
   relay: boolean;
+  /** Task 11 §5.2: spends provider money — requires a human approval click. */
+  paid?: boolean;
   inputSchema: Record<string, z.ZodType>;
 }
 
@@ -140,6 +142,26 @@ export const TOOL_CATALOG: ToolDef[] = [
       limit: z.number().int().min(1).max(200).optional().describe('Maximum entries. Default 20.'),
     },
   },
+  {
+    name: 'get_quota',
+    title: 'Get rate quota',
+    description:
+      'Read THIS client\'s remaining rate budget per tool tier (calls used / limit / seconds until reset). ' +
+      'Call it before long batch jobs and pace yourself instead of hitting rate_limited.',
+    tier: 'L0',
+    relay: false,
+    inputSchema: {},
+  },
+  {
+    name: 'get_approvals',
+    title: 'Get approval queue',
+    description:
+      'Read the paid-op approval queue: pending requests waiting for the human and recent decisions. ' +
+      'Read-only status — approval/denial happens ONLY in the editor UI; no MCP tool can approve spend.',
+    tier: 'L0',
+    relay: false,
+    inputSchema: {},
+  },
 
   // ---------------------------------------------------------- L1 safe writes
   {
@@ -156,6 +178,7 @@ export const TOOL_CATALOG: ToolDef[] = [
       height: z.number().int().min(16).max(256).describe('Canvas height in pixels (16–256).'),
       fps: z.number().int().min(1).max(60).optional().describe('Frames per second for the first clip. Default 8.'),
       palette: z.array(hexColor).min(1).max(256).optional().describe('Initial palette. Default: the app palette.'),
+      confirm: z.boolean().describe('Must be true — create_project replaces the ACTIVE document (the old project stays in list_projects).'),
       ...staleGuard,
     },
   },
@@ -218,7 +241,7 @@ export const TOOL_CATALOG: ToolDef[] = [
     description:
       'Remove a frame from a clip. TRASH-BACKED: the frame goes to the project trash (recoverable via ' +
       'restore_from_trash; undo also works). A clip always keeps at least one frame.',
-    tier: 'L1',
+    tier: 'L2',
     relay: true,
     inputSchema: {
       ...clipRef,
@@ -234,6 +257,67 @@ export const TOOL_CATALOG: ToolDef[] = [
     relay: true,
     inputSchema: {
       entryId: z.string().min(1).describe('Trash entry id.'),
+      ...staleGuard,
+    },
+  },
+  {
+    name: 'purge_trash',
+    title: 'Purge trash',
+    description:
+      'Permanently remove trash entries: omit entryId to empty the whole trash, or pass one entryId to purge a ' +
+      'single entry. PURGED ENTRIES ARE GONE — restore_from_trash can no longer recover them. Undoable as one ' +
+      'transaction until the user closes history.',
+    tier: 'L2',
+    relay: true,
+    inputSchema: {
+      entryId: z.string().min(1).optional().describe('Purge only this entry. Default: empty the whole trash.'),
+      ...staleGuard,
+    },
+  },
+  {
+    name: 'resize_canvas',
+    title: 'Resize canvas',
+    description:
+      'Change the canvas size (16–256 per side). Content is SHIFTED, never rescaled: anchor "top-left" keeps the ' +
+      'top-left corner fixed; "center" centers the old canvas in the new bounds. Pixels moved outside the new ' +
+      'bounds are cropped away. One undoable step.',
+    tier: 'L2',
+    relay: true,
+    inputSchema: {
+      width: z.number().int().min(16).max(256).describe('New canvas width in pixels.'),
+      height: z.number().int().min(16).max(256).describe('New canvas height in pixels.'),
+      anchor: z.enum(['top-left', 'center']).optional().describe('Default top-left.'),
+      ...staleGuard,
+    },
+  },
+  {
+    name: 'export_sheet',
+    title: 'Export sprite sheet',
+    description:
+      'Render every frame of a clip (all visible layers composited) into ONE horizontal sprite-sheet PNG at native ' +
+      'pixel size — game-engine ready. Returns base64 PNG data URL + dimensions. Frames are laid out left→right with ' +
+      'optional padding/spacing.',
+    tier: 'L2',
+    relay: true,
+    inputSchema: {
+      ...clipRef,
+      padding: z.number().int().min(0).max(64).optional().describe('Outer margin around the sheet, px. Default 0.'),
+      spacing: z.number().int().min(0).max(64).optional().describe('Gap between frames, px. Defaults to padding.'),
+      ...staleGuard,
+    },
+  },
+  {
+    name: 'export_gif',
+    title: 'Export animated GIF',
+    description:
+      'Render a clip as an animated GIF (base64 data URL). Transparency is flattened onto bg (GIF has no alpha). ' +
+      'Per-frame durations come from the clip; loops infinitely.',
+    tier: 'L2',
+    relay: true,
+    inputSchema: {
+      ...clipRef,
+      scale: z.union([z.literal(1), z.literal(2), z.literal(4), z.literal(8)]).optional().describe('Nearest-neighbor upscale. Default 1 (native).'),
+      bg: hexColor.optional().describe('Flatten background hex. Default #101014.'),
       ...staleGuard,
     },
   },
@@ -280,7 +364,7 @@ export const TOOL_CATALOG: ToolDef[] = [
     title: 'Replace color',
     description:
       'Replace every pixel of one color on the target cel with another color (exact match on RGBA). Undoable.',
-    tier: 'L1',
+    tier: 'L2',
     relay: true,
     inputSchema: {
       ...clipRef,
@@ -372,7 +456,7 @@ export const TOOL_CATALOG: ToolDef[] = [
     name: 'delete_clip',
     title: 'Delete clip',
     description: 'Remove a clip. TRASH-BACKED (restore_from_trash / undo recover it). A project keeps at least one clip.',
-    tier: 'L1',
+    tier: 'L2',
     relay: true,
     inputSchema: {
       ...clipRef,
@@ -407,7 +491,7 @@ export const TOOL_CATALOG: ToolDef[] = [
     name: 'delete_layer',
     title: 'Delete layer',
     description: 'Remove a layer and its cels. TRASH-BACKED (restore_from_trash / undo recover it). A clip keeps at least one layer.',
-    tier: 'L1',
+    tier: 'L2',
     relay: true,
     inputSchema: {
       ...clipRef,
@@ -470,7 +554,7 @@ export const TOOL_CATALOG: ToolDef[] = [
     name: 'set_palette',
     title: 'Set palette',
     description: 'Replace the whole project palette in one undoable step (1–256 colors).',
-    tier: 'L1',
+    tier: 'L2',
     relay: true,
     inputSchema: {
       colors: z.array(hexColor).min(1).max(256).describe('The new palette, bottom → top order.'),
@@ -491,6 +575,133 @@ export const TOOL_CATALOG: ToolDef[] = [
       ...frameRef,
       name: z.string().trim().min(1).max(120).optional().describe('Name for the new layer.'),
       pngBase64: z.string().min(8).max(2_800_000).describe('Base64-encoded PNG (raw base64 or a data URL).'),
+      ...staleGuard,
+    },
+  },
+  {
+    name: 'import_frame_strip',
+    title: 'Import frame strip',
+    description:
+      'Import a sprite-sheet PNG (columns × rows grid of canvas-sized cells) as a NEW animated clip: one layer ' +
+      'per frame, left→right top→bottom order, ONE undoable step. The sheet must be exactly ' +
+      '(canvasWidth × columns) × (canvasHeight × rows). Max 64 frames.',
+    tier: 'L1',
+    relay: true,
+    inputSchema: {
+      name: z.string().trim().min(1).max(120).describe('Name for the new clip.'),
+      columns: z.number().int().min(1).max(32).describe('Sheet columns (frames per row).'),
+      rows: z.number().int().min(1).max(32).describe('Sheet rows.'),
+      fps: z.number().int().min(1).max(60).optional().describe('Clip playback fps. Default 12.'),
+      pngBase64: z.string().min(8).max(2_800_000).describe('Base64-encoded sprite-sheet PNG (raw base64 or a data URL).'),
+      ...staleGuard,
+    },
+  },
+  {
+    name: 'generate_sprite',
+    title: 'Generate sprite (paid)',
+    description:
+      'L3 PAID (human approval required): text-to-image generation via the provider configured in Settings → AI. ' +
+      'The call PARKS until the user clicks Approve/Deny on the approval card in the editor — denied or timed-out ' +
+      'requests spend nothing. Candidates land in the review cache — inspect with get_candidates, import with ' +
+      'accept_candidate. Requires an L3-paired client.',
+    tier: 'L3',
+    relay: true,
+    paid: true,
+    inputSchema: {
+      prompt: z.string().min(1).max(600).describe('Sprite description.'),
+      count: z.number().int().min(1).max(4).optional().describe('How many candidates (1–4). Default 1.'),
+      ...staleGuard,
+    },
+  },
+  {
+    name: 'beautify_layer',
+    title: 'Beautify layer',
+    description:
+      'One-call polish: 1px outline around the target layer + directional shading on bottom/right edges ' +
+      '(light from top-left). outline=null skips the outline. One undoable step.',
+    tier: 'L1',
+    relay: true,
+    inputSchema: {
+      ...clipRef,
+      ...frameRef,
+      ...layerRef,
+      outline: z.string().regex(HEX_RE).nullable().optional().describe('Outline color. Default the dark studio ink. null = no outline.'),
+      shade: z.boolean().optional().describe('Darken bottom/right inner edges by 28%. Default true.'),
+      ...staleGuard,
+    },
+  },
+  {
+    name: 'harvest_palette',
+    title: 'Harvest palette',
+    description: 'Extract the best colors from any base64 PNG via median cut (dark → light). Apply with set_palette.',
+    tier: 'L1',
+    relay: true,
+    inputSchema: {
+      pngBase64: z.string().min(8).max(2_800_000).describe('Base64-encoded PNG (raw base64 or a data URL).'),
+      maxColors: z.number().int().min(2).max(32).optional().describe('How many colors. Default 16.'),
+      ...staleGuard,
+    },
+  },
+  {
+    name: 'macro_save',
+    title: 'Save macro',
+    description: 'Save a named sequence of tool calls (1–50 steps) for replay. Stored per browser.',
+    tier: 'L1',
+    relay: true,
+    inputSchema: {
+      name: z.string().trim().min(1).max(60).describe('Macro name.'),
+      steps: z.array(z.object({ tool: z.string().min(1), args: z.record(z.string(), z.unknown()).optional() })).min(1).max(50).describe('Ordered tool calls.'),
+      ...staleGuard,
+    },
+  },
+  {
+    name: 'macro_list',
+    title: 'List macros',
+    description: 'List saved macros.',
+    tier: 'L0',
+    relay: true,
+    inputSchema: { ...staleGuard },
+  },
+  {
+    name: 'macro_run',
+    title: 'Run macro',
+    description: 'Replay a saved macro step-by-step. NOTE: steps run under the caller identity without per-step tier re-checks — only run macros you trust.',
+    tier: 'L1',
+    relay: true,
+    inputSchema: {
+      name: z.string().trim().min(1).max(60).describe('Macro name.'),
+      stopOnError: z.boolean().optional().describe('Default true — stop at the first failed step.'),
+      ...staleGuard,
+    },
+  },
+  {
+    name: 'macro_delete',
+    title: 'Delete macro',
+    description: 'Delete a saved macro.',
+    tier: 'L1',
+    relay: true,
+    inputSchema: {
+      name: z.string().trim().min(1).max(60).describe('Macro name.'),
+      ...staleGuard,
+    },
+  },
+  {
+    name: 'batch',
+    title: 'Run batch of tool calls',
+    description:
+      'Run 1–50 existing tool calls as ONE undoable transaction — all-or-nothing: any failing step rolls the ' +
+      'document back to the pre-batch state (rolledBack:true, nothing applied). Ideal for multi-step drawing/' +
+      'animation jobs: one round-trip, one undo entry, no partial work. Avoid undo/redo/batch as steps. ' +
+      'NOTE: steps execute under the caller identity without per-step tier re-checks — only batch steps you trust.',
+    tier: 'L1',
+    relay: true,
+    inputSchema: {
+      steps: z
+        .array(z.object({ tool: z.string().min(1), args: z.record(z.string(), z.unknown()).optional() }))
+        .min(1)
+        .max(50)
+        .describe('Ordered tool calls (same shape as macro steps).'),
+      stopOnError: z.boolean().optional().describe('Default true — stop at the first failed step (still rolls everything back).'),
       ...staleGuard,
     },
   },
@@ -564,7 +775,7 @@ export const TOOL_CATALOG: ToolDef[] = [
     name: 'suggest_motion_preset',
     title: 'Suggest motion preset',
     description:
-      'Propose a motion preset (Idle/Walk/Run/Attack/Jump) + parameters from a natural-language prompt. ' +
+      'Propose a motion preset (Idle/Walk/Run/Attack/Jump/Spin/Duck/Hurt/Swim/Death) + parameters from a natural-language prompt. ' +
       'Pure deterministic keyword helper — no model call, no cost, no document access (v3.1 §5.3 helper, L0).',
     tier: 'L0',
     relay: true,
@@ -613,7 +824,7 @@ export const TOOL_CATALOG: ToolDef[] = [
     name: 'apply_motion_preset',
     title: 'Apply motion preset',
     description:
-      'Apply a deterministic motion preset (v3.1 §4.1.1): idle/walk/run/attack/jump curves mapped per tagged part, ' +
+      'Apply a deterministic motion preset (v3.1 §4.1.1): idle/walk/run/attack/jump/spin/duck/hurt/swim/death curves mapped per tagged part, ' +
       'integer-pixel offsets, alpha ≥128 binary rule, anchor-frame alignment, ampScale = clipHeight/32. Commits ATOMICALLY ' +
       'as one undoable command — to a NEW clip (sized exactly to the preset) or, with overwrite:true, to the target clip\'s ' +
       'frames 0..n−1 (extra frames untouched, missing frames become holds). Absent parts are skipped per role and listed ' +
@@ -621,11 +832,11 @@ export const TOOL_CATALOG: ToolDef[] = [
     tier: 'L1',
     relay: true,
     inputSchema: {
-      preset: z.enum(['idle', 'walk', 'run', 'attack', 'jump']).describe('Motion preset id.'),
+      preset: z.enum(['idle', 'walk', 'run', 'attack', 'jump', 'spin', 'duck', 'hurt', 'swim', 'death']).describe('Motion preset id.'),
       sourceClipId: z.string().min(1).optional().describe('Clip providing parts + anchor frame (default: active clip).'),
       sourceClipName: z.string().min(1).max(60).optional().describe('Source clip by exact name (used when sourceClipId is omitted).'),
       amplitude: z.number().min(0.25).max(3).optional().describe('Curve intensity multiplier before R10 canvas scaling (default 1).'),
-      frameCount: z.number().int().min(1).max(64).optional().describe('Frame count (preset-bounded: idle 4 · walk 4/6/8 · run 6 · attack 4–6 · jump 4–8).'),
+      frameCount: z.number().int().min(1).max(64).optional().describe('Frame count (preset-bounded: idle 4 · walk 4/6/8 · run 6 · attack 4–6 · jump 4–8 · spin 6 · duck 4 · hurt 4 · swim 6 · death 5).'),
       gapFill: z.enum(['none', 'edge-extend']).optional().describe('Vacated-pixel handling (R4; default "edge-extend" = seam holes refilled; "none" = honest transparent gaps).'),
       smear: z.boolean().optional().describe('attack only: add the 1-px smear trail on the swing frame.'),
       anchorFrameIndex: z.number().int().min(0).max(4095).optional().describe('Anchor frame index (0-based; default 0 = frame 1, R5).'),
@@ -665,6 +876,41 @@ export const TOOL_CATALOG: ToolDef[] = [
     relay: false,
     inputSchema: {
       name: z.string().trim().min(1).max(60).describe('Display name for this client (shown to the user).'),
+    },
+  },
+  // ------------------------------------------- skill knowledge (v3.1 addendum)
+  {
+    name: 'get_knowledge',
+    title: 'Get pixel-art knowledge',
+    description:
+      'Read the pixel-art skill knowledge shipped inside PixelForge: methodology (the brief→draw→critique→fix loop), ' +
+      'patterns, palettes, animation curves, techniques, cleanup, sharp_edges, validations, export, lpc, shade, rig, ' +
+      'tileset, concept, fix — palette_library (2000+ named palettes; style = exact id or keyword search; apply the returned colors with set_palette) — the ' +
+      'learned-style index (user-grown styles override shipped; style for one doc) — or agent (how to drive this editor: batching, quotas, safety rules; read it first). Pure knowledge, $0, ' +
+      'no editor needed. Consult it BEFORE drawing.',
+    tier: 'L0',
+    relay: false,
+    inputSchema: {
+      topic: z
+        .enum(['methodology', 'patterns', 'palettes', 'animation', 'techniques', 'cleanup', 'sharp_edges', 'validations', 'export', 'lpc', 'shade', 'rig', 'tileset', 'concept', 'fix', 'palette_library', 'learned', 'agent'])
+        .describe('Knowledge topic to read ("agent" = how to drive this editor efficiently).'),
+      style: z.string().min(1).max(60).optional().describe('Learned-style file stem, or a palette-library keyword / exact id.'),
+    },
+  },
+  {
+    name: 'study_reference',
+    title: 'Study a reference sprite',
+    description:
+      'Grow the app\'s pixel-art knowledge: decode a PNG reference, extract its palette (median-cut ≤16), measure ' +
+      'size, opaque ratio and mirror symmetry, then append a learned style doc every client can read via ' +
+      'get_knowledge {topic:"learned"}. Pass styleName and notes to describe the art. Analysis only — nothing ' +
+      'enters the canvas.',
+    tier: 'L1',
+    relay: false,
+    inputSchema: {
+      pngBase64: z.string().min(8).max(2_800_000).describe('Base64 PNG (raw or data URL) of the reference sprite, 1–512 px per side.'),
+      styleName: z.string().trim().min(1).max(60).optional().describe('Short style name, e.g. "chibi-jrpg".'),
+      notes: z.string().trim().min(1).max(500).optional().describe('What the art depicts; observations worth keeping.'),
     },
   },
 ];

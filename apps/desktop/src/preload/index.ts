@@ -17,6 +17,16 @@ const bridge: PixelForgeBridge = {
   ping: () => ipcRenderer.invoke('pf:ping'),
   app: {
     getInfo: () => ipcRenderer.invoke('pf:app-info'),
+    /** OS notification (background events while minimized). Click focuses. */
+    notify: (title, body) => ipcRenderer.invoke('pf:notify', { title, body }),
+    /** Read-only tail of today's main log (diagnostics in bug reports). */
+    logsTail: () => ipcRenderer.invoke('pf:logs-tail'),
+  },
+  clipboard: {
+    writeText: (text) => ipcRenderer.invoke('pf:clipboard-write', text),
+  },
+  mcp: {
+    status: () => ipcRenderer.invoke('pf:mcp-status'),
   },
   dialog: {
     openFile: (options) => ipcRenderer.invoke('pf:dialog-open', options ?? {}),
@@ -25,7 +35,11 @@ const bridge: PixelForgeBridge = {
   project: {
     pickOpen: (options) => ipcRenderer.invoke('pf:project-pick-open', options ?? {}),
     pickSave: (options) => ipcRenderer.invoke('pf:project-pick-save', options ?? {}),
-    registerPath: (path) => ipcRenderer.invoke('pf:project-register-path', path),
+    openRecent: (path) => ipcRenderer.invoke('pf:project-open-recent', path),
+    forgetRecent: (path) => ipcRenderer.invoke('pf:project-forget-recent', path),
+    trashRecent: (path) => ipcRenderer.invoke('pf:project-trash-recent', path),
+    rememberCurrentPath: (path) => ipcRenderer.invoke('pf:project-remember-current', path),
+    confirm: (message, detail) => ipcRenderer.invoke('pf:confirm', { message, detail }),
     fs: {
       readFile: (path) => ipcRenderer.invoke('pf:fs-read', path),
       writeFile: (path, data) => ipcRenderer.invoke('pf:fs-write', path, data),
@@ -56,10 +70,21 @@ const bridge: PixelForgeBridge = {
     status: (jobId) => ipcRenderer.invoke('pf:ai-status', jobId),
     list: () => ipcRenderer.invoke('pf:ai-list'),
     usage: () => ipcRenderer.invoke('pf:ai-usage'),
+    testConnection: (providerId) => ipcRenderer.invoke('pf:ai-test-connection', providerId),
     onEvent: (listener) => {
       const wrapped = (_event: unknown, payload: unknown): void => listener(payload as Parameters<typeof listener>[0]);
       ipcRenderer.on('pf:ai-event', wrapped);
       return () => ipcRenderer.removeListener('pf:ai-event', wrapped);
+    },
+  },
+  updates: {
+    status: () => ipcRenderer.invoke('pf:app-update-status'),
+    check: () => ipcRenderer.invoke('pf:app-update-check'),
+    install: () => ipcRenderer.invoke('pf:app-update-install'),
+    onStatus: (listener) => {
+      const wrapped = (_event: unknown, payload: unknown): void => listener(payload as Parameters<typeof listener>[0]);
+      ipcRenderer.on('pf:app-update-status', wrapped);
+      return () => ipcRenderer.removeListener('pf:app-update-status', wrapped);
     },
   },
 };

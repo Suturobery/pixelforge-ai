@@ -19,6 +19,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import ZAI from 'z-ai-web-dev-sdk'
 import { guardStateChange } from '@/lib/pixelforge/api-guard'
+import { requireSafeExternalHttpsUrl } from '@/lib/pixelforge/safe-external-url'
 import {
   CapabilityError,
   parseOpenAiImagesResponse,
@@ -37,18 +38,44 @@ interface CustomProvider {
   model: string
 }
 
-function normalizeProvider(raw: unknown): CustomProvider | null {
+async function normalizeProvider(raw: unknown): Promise<CustomProvider | null> {
   if (!raw || typeof raw !== 'object') return null
   const p = raw as Record<string, unknown>
   const kind =
-    p.kind === 'openai' || p.kind === 'custom' || p.kind === 'zai' || p.kind === 'anthropic'
+    p.kind === 'openai' || p.kind === 'custom' || p.kind === 'zai'
       ? p.kind
       : null
   const baseUrl = typeof p.baseUrl === 'string' ? p.baseUrl.trim().replace(/\/+$/, '') : ''
   const apiKey = typeof p.apiKey === 'string' ? p.apiKey.trim() : ''
   const model = typeof p.model === 'string' ? p.model.trim() : ''
-  if (!kind || kind === 'zai' || kind === 'anthropic' || !baseUrl || !apiKey) return null
-  return { kind, baseUrl, apiKey, model }
+  // kind zai carries user credentials from the Settings card when the machine
+  // has no .z-ai-config — usable through the same OpenAI-dialect path
+  if (!kind || !baseUrl || !apiKey) return null
+  try {
+    const safe = await requireSafeExternalHttpsUrl(baseUrl)
+    return { kind, baseUrl: safe.toString().replace(/\/+$/, ''), apiKey, model }
+  } catch {
+    return null
+  }
+}
+
+/** Cryptic SDK/config errors → actionable guidance (shared with /api/ai/test). */
+function friendly(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err)
+  if (/Configuration file not found/i.test(msg)) {
+    return (
+      'No image engine available: the fallback Z.AI has no .z-ai-config on this machine. ' +
+      'Add credentials on the provider card in Settings → AI (Base URL + API key), then retry.'
+    )
+  }
+  if (err instanceof Error && (err.name === 'TimeoutError' || /timeout|aborted/i.test(msg))) {
+    return (
+      'Generation timed out — the provider never answered. This is a Base URL or network problem, ' +
+      'NOT quota (out-of-tokens keys answer with HTTP 429). ' +
+      'Z.AI Base URL must be exactly https://api.z.ai/api/paas/v4.'
+    )
+  }
+  return msg
 }
 
 /** OpenAI-compatible images call (capability-planned, structured errors). */
@@ -73,6 +100,7 @@ async function generateWithProvider(
     headers: plan.headers,
     body: JSON.stringify(plan.body),
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    redirect: 'error',
   })
   if (!res.ok) {
     const text = await res.text().catch(() => '')
@@ -82,7 +110,8 @@ async function generateWithProvider(
   // download url-form results (bounded, https only — parser enforces scheme)
   const downloaded = await Promise.all(
     parsed.urlImages.map(async (url) => {
-      const img = await fetch(url, { signal: AbortSignal.timeout(30_000) })
+      const safeUrl = await requireSafeExternalHttpsUrl(url)
+      const img = await fetch(safeUrl, { signal: AbortSignal.timeout(30_000), redirect: 'error' })
       if (!img.ok) throw new Error(`image download HTTP ${img.status}`)
       const buf = Buffer.from(await img.arrayBuffer())
       return buf.toString('base64')
@@ -110,8 +139,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     if (!prompt) {
       return NextResponse.json({ ok: false, error: 'Prompt is required' }, { status: 400 })
     }
-    if (prompt.length > 600) {
-      return NextResponse.json({ ok: false, error: 'Prompt too long (max 600 chars)' }, { status: 400 })
+    if (prompt.length > 4000) {
+      return NextResponse.json({ ok: false, error: 'Prompt too long (max 4000 chars)' }, { status: 400 })
     }
     // request size: accept the documented Z.AI sizes, else derive from the
     // target sprite aspect via the shared contract
@@ -119,7 +148,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       typeof body.size === 'string' && /^[0-9]+x[0-9]+$/.test(body.size) ? body.size : '1024x1024'
 
     const startedAt = Date.now()
-    const provider = normalizeProvider(body.provider)
+    const provider = await normalizeProvider(body.provider)
 
     // The prompt arrives ALREADY-FULL from the panel (buildFullPrompt in
     // @pixelforge/core: user prompt + recipe style tags + base tags). The
@@ -133,7 +162,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json(outcome.body, { status: outcome.status })
   } catch (err) {
     return NextResponse.json(
-      { ok: false, error: err instanceof Error ? err.message : 'Generation failed' },
+      { ok: false, error: friendly(err) },
       { status: 500 },
     )
   }
@@ -185,7 +214,7 @@ async function generate(
           engine: 'Z.AI built-in',
           durationMs: Date.now() - startedAt,
           costEstimateUsd: null,
-          note: `Custom provider failed (${why}) — used built-in Z.AI`,
+          note: `Provider failed (${why}) — used built-in Z.AI`,
         },
       }
     }

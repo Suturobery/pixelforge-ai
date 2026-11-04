@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
+import { ConfirmDialogHost } from "@/components/ui/confirm-dialog";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -20,7 +21,7 @@ export const metadata: Metadata = {
   keywords: ["PixelForge AI", "pixel art", "sprite editor", "animation", "motion presets", "AI sprite generation", "sprite sheet", "GIF export"],
   authors: [{ name: "PixelForge AI" }],
   icons: {
-    icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
+    icon: "/logo.svg",
   },
   openGraph: {
     title: "PixelForge AI",
@@ -47,6 +48,7 @@ export default function RootLayout({
       >
         {children}
         <Toaster />
+        <ConfirmDialogHost />
       </body>
     </html>
   );

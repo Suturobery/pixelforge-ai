@@ -42,7 +42,7 @@ import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
 import { useToast } from '@/hooks/use-toast'
-import { cn } from '@/lib/utils'
+import { cn, friendlyError } from '@/lib/utils'
 import { FileImage, FolderDown, LayoutGrid, Loader2 } from 'lucide-react'
 import type { ExportOutcome } from '@/lib/pixelforge/export'
 
@@ -100,7 +100,7 @@ export function ExportDialog({
 }) {
   const { toast } = useToast()
   const [scope, setScope] = useState<ExportScope>('clip')
-  const [format, setFormat] = useState<ExportFormat>('sheet')
+  const [format, setFormat] = useState<ExportFormat | 'gif'>('sheet')
   const [layoutMode, setLayoutMode] = useState<'horizontal' | 'grid'>('grid')
   const [columns, setColumns] = useState(4)
   const [padding, setPadding] = useState(0)
@@ -133,7 +133,7 @@ export function ExportDialog({
       scope,
       clipId: activeClip.id,
       frameIndex: activeFrameIndex,
-      format,
+      format: (format === 'gif' ? 'png-frames' : format) as ExportFormat,
       sheet: sheetOptions,
       includeJson,
       baseName: effectiveBase,
@@ -145,12 +145,17 @@ export function ExportDialog({
   // Deterministic artifact names for the caption (validated with the same
   // code path the real export uses — errors surface inline).
   const planned = useMemo(() => {
+    if (format === 'gif')
+      return {
+        ok: true as const,
+        plan: { files: [{ filename: `${effectiveBase}-${slugify(activeClip.name)}.gif` }], destination: 'browser downloads', artifacts: [] },
+      }
     try {
       return { ok: true as const, plan: planExport(project, exportRequest) }
     } catch (err) {
-      return { ok: false as const, message: err instanceof Error ? err.message : String(err) }
+      return { ok: false as const, message: friendlyError(err) }
     }
-  }, [project, exportRequest])
+  }, [project, exportRequest, format, effectiveBase, activeClip.name])
 
   // Live preview: compose through the CORE export service (pixel-identical to
   // the artifacts). Sheet preview shows the active clip; all-clips previews
@@ -192,7 +197,7 @@ export function ExportDialog({
       } catch (err) {
         if (canceled) return
         setPreviewDims(null)
-        setPreviewError(err instanceof Error ? err.message : String(err))
+        setPreviewError(friendlyError(err))
       }
     }, 120)
     return () => {
@@ -224,12 +229,25 @@ export function ExportDialog({
     setBusy(true)
     try {
       const st = useEditor.getState()
+      if (format === 'gif') {
+        // GIF: animated export of the ACTIVE clip via the existing gifenc path
+        const { exportGif } = await import('@/lib/pixelforge/exporters')
+        const clip = getActiveClip(st)
+        const frames = clip.frames.map((f) => {
+          const rgba = composeFrameRgba(st.project, clip, f)
+          return { width: st.project.width, height: st.project.height, data: new Uint8ClampedArray(rgba) }
+        })
+        const durations = clip.frames.map((f) => f.durationMs > 0 ? f.durationMs : Math.round(1000 / clip.fps))
+        await exportGif(frames, durations, `${effectiveBase}-${slugify(clip.name)}.gif`, { scale: 6, checker: false })
+        toast({ title: 'Export complete', description: `1 file → browser downloads (GIF, ${clip.frames.length} frames)` })
+        return
+      }
       const outcome = await runExport(st.project, { ...exportRequest, overwrite })
       describeOutcome(outcome)
     } catch (err) {
       toast({
         title: 'Export failed',
-        description: err instanceof Error ? err.message : 'Unknown error',
+        description: friendlyError(err),
         variant: 'destructive',
       })
     } finally {
@@ -243,7 +261,7 @@ export function ExportDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="pixelforge-scroll max-h-[85dvh] overflow-y-auto border-zinc-800 bg-zinc-950 text-zinc-100 sm:max-w-md">
+      <DialogContent className="pixelforge-scroll max-h-[85dvh] overflow-y-auto border-zinc-800 bg-zinc-950 text-zinc-100 sm:max-w-4xl">
         <DialogHeader>
           <DialogTitle className="font-mono">Export game-ready assets</DialogTitle>
           <DialogDescription className="font-mono text-xs text-zinc-400">
@@ -252,12 +270,12 @@ export function ExportDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
-          {/* preview */}
+        <div className="grid gap-4 sm:grid-cols-[auto_1fr]">
+          {/* left column: preview (landscape feel — the visual anchor) */}
           <div className="space-y-1">
             <div
               className={cn(
-                'flex max-h-[168px] items-center justify-center overflow-hidden rounded-md border border-zinc-800 p-2',
+                'flex max-h-[220px] items-center justify-center overflow-hidden rounded-md border border-zinc-800 p-2',
                 CHECKER_CLASS,
               )}
             >
@@ -269,7 +287,7 @@ export function ExportDialog({
                 <canvas
                   ref={canvasRef}
                   aria-label="Export preview at native pixel size"
-                  className="max-h-[152px] w-auto max-w-full [image-rendering:pixelated]"
+                  className="max-h-[204px] w-auto max-w-full [image-rendering:pixelated]"
                 />
               )}
             </div>
@@ -280,6 +298,8 @@ export function ExportDialog({
             </p>
           </div>
 
+          {/* right column: all controls */}
+          <div className="min-w-0 space-y-4">
           {/* scope + format */}
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
@@ -306,6 +326,7 @@ export function ExportDialog({
                 options={[
                   { value: 'png-frames', label: 'PNG frames' },
                   { value: 'sheet', label: 'Sprite sheet' },
+                  { value: 'gif', label: 'GIF (clip)' },
                 ]}
               />
             </div>
@@ -371,6 +392,12 @@ export function ExportDialog({
                 <Switch id="exp-json" checked={includeJson} onCheckedChange={setIncludeJson} />
               </div>
             </div>
+          )}
+
+          {format === 'gif' && (
+            <p className="rounded-md border border-zinc-800 bg-zinc-900/40 px-2.5 py-2 font-mono text-[10px] leading-snug text-zinc-400">
+              Animated GIF of the ACTIVE clip ({activeClip.frames.length} frames · loop) — per-frame durations apply. Scale 6×.
+            </p>
           )}
 
           {/* naming */}
@@ -458,6 +485,7 @@ export function ExportDialog({
           <p className="flex items-center gap-1 font-mono text-[10px] text-zinc-400">
             <FileImage className="h-3 w-3" /> Files never overwrite silently — conflicts are reported before writing.
           </p>
+          </div>
         </div>
       </DialogContent>
     </Dialog>

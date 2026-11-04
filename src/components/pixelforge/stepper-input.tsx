@@ -36,7 +36,9 @@ export function StepperInput({
   disabled = false,
 }: StepperInputProps) {
   const clamp = (n: number) => Math.min(max, Math.max(min, n))
-  // draft holds the text while typing; null = display the canonical value
+  // draft holds the text while typing; null = display the canonical value.
+  // Focus CLEARS the field: select-on-focus races fast typists and appends
+  // digits ("32"+"64" → 3264 → clamped 256). Clearing is deterministic.
   const [draft, setDraft] = useState<string | null>(null)
 
   const commit = () => {
@@ -65,7 +67,7 @@ export function StepperInput({
     >
       <button
         type="button"
-        className={`flex ${btn} shrink-0 items-center justify-center border-r border-zinc-800 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-teal-300 disabled:cursor-not-allowed disabled:opacity-40`}
+        className={`flex ${btn} shrink-0 items-center justify-center border-r border-zinc-800 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-40`}
         onClick={() => stepBy(-1)}
         disabled={disabled || value <= min}
         aria-label={`Decrease ${ariaLabel}`}
@@ -92,14 +94,14 @@ export function StepperInput({
             stepBy(-1)
           }
         }}
-        onFocus={(e) => (e.target as HTMLInputElement).select()}
+        onFocus={() => setDraft('')}
         disabled={disabled}
         aria-label={ariaLabel}
         className={`min-w-0 flex-1 bg-transparent ${h} ${text} px-1.5 text-center font-mono text-zinc-100 caret-teal-400 outline-none placeholder:text-zinc-400`}
       />
       <button
         type="button"
-        className={`flex ${btn} shrink-0 items-center justify-center border-l border-zinc-800 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-teal-300 disabled:cursor-not-allowed disabled:opacity-40`}
+        className={`flex ${btn} shrink-0 items-center justify-center border-l border-zinc-800 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-40`}
         onClick={() => stepBy(1)}
         disabled={disabled || value >= max}
         aria-label={`Increase ${ariaLabel}`}

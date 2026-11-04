@@ -29,6 +29,7 @@ import {
 } from '@pixelforge/core'
 import { useEffect, useRef, useState } from 'react'
 import { getActiveClip, useEditor } from '@/lib/pixelforge/store'
+import { friendlyError } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -38,15 +39,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useToast } from '@/hooks/use-toast'
 import {
   AlertTriangle,
-  Clapperboard,
+  Crosshair,
   Eraser,
-  Film,
   Info,
   Pause,
   Play,
   Plus,
   Square,
-  Tag,
   Trash2,
 } from 'lucide-react'
 
@@ -100,6 +99,7 @@ export function MotionPanel() {
   const [plan, setPlan] = useState<MotionPlan | null>(null)
   const [issues, setIssues] = useState<QAIssue[]>([])
   const [playing, setPlaying] = useState(false)
+  const [speed, setSpeed] = useState<0.5 | 1 | 2>(1)
   const [previewIdx, setPreviewIdx] = useState(0)
   const [showOverlay, setShowOverlay] = useState(true)
   const [targetMode, setTargetMode] = useState<'new' | 'overwrite'>('new')
@@ -129,6 +129,10 @@ export function MotionPanel() {
 
   // --- preset state ----------------------------------------------------------
   const [presetId, setPresetId] = useState<MotionPresetId>('idle')
+  // play-once default for attack/jump/death (matches preset.playOnceSuggested)
+  const [loopMode, setLoopMode] = useState<'forward' | 'reverse' | 'pingpong' | 'once'>(
+    presetId === 'attack' || presetId === 'jump' || presetId === 'death' ? 'once' : 'forward'
+  )
   const preset: PresetDef = MOTION_PRESETS[presetId]
   const [params, setParams] = useState<MotionParams>({ ...MOTION_PARAMS_DEFAULTS, frameCount: 4 })
   // switching presets snaps frameCount back to the new preset's default
@@ -148,11 +152,16 @@ export function MotionPanel() {
   // plain function — the React Compiler memoizes; no hand-rolled dep arrays
   const renderPlan = () => {
     if (!anchorFrame) return
+    // the composer reads the SAVED clip parts — silently previewing without
+    // unsaved draft edits would surprise ("my new part didn't animate")
+    if (dirtyDraft) {
+      toast({ title: 'Draft parts not saved', description: 'Preview uses the SAVED parts — press "Save parts" to include your edits.' })
+    }
     let p: MotionPlan
     try {
       p = planMotion(project, clip, { preset: presetId, params, anchorFrameIndex: anchorIndex })
     } catch (err) {
-      toast({ title: 'Preview failed', description: err instanceof Error ? err.message : 'Composer error', variant: 'destructive' })
+      toast({ title: 'Preview failed', description: friendlyError(err), variant: 'destructive' })
       return
     }
     setPlan(p)
@@ -162,7 +171,7 @@ export function MotionPanel() {
     // can badge the affected source frames while the preview is live
     useEditor.getState().setMotionPreviewIssues(planIssues)
     setPreviewIdx(0)
-    setPlaying(false)
+    setPlaying(true) // show the motion immediately — pause is one click away
     // the suggested clip name follows the preset; the user can still edit it
     // before accepting (every fresh preview resets it)
     setNewClipName(`${presetId}-${project.clips.length}`)
@@ -228,7 +237,7 @@ export function MotionPanel() {
   // playback timer (clip fps; play-once presets stop on the last frame)
   useEffect(() => {
     if (!playing || !plan) return
-    const ms = Math.max(30, Math.round(1000 / clip.fps))
+    const ms = Math.max(30, Math.round((1000 / clip.fps) / speed))
     const t = setInterval(() => {
       setPreviewIdx((i) => {
         const next = i + 1
@@ -243,7 +252,7 @@ export function MotionPanel() {
       })
     }, ms)
     return () => clearInterval(t)
-  }, [playing, plan, clip.fps, preset])
+  }, [playing, plan, clip.fps, preset, speed])
 
   // --- actions -----------------------------------------------------------------
   const addDraftPart = () => {
@@ -280,7 +289,13 @@ export function MotionPanel() {
     if (!plan) return
     const target =
       targetMode === 'new'
-        ? ({ kind: 'new', name: newClipName.trim() || `${presetId}-clip`, fps: clip.fps } as const)
+        ? ({
+            kind: 'new',
+            name: newClipName.trim() || `${presetId}-clip`,
+            fps: clip.fps,
+            loop: loopMode !== 'once',
+            ...(loopMode !== 'once' ? { loopMode } : { loopMode: 'forward' as const }),
+          } as const)
         : ({ kind: 'existing', clipId: clip.id, overwrite: true } as const)
     const createdClipId = applyMotionPreset({
       sourceClipId: clip.id,
@@ -344,23 +359,24 @@ export function MotionPanel() {
   }
 
   return (
-    <div className="pixelforge-scroll mx-auto min-h-0 w-full max-w-[520px] flex-1 space-y-3 overflow-y-auto p-3" data-testid="motion-panel">
-      {/* ---------------------------- source ---------------------------- */}
-      <section aria-label="Source" className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-3">
-        <header className="mb-2 flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-teal-300">
-          <Film className="h-3 w-3" /> Source
+    <div className="pixelforge-scroll mx-auto h-full min-h-0 w-full max-w-[520px] space-y-3 overflow-y-auto p-3" data-testid="motion-panel">
+      {/* ---------------------------- step 1 · source ---------------------------- */}
+      <section aria-label="Source" className="rounded-xl border border-zinc-800/80 bg-zinc-900/60 p-3">
+        <header className="mb-2.5 flex items-center gap-2">
+          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-frost-500/15 text-[10px] font-semibold text-frost-300">1</span>
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-300">Source clip</span>
         </header>
         <div className="flex items-center justify-between gap-2">
           <span className="truncate text-xs font-medium text-zinc-200">{clip.name}</span>
-          <div className="flex items-center gap-1">
-            <span className="font-mono text-[10px] text-zinc-500">anchor</span>
+          <div className="flex items-center gap-1.5">
+            <span className="text-[11px] text-zinc-500">Anchor frame</span>
             <Select value={String(anchorIndex)} onValueChange={(v) => setAnchorIndex(Number(v))}>
-              <SelectTrigger className="h-6 w-[70px] font-mono text-[11px]" aria-label="Anchor frame">
+              <SelectTrigger className="h-7 w-[70px] text-xs" aria-label="Anchor frame">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent className="max-h-48">
                 {clip.frames.map((f, i) => (
-                  <SelectItem key={f.id} value={String(i)} className="font-mono text-[11px]">
+                  <SelectItem key={f.id} value={String(i)} className="text-xs">
                     {i + 1}
                   </SelectItem>
                 ))}
@@ -368,26 +384,27 @@ export function MotionPanel() {
             </Select>
           </div>
         </div>
-        <p className="mt-1 font-mono text-[10px] text-zinc-500">
-          every frame derives from frame {anchorIndex + 1} (R5) · {clip.fps} fps
+        <p className="mt-1.5 text-[11px] leading-snug text-zinc-500">
+          Every generated frame derives from frame {anchorIndex + 1} · {clip.fps} fps
         </p>
       </section>
 
-      {/* ---------------------------- parts ---------------------------- */}
-      <section aria-label="Body parts" className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-3">
-        <header className="mb-2 flex items-center justify-between">
-          <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-teal-300">
-            <Tag className="h-3 w-3" /> Parts ({draftParts.length})
+      {/* ---------------------------- step 2 · parts ---------------------------- */}
+      <section aria-label="Body parts" className="rounded-xl border border-zinc-800/80 bg-zinc-900/60 p-3">
+        <header className="mb-2.5 flex items-center justify-between">
+          <span className="flex items-center gap-2">
+            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-frost-500/15 text-[10px] font-semibold text-frost-300">2</span>
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-300">Tag body parts</span>
           </span>
           {dirtyDraft && (
             <div className="flex gap-1">
-              <Button size="sm" className="h-6 bg-teal-600 px-2 font-mono text-[10px] hover:bg-teal-500" onClick={saveParts}>
+              <Button size="sm" className="h-7 rounded-md bg-frost-600 px-2.5 text-xs font-medium hover:bg-frost-500" onClick={saveParts}>
                 Save parts
               </Button>
               <Button
                 size="sm"
                 variant="ghost"
-                className="h-6 px-2 font-mono text-[10px] text-zinc-400"
+                className="h-7 rounded-md px-2.5 text-xs text-zinc-400"
                 onClick={() => {
                   setDraftParts(clip.parts.map((p) => ({ name: p.name, layerId: p.layerId, ...(p.rect ? { rect: { ...p.rect } } : {}) })))
                   setDirtyDraft(false)
@@ -400,22 +417,22 @@ export function MotionPanel() {
         </header>
 
         {/* source preview with part rects */}
-        <div className="mb-2 flex gap-2">
+        <div className="mb-2.5 flex gap-2.5">
           <canvas
             ref={sourceCanvasRef}
-            className="h-[96px] w-[96px] shrink-0 rounded border border-zinc-700 bg-zinc-950"
+            className="h-[96px] w-[96px] shrink-0 rounded-lg border border-zinc-700 bg-zinc-950"
             style={{ imageRendering: 'pixelated' }}
             aria-label="Anchor frame with part rectangles"
           />
-          <div className="min-w-0 flex-1 space-y-1">
-            <p className="font-mono text-[10px] leading-tight text-zinc-500">
-              Regions only — never cuts. Overlaps are owned by the highest-z part (R2).
+          <div className="min-w-0 flex-1 space-y-1.5">
+            <p className="text-[11px] leading-snug text-zinc-500">
+              Regions only — never cuts. Overlaps are owned by the highest part.
             </p>
             <div className="flex flex-wrap gap-1">
               {draftParts.map((p, i) => (
                 <span
                   key={`${p.name}-${i}`}
-                  className="inline-flex items-center gap-1 rounded border border-zinc-700 bg-zinc-950 px-1.5 py-0.5 font-mono text-[10px] text-zinc-300"
+                  className="inline-flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-950 px-1.5 py-0.5 text-[11px] text-zinc-300"
                 >
                   <span className="h-2 w-2 rounded-sm" style={{ background: PART_COLORS[i % PART_COLORS.length] }} />
                   {p.name}
@@ -432,32 +449,32 @@ export function MotionPanel() {
                 </span>
               ))}
               {draftParts.length === 0 && (
-                <span className="font-mono text-[10px] text-zinc-600">no parts tagged yet</span>
+                <span className="text-[11px] text-zinc-600">No parts tagged yet</span>
               )}
             </div>
           </div>
         </div>
 
-        {/* tag controls */}
-        <div className="space-y-2 rounded border border-zinc-800 bg-zinc-950/60 p-2">
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <Label className="font-mono text-[10px] text-zinc-400">Part name</Label>
+        {/* tag form */}
+        <div className="space-y-2.5 rounded-lg border border-zinc-800/80 bg-zinc-950/60 p-2.5">
+          <div className="grid min-w-0 grid-cols-1 gap-2 @min-[340px]:grid-cols-2">
+            <div className="min-w-0">
+              <Label className="text-[11px] font-medium text-zinc-400">Part name</Label>
               <Select value={draftName} onValueChange={setDraftName}>
-                <SelectTrigger className="h-7 font-mono text-[11px]" aria-label="Part name">
+                <SelectTrigger className="h-7 w-full min-w-0 text-xs" aria-label="Part name">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent className="max-h-48">
                   {CANONICAL_ROLES.map((r) => (
-                    <SelectItem key={r} value={r} className="font-mono text-[11px]">
+                    <SelectItem key={r} value={r} className="text-xs">
                       {r}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
-            <div>
-              <Label className="font-mono text-[10px] text-zinc-400">Region</Label>
+            <div className="min-w-0">
+              <Label className="text-[11px] font-medium text-zinc-400">Position x / y</Label>
               <div className="flex gap-1">
                 <Input
                   className="h-7 font-mono text-[11px]"
@@ -482,9 +499,9 @@ export function MotionPanel() {
               </div>
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <Label className="font-mono text-[10px] text-zinc-400">Width</Label>
+          <div className="grid min-w-0 grid-cols-1 gap-2 @min-[340px]:grid-cols-2">
+            <div className="min-w-0">
+              <Label className="text-[11px] font-medium text-zinc-400">Width</Label>
               <Input
                 className="h-7 font-mono text-[11px]"
                 aria-label="Rect width"
@@ -496,8 +513,8 @@ export function MotionPanel() {
                 onChange={(e) => setDraftRect((r) => ({ ...r, w: Number(e.target.value) }))}
               />
             </div>
-            <div>
-              <Label className="font-mono text-[10px] text-zinc-400">Height</Label>
+            <div className="min-w-0">
+              <Label className="text-[11px] font-medium text-zinc-400">Height</Label>
               <Input
                 className="h-7 font-mono text-[11px]"
                 aria-label="Rect height"
@@ -510,82 +527,88 @@ export function MotionPanel() {
               />
             </div>
           </div>
-          <div className="flex items-center justify-between gap-2">
-            <Button size="sm" variant="outline" className="h-7 gap-1 border-zinc-700 px-2 font-mono text-[10px] hover:border-teal-500 hover:text-teal-300" onClick={useSelectionAsRect}>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <Button size="sm" variant="outline" className="h-7 gap-1 rounded-md border-zinc-700 px-2.5 text-xs font-medium hover:border-frost-500 hover:text-frost-300" onClick={useSelectionAsRect}>
               <Square className="h-3 w-3" /> Use selection
             </Button>
-            <label className="flex items-center gap-1.5 font-mono text-[10px] text-zinc-400">
+            <label className="flex items-center gap-1.5 text-[11px] text-zinc-400">
               <Switch checked={draftWholeLayer} onCheckedChange={setDraftWholeLayer} className="scale-90" aria-label="Whole layer part" />
-              whole layer
+              Whole layer
             </label>
-            <Button size="sm" className="h-7 gap-1 bg-teal-600 px-2 font-mono text-[10px] hover:bg-teal-500" onClick={addDraftPart}>
+            <Button size="sm" className="h-7 gap-1 rounded-md bg-frost-600 px-2.5 text-xs font-medium hover:bg-frost-500" onClick={addDraftPart}>
               <Plus className="h-3 w-3" /> Tag part
             </Button>
           </div>
         </div>
       </section>
 
-      {/* ---------------------------- preset ---------------------------- */}
-      <section aria-label="Motion preset" className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-3">
-        <header className="mb-2 flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-teal-300">
-          <Clapperboard className="h-3 w-3" /> Preset
+      {/* ---------------------------- step 3 · motion ---------------------------- */}
+      <section aria-label="Motion preset" className="rounded-xl border border-zinc-800/80 bg-zinc-900/60 p-3">
+        <header className="mb-2.5 flex items-center gap-2">
+          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-frost-500/15 text-[10px] font-semibold text-frost-300">3</span>
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-300">Pick motion</span>
         </header>
-        <div className="mb-2 grid grid-cols-5 gap-1">
+        <div className="mb-2 grid grid-cols-3 gap-1 rounded-lg bg-zinc-800/60 p-1 @[300px]:grid-cols-5">
           {PRESET_IDS.map((id) => (
             <button
               key={id}
-              onClick={() => setPresetId(id)}
+              onClick={() => {
+                setPresetId(id)
+                const p = MOTION_PRESETS[id]
+                if (p.playOnceSuggested) setLoopMode('once')
+                else if (loopMode === 'once') setLoopMode('forward')
+              }}
               aria-pressed={presetId === id}
-              className={`rounded px-1 py-1.5 font-mono text-[10px] capitalize transition-colors ${
+              className={`rounded-md px-1 py-1.5 text-[11px] font-medium capitalize transition-all ${
                 presetId === id
-                  ? 'bg-teal-600 text-white'
-                  : 'bg-zinc-950 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
+                  ? 'bg-frost-600 text-white shadow-sm'
+                  : 'text-zinc-400 hover:bg-zinc-900/70 hover:text-zinc-200'
               }`}
             >
               {id}
             </button>
           ))}
         </div>
-        <p className="mb-2 font-mono text-[10px] leading-tight text-zinc-500">{preset.description}</p>
+        <p className="mb-2.5 text-[11px] leading-snug text-zinc-500">{preset.description}</p>
 
-        <div className="grid grid-cols-2 gap-2">
-          <div>
-            <Label className="font-mono text-[10px] text-zinc-400">Frames</Label>
+        <div className="grid min-w-0 grid-cols-1 gap-2 @min-[340px]:grid-cols-2">
+          <div className="min-w-0">
+            <Label className="text-[11px] font-medium text-zinc-400">Frames</Label>
             <Select
               value={String(params.frameCount || preset.defaultFrameCount)}
               onValueChange={(v) => setParams((p) => ({ ...p, frameCount: Number(v) }))}
             >
-              <SelectTrigger className="h-7 font-mono text-[11px]" aria-label="Frame count">
+              <SelectTrigger className="h-7 w-full min-w-0 text-xs" aria-label="Frame count">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 {preset.frameCounts.map((n) => (
-                  <SelectItem key={n} value={String(n)} className="font-mono text-[11px]">
+                  <SelectItem key={n} value={String(n)} className="text-xs">
                     {n}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
-          <div>
-            <Label className="font-mono text-[10px] text-zinc-400">Gap fill</Label>
+          <div className="min-w-0">
+            <Label className="text-[11px] font-medium text-zinc-400">Gap fill</Label>
             <Select
               value={params.gapFill}
               onValueChange={(v) => setParams((p) => ({ ...p, gapFill: v as MotionParams['gapFill'] }))}
             >
-              <SelectTrigger className="h-7 font-mono text-[11px]" aria-label="Gap fill mode">
+              <SelectTrigger className="h-7 w-full min-w-0 text-xs" aria-label="Gap fill mode">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="none" className="font-mono text-[11px]">none (leave gaps)</SelectItem>
-                <SelectItem value="edge-extend" className="font-mono text-[11px]">edge-extend (recommended)</SelectItem>
+                <SelectItem value="none" className="text-xs">none</SelectItem>
+                <SelectItem value="edge-extend" className="text-xs">edge-extend</SelectItem>
               </SelectContent>
             </Select>
           </div>
         </div>
-        <div className="mt-2">
-          <Label className="flex items-center justify-between font-mono text-[10px] text-zinc-400">
-            amplitude <span className="text-teal-300">{params.amplitude.toFixed(2)}×</span>
+        <div className="mt-2.5">
+          <Label className="flex items-center justify-between text-[11px] font-medium text-zinc-400">
+            Amplitude <span className="font-mono text-frost-300">{params.amplitude.toFixed(2)}×</span>
           </Label>
           <Slider
             value={[params.amplitude]}
@@ -594,49 +617,53 @@ export function MotionPanel() {
             step={0.25}
             onValueChange={([v]) => setParams((p) => ({ ...p, amplitude: v }))}
             aria-label="Amplitude"
-            className="mt-1"
+            className="mt-1.5"
           />
         </div>
         {presetId === 'attack' && (
-          <label className="mt-2 flex items-center justify-between font-mono text-[10px] text-zinc-400">
+          <label className="mt-2.5 flex items-center justify-between text-[11px] text-zinc-400">
             1-px smear frame (swing)
             <Switch checked={params.smear} onCheckedChange={(v) => setParams((p) => ({ ...p, smear: v }))} aria-label="Smear frame" />
           </label>
         )}
         {preset.playOnceSuggested && (
-          <p className="mt-2 font-mono text-[10px] text-amber-400/80">
-            {preset.label} is play-once — set the clip loop off (Layers → clip props) for correct playback.
+          <p className="mt-2.5 text-[11px] leading-snug text-amber-400/90">
+            {preset.label} plays once — turn the clip loop off for correct playback.
           </p>
         )}
 
-        <div className="mt-2 flex gap-2">
-          <Button className="h-8 flex-1 gap-1.5 bg-teal-600 font-mono text-[11px] hover:bg-teal-500" onClick={renderPlan}>
+        <div className="mt-3 flex gap-2">
+          <Button className="h-8 flex-1 gap-1.5 rounded-md bg-frost-600 text-xs font-medium hover:bg-frost-500" onClick={renderPlan}>
             <Play className="h-3.5 w-3.5" /> Generate preview
           </Button>
           <Button
-            variant="outline"
-            className="h-8 gap-1 border-zinc-700 px-2 font-mono text-[10px] hover:border-teal-500 hover:text-teal-300"
+            variant={showOverlay ? 'secondary' : 'ghost'}
+            size="icon"
+            className={`h-8 w-8 shrink-0 rounded-md ${showOverlay ? 'bg-frost-500/15 text-frost-300 ring-1 ring-frost-500/40' : 'text-zinc-400'}`}
             onClick={() => setShowOverlay((v) => !v)}
             aria-pressed={showOverlay}
-            title="Ground line + center axis + part rects"
+            aria-label={showOverlay ? 'Hide anchor guides' : 'Show anchor guides'}
+            title="Anchor guides: ground line + center axis + part rects"
           >
-            anchors {showOverlay ? 'on' : 'off'}
+            <Crosshair className="h-4 w-4" />
           </Button>
         </div>
       </section>
 
-      {/* ---------------------------- preview ---------------------------- */}
+      {/* ---------------------------- step 4 · preview & commit ---------------------------- */}
       {plan && (
-        <section aria-label="Preview" className="rounded-lg border border-teal-900/60 bg-zinc-900/60 p-3">
-          <header className="mb-2 flex items-center justify-between">
-            <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-teal-300">
-              <Clapperboard className="h-3 w-3" /> Preview — not committed
+        <section aria-label="Preview" className="rounded-xl border border-frost-700/50 bg-zinc-900/60 p-3">
+          <header className="mb-2.5 flex flex-wrap items-center justify-between gap-y-1">
+            <span className="flex items-center gap-2">
+              <span className="flex h-5 w-5 items-center justify-center rounded-full bg-frost-500/15 text-[10px] font-semibold text-frost-300">4</span>
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-300">Preview</span>
+              <span className="rounded-full bg-zinc-800/80 px-1.5 py-0.5 text-[10px] font-medium text-zinc-400">not committed</span>
             </span>
             <div className="flex items-center gap-1">
               <Button
                 size="icon"
                 variant="ghost"
-                className="h-6 w-6 text-zinc-300 hover:text-teal-300"
+                className="h-6 w-6 rounded-md text-zinc-300 hover:text-frost-300"
                 onClick={() => setPlaying((v) => !v)}
                 aria-label={playing ? 'Pause preview' : 'Play preview'}
               >
@@ -645,22 +672,71 @@ export function MotionPanel() {
               <span className="font-mono text-[10px] text-zinc-500">
                 {previewIdx + 1}/{plan.frames.length}
               </span>
+              <div className="ml-auto flex items-center gap-0.5" role="group" aria-label="Preview speed">
+                {([0.5, 1, 2] as const).map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => setSpeed(s)}
+                    aria-pressed={speed === s}
+                    className={`h-5 rounded px-1 font-mono text-[9px] ${
+                      speed === s ? 'bg-frost-900/40 text-frost-300 ring-1 ring-frost-500/40' : 'text-zinc-500 hover:text-zinc-300'
+                    }`}
+                  >
+                    {s === 0.5 ? '½×' : `${s}×`}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!plan || !anchorFrame) return
+                    const { width: W, height: H } = project
+                    const strip = document.createElement('canvas')
+                    strip.width = W * plan.frames.length
+                    strip.height = H
+                    const sctx = strip.getContext('2d')
+                    if (!sctx) return
+                    plan.frames.forEach((_, i) => {
+                      const rgba = displayBuffer(project, clip, anchorFrame, plan, i)
+                      const fc = document.createElement('canvas')
+                      fc.width = W
+                      fc.height = H
+                      fc.getContext('2d')?.putImageData(new ImageData(new Uint8ClampedArray(rgba), W, H), 0, 0)
+                      sctx.drawImage(fc, i * W, 0)
+                    })
+                    strip.toBlob((blob) => {
+                      if (!blob) return
+                      const url = URL.createObjectURL(blob)
+                      const a = document.createElement('a')
+                      a.href = url
+                      a.download = `${clip.name}-${presetId}-strip.png`
+                      a.click()
+                      setTimeout(() => URL.revokeObjectURL(url), 4000)
+                    }, 'image/png')
+                  }}
+                  className="h-5 rounded px-1 font-mono text-[9px] text-zinc-500 hover:text-zinc-300"
+                  aria-label="Download preview frames as a spritesheet strip"
+                  title="Download frames as a spritesheet strip (PNG)"
+                >
+                  ⬇ strip
+                </button>
+              </div>
             </div>
           </header>
 
-          <div className="flex gap-2">
+          <div className="flex flex-wrap items-start gap-2.5">
             <figure className="shrink-0">
               <canvas
                 ref={previewCanvasRef}
-                className="h-[96px] w-[96px] rounded border border-zinc-700 bg-zinc-950"
+                className="h-[96px] w-[96px] rounded-lg border border-zinc-700 bg-zinc-950"
                 style={{ imageRendering: 'pixelated' }}
                 aria-label={`Generated frame ${previewIdx + 1}`}
               />
-              <figcaption className="mt-0.5 text-center font-mono text-[9px] text-teal-400/80">frame {previewIdx + 1}</figcaption>
+              <figcaption className="mt-1 text-center text-[10px] font-medium text-frost-400/90">generated</figcaption>
             </figure>
             <figure className="shrink-0">
               <canvas
-                className="h-[96px] w-[96px] rounded border border-zinc-800 bg-zinc-950"
+                className="h-[96px] w-[96px] rounded-lg border border-zinc-800 bg-zinc-950"
                 style={{ imageRendering: 'pixelated' }}
                 ref={(c) => {
                   // static source thumbnail for A/B compare
@@ -679,14 +755,14 @@ export function MotionPanel() {
                 }}
                 aria-label="Source anchor frame"
               />
-              <figcaption className="mt-0.5 text-center font-mono text-[9px] text-zinc-500">source {anchorIndex + 1}</figcaption>
+              <figcaption className="mt-1 text-center text-[10px] font-medium text-zinc-500">source</figcaption>
             </figure>
-            <div className="pixelforge-scroll flex min-w-0 flex-1 gap-1 overflow-x-auto pb-1">
+            <div className="pixelforge-scroll flex w-full min-w-0 items-center gap-1.5 overflow-x-auto pb-1">
               {plan.frames.map((_, i) => (
                 <button key={i} onClick={() => { setPreviewIdx(i); setPlaying(false) }} aria-label={`Show frame ${i + 1}`} className="shrink-0">
                   <canvas
                     ref={(c) => { stripRefs.current[i] = c }}
-                    className={`h-[44px] w-[44px] rounded border bg-zinc-950 ${i === previewIdx ? 'border-teal-400' : 'border-zinc-800'}`}
+                    className={`h-[52px] w-[52px] rounded-md border bg-zinc-950 ${i === previewIdx ? 'border-frost-400' : 'border-zinc-800'}`}
                     style={{ imageRendering: 'pixelated' }}
                   />
                 </button>
@@ -695,37 +771,37 @@ export function MotionPanel() {
           </div>
 
           {/* QA issues */}
-          <ul className="mt-2 space-y-1" aria-label="Quality checks">
+          <ul className="mt-2.5 space-y-1" aria-label="Quality checks">
             {issues.map((iss, i) => (
-              <li key={`${iss.code}-${i}`} className={`flex items-start gap-1.5 rounded px-1.5 py-1 font-mono text-[10px] leading-tight ${iss.level === 'warning' ? 'bg-amber-500/10 text-amber-300' : 'bg-zinc-800/60 text-zinc-400'}`}>
+              <li key={`${iss.code}-${i}`} className={`flex items-start gap-1.5 rounded-md px-2 py-1.5 text-[11px] leading-snug ${iss.level === 'warning' ? 'bg-amber-500/10 text-amber-300' : 'bg-zinc-800/60 text-zinc-400'}`}>
                 {iss.level === 'warning' ? <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" /> : <Info className="mt-0.5 h-3 w-3 shrink-0" />}
                 <span>{iss.message}</span>
               </li>
             ))}
             {issues.length === 0 && (
-              <li className="flex items-center gap-1.5 rounded bg-emerald-500/10 px-1.5 py-1 font-mono text-[10px] text-emerald-300">
+              <li className="flex items-center gap-1.5 rounded-md bg-emerald-500/10 px-2 py-1.5 text-[11px] text-emerald-300">
                 <Info className="h-3 w-3" /> QA clean — no flicker, gaps or overlap issues detected.
+              </li>
+            )}
+            {plan.report.skipped.length > 0 && (
+              <li className="flex items-center gap-1.5 rounded-md bg-zinc-800/60 px-2 py-1.5 text-[11px] text-zinc-400">
+                <Info className="h-3 w-3 shrink-0" />
+                <span>Skipped: {plan.report.skipped.map((s) => s.role).join(', ')} — not tagged on this clip</span>
               </li>
             )}
           </ul>
 
-          {/* skipped roles (C27 report) */}
-          {plan.report.skipped.length > 0 && (
-            <p className="mt-1 font-mono text-[10px] text-zinc-500">
-              skipped roles: {plan.report.skipped.map((s) => s.role).join(', ')} (not tagged on this clip)
-            </p>
-          )}
-
           {/* commit target */}
-          <div className="mt-3 space-y-2 rounded border border-zinc-800 bg-zinc-950/60 p-2">
-            <div className="flex items-center gap-3">
-              <label className="flex items-center gap-1.5 font-mono text-[10px] text-zinc-300">
-                <input type="radio" checked={targetMode === 'new'} onChange={() => setTargetMode('new')} className="accent-teal-500" />
-                new clip
+          <div className="mt-3 space-y-2.5 rounded-lg border border-zinc-800/80 bg-zinc-950/60 p-2.5">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Apply to</p>
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="flex items-center gap-1.5 text-[11px] text-zinc-300">
+                <input type="radio" checked={targetMode === 'new'} onChange={() => setTargetMode('new')} className="accent-frost-500" />
+                New clip
               </label>
               {targetMode === 'new' && (
                 <Input
-                  className="h-7 flex-1 font-mono text-[11px]"
+                  className="h-7 flex-1 rounded-md text-xs"
                   value={newClipName}
                   onChange={(e) => setNewClipName(e.target.value)}
                   aria-label="New clip name"
@@ -733,25 +809,41 @@ export function MotionPanel() {
                 />
               )}
             </div>
-            <label className="flex items-start gap-1.5 font-mono text-[10px] text-zinc-300">
-              <input type="radio" checked={targetMode === 'overwrite'} onChange={() => setTargetMode('overwrite')} className="mt-0.5 accent-teal-500" />
+            <label className="flex items-start gap-1.5 text-[11px] leading-snug text-zinc-300">
+              <input type="radio" checked={targetMode === 'overwrite'} onChange={() => setTargetMode('overwrite')} className="mt-0.5 accent-frost-500" />
               <span>
-                overwrite {Math.min(plan.report.frameCount, clip.frames.length)} frame
+                Overwrite {Math.min(plan.report.frameCount, clip.frames.length)} frame
                 {Math.min(plan.report.frameCount, clip.frames.length) === 1 ? '' : 's'} of "{clip.name}"
                 <span className="block text-zinc-500">
-                  requires overwrite — extra frames stay untouched, missing frames become holds (R6)
+                  extra frames stay untouched, missing frames become holds
                 </span>
               </span>
             </label>
+            {targetMode === 'new' && (
+              <div className="flex items-center gap-1.5">
+                <span className="w-14 shrink-0 font-mono text-[10px] text-zinc-400">LOOP</span>
+                <Select value={loopMode} onValueChange={(v) => setLoopMode(v as 'forward' | 'reverse' | 'pingpong' | 'once')}>
+                  <SelectTrigger size="sm" aria-label="New clip looping" className="h-7 w-full border-zinc-800 bg-zinc-900 font-mono text-[11px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="forward" className="font-mono text-[11px]">forward · loop</SelectItem>
+                    <SelectItem value="reverse" className="font-mono text-[11px]">reverse · loop</SelectItem>
+                    <SelectItem value="pingpong" className="font-mono text-[11px]">ping-pong · loop</SelectItem>
+                    <SelectItem value="once" className="font-mono text-[11px]">play once</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
           </div>
 
-          <div className="mt-2 flex gap-2">
-            <Button className="h-8 flex-1 bg-teal-600 font-mono text-[11px] hover:bg-teal-500" onClick={accept}>
+          <div className="mt-2.5 flex flex-wrap gap-2">
+            <Button className="h-8 min-w-0 flex-1 rounded-md bg-frost-600 text-xs font-medium hover:bg-frost-500" onClick={accept}>
               Accept &amp; create {targetMode === 'new' ? 'clip' : 'frames'}
             </Button>
             <Button
-              variant="outline"
-              className="h-8 gap-1 border-zinc-700 px-3 font-mono text-[11px] hover:border-red-500 hover:text-red-400"
+              variant="ghost"
+              className="h-8 gap-1 rounded-md px-3 text-xs text-zinc-400 hover:text-red-400"
               onClick={() => { setPlan(null); setIssues([]); setPlaying(false) }}
             >
               <Eraser className="h-3.5 w-3.5" /> Discard
@@ -760,8 +852,8 @@ export function MotionPanel() {
         </section>
       )}
 
-      <p className="px-1 font-mono text-[10px] leading-tight text-zinc-600">
-        deterministic composer · integer pixels · no interpolation · source colors preserved · $0
+      <p className="hidden px-1 text-[10px] leading-snug text-zinc-600 @min-[380px]:block">
+        Deterministic composer · integer pixels · no interpolation · source colors preserved
       </p>
     </div>
   )

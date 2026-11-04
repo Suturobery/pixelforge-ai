@@ -34,7 +34,7 @@ import { AGENT_HEADER } from './agent-headers'
 
 export { AGENT_HEADER, AGENT_FETCH_HEADERS } from './agent-headers'
 
-export type GuardErrorCode = 'UNTRUSTED_ORIGIN' | 'MISSING_AGENT_HEADER'
+export type GuardErrorCode = 'UNTRUSTED_ORIGIN' | 'MISSING_AGENT_HEADER' | 'LOCAL_ONLY'
 
 function deny(code: GuardErrorCode, message: string, hint: string): NextResponse {
   return NextResponse.json(
@@ -50,6 +50,19 @@ function deny(code: GuardErrorCode, message: string, hint: string): NextResponse
  * /api/ai/sprite.
  */
 export function guardStateChange(req: NextRequest): NextResponse | null {
+  // These routes hold anonymous local-project data and can trigger paid AI.
+  // There is no account/tenant model for safely exposing them to the internet,
+  // so fail closed outside localhost. The packaged Electron renderer is served
+  // from 127.0.0.1 and continues to work normally.
+  const host = (req.headers.get('host') ?? '').toLowerCase()
+  const hostname = host.startsWith('[') ? host.slice(1, host.indexOf(']')) : host.split(':')[0]
+  if (hostname !== '127.0.0.1' && hostname !== 'localhost' && hostname !== '::1') {
+    return deny(
+      'LOCAL_ONLY',
+      'This local-first API is available only on localhost.',
+      'Use the packaged desktop app, or add authenticated multi-user API routes before deploying it publicly.',
+    )
+  }
   const agentOk = req.headers.get(AGENT_HEADER) === '1'
 
   // 1) Origin diagnostics (NOT the gate — see module header): when a request

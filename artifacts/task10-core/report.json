@@ -87,6 +87,14 @@
       {
         "code": "overlap",
         "message": "Parts \"body\" and \"legR\" overlap on one layer — \"legR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      },
+      {
+        "code": "foot_slide",
+        "message": "Planted feet shift up to 2px horizontally on contact frames (1, 3) — translation-only parts cannot pivot (R1). Refine those frames manually if ground-perfect footing matters.",
+        "frameIndexes": [
+          0,
+          2
+        ]
       }
     ],
     "skippedRoles": []
@@ -137,6 +145,24 @@
       {
         "code": "overlap",
         "message": "Parts \"body\" and \"legR\" overlap on one layer — \"legR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      },
+      {
+        "code": "foot_slide",
+        "message": "Planted feet shift up to 2px horizontally on contact frames (1, 3, 4, 6) — translation-only parts cannot pivot (R1). Refine those frames manually if ground-perfect footing matters.",
+        "frameIndexes": [
+          0,
+          2,
+          3,
+          5
+        ]
+      },
+      {
+        "code": "both_feet_lift",
+        "message": "Both feet leave the ground on frames 2, 5 — the flight phase is normal for a run cycle.",
+        "frameIndexes": [
+          1,
+          4
+        ]
       }
     ],
     "skippedRoles": []
@@ -317,6 +343,14 @@
       {
         "code": "overlap",
         "message": "Parts \"body\" and \"legR\" overlap on one layer — \"legR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      },
+      {
+        "code": "foot_slide",
+        "message": "Planted feet shift up to 2px horizontally on contact frames (1, 3) — translation-only parts cannot pivot (R1). Refine those frames manually if ground-perfect footing matters.",
+        "frameIndexes": [
+          0,
+          2
+        ]
       }
     ],
     "skippedRoles": []
@@ -359,6 +393,24 @@
       {
         "code": "overlap",
         "message": "Parts \"body\" and \"legR\" overlap on one layer — \"legR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      },
+      {
+        "code": "foot_slide",
+        "message": "Planted feet shift up to 2px horizontally on contact frames (1, 3, 4, 6) — translation-only parts cannot pivot (R1). Refine those frames manually if ground-perfect footing matters.",
+        "frameIndexes": [
+          0,
+          2,
+          3,
+          5
+        ]
+      },
+      {
+        "code": "both_feet_lift",
+        "message": "Both feet leave the ground on frames 2, 5 — the flight phase is normal for a run cycle.",
+        "frameIndexes": [
+          1,
+          4
+        ]
       }
     ],
     "skippedRoles": []
@@ -523,6 +575,14 @@
       {
         "code": "overlap",
         "message": "Parts \"body\" and \"armR\" overlap on one layer — \"armR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      },
+      {
+        "code": "foot_slide",
+        "message": "Planted feet shift up to 3px horizontally on contact frames (1, 3) — translation-only parts cannot pivot (R1). Refine those frames manually if ground-perfect footing matters.",
+        "frameIndexes": [
+          0,
+          2
+        ]
       }
     ],
     "skippedRoles": []
@@ -565,6 +625,24 @@
       {
         "code": "overlap",
         "message": "Parts \"body\" and \"armR\" overlap on one layer — \"armR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      },
+      {
+        "code": "foot_slide",
+        "message": "Planted feet shift up to 5px horizontally on contact frames (1, 3, 4, 6) — translation-only parts cannot pivot (R1). Refine those frames manually if ground-perfect footing matters.",
+        "frameIndexes": [
+          0,
+          2,
+          3,
+          5
+        ]
+      },
+      {
+        "code": "both_feet_lift",
+        "message": "Both feet leave the ground on frames 2, 5 — the flight phase is normal for a run cycle.",
+        "frameIndexes": [
+          1,
+          4
+        ]
       }
     ],
     "skippedRoles": []
@@ -713,6 +791,14 @@
       {
         "code": "overlap",
         "message": "Parts \"hair\" and \"head\" overlap on one layer — \"hair\" (higher z) owns the shared pixels; \"head\" never moves them."
+      },
+      {
+        "code": "foot_slide",
+        "message": "Planted feet shift up to 3px horizontally on contact frames (1, 3) — translation-only parts cannot pivot (R1). Refine those frames manually if ground-perfect footing matters.",
+        "frameIndexes": [
+          0,
+          2
+        ]
       }
     ],
     "skippedRoles": []
@@ -747,6 +833,24 @@
       {
         "code": "overlap",
         "message": "Parts \"hair\" and \"head\" overlap on one layer — \"hair\" (higher z) owns the shared pixels; \"head\" never moves them."
+      },
+      {
+        "code": "foot_slide",
+        "message": "Planted feet shift up to 5px horizontally on contact frames (1, 3, 4, 6) — translation-only parts cannot pivot (R1). Refine those frames manually if ground-perfect footing matters.",
+        "frameIndexes": [
+          0,
+          2,
+          3,
+          5
+        ]
+      },
+      {
+        "code": "both_feet_lift",
+        "message": "Both feet leave the ground on frames 2, 5 — the flight phase is normal for a run cycle.",
+        "frameIndexes": [
+          1,
+          4
+        ]
       }
     ],
     "skippedRoles": []
@@ -895,6 +999,14 @@
       {
         "code": "overlap",
         "message": "Parts \"body\" and \"armR\" overlap on one layer — \"armR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      },
+      {
+        "code": "foot_slide",
+        "message": "Planted feet shift up to 6px horizontally on contact frames (1, 3) — translation-only parts cannot pivot (R1). Refine those frames manually if ground-perfect footing matters.",
+        "frameIndexes": [
+          0,
+          2
+        ]
       }
     ],
     "skippedRoles": []
@@ -937,6 +1049,24 @@
       {
         "code": "overlap",
         "message": "Parts \"body\" and \"armR\" overlap on one layer — \"armR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      },
+      {
+        "code": "foot_slide",
+        "message": "Planted feet shift up to 9px horizontally on contact frames (1, 3, 4, 6) — translation-only parts cannot pivot (R1). Refine those frames manually if ground-perfect footing matters.",
+        "frameIndexes": [
+          0,
+          2,
+          3,
+          5
+        ]
+      },
+      {
+        "code": "both_feet_lift",
+        "message": "Both feet leave the ground on frames 2, 5 — the flight phase is normal for a run cycle.",
+        "frameIndexes": [
+          1,
+          4
+        ]
       }
     ],
     "skippedRoles": []
@@ -1085,6 +1215,14 @@
       {
         "code": "overlap",
         "message": "Parts \"hair\" and \"head\" overlap on one layer — \"hair\" (higher z) owns the shared pixels; \"head\" never moves them."
+      },
+      {
+        "code": "foot_slide",
+        "message": "Planted feet shift up to 6px horizontally on contact frames (1, 3) — translation-only parts cannot pivot (R1). Refine those frames manually if ground-perfect footing matters.",
+        "frameIndexes": [
+          0,
+          2
+        ]
       }
     ],
     "skippedRoles": []
@@ -1119,6 +1257,24 @@
       {
         "code": "overlap",
         "message": "Parts \"hair\" and \"head\" overlap on one layer — \"hair\" (higher z) owns the shared pixels; \"head\" never moves them."
+      },
+      {
+        "code": "foot_slide",
+        "message": "Planted feet shift up to 9px horizontally on contact frames (1, 3, 4, 6) — translation-only parts cannot pivot (R1). Refine those frames manually if ground-perfect footing matters.",
+        "frameIndexes": [
+          0,
+          2,
+          3,
+          5
+        ]
+      },
+      {
+        "code": "both_feet_lift",
+        "message": "Both feet leave the ground on frames 2, 5 — the flight phase is normal for a run cycle.",
+        "frameIndexes": [
+          1,
+          4
+        ]
       }
     ],
     "skippedRoles": []
@@ -1237,6 +1393,26 @@
       {
         "code": "overlap",
         "message": "Parts \"body\" and \"armR\" overlap on one layer — \"armR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      },
+      {
+        "code": "foot_slide",
+        "message": "Planted feet shift up to 3px horizontally on contact frames (1, 4, 5, 8) — translation-only parts cannot pivot (R1). Refine those frames manually if ground-perfect footing matters.",
+        "frameIndexes": [
+          0,
+          3,
+          4,
+          7
+        ]
+      },
+      {
+        "code": "both_feet_lift",
+        "message": "Both feet lift off the ground on frames 2, 3, 6, 7 — the preset curve table raises both legs mid-stride, which reads as a subtle hop. Refine those frames manually for a grounded gait.",
+        "frameIndexes": [
+          1,
+          2,
+          5,
+          6
+        ]
       }
     ],
     "skippedRoles": []
@@ -1287,6 +1463,24 @@
       {
         "code": "overlap",
         "message": "Parts \"body\" and \"legR\" overlap on one layer — \"legR\" (higher z) owns the shared pixels; \"body\" never moves them."
+      },
+      {
+        "code": "foot_slide",
+        "message": "Planted feet shift up to 2px horizontally on contact frames (1, 3, 4, 6) — translation-only parts cannot pivot (R1). Refine those frames manually if ground-perfect footing matters.",
+        "frameIndexes": [
+          0,
+          2,
+          3,
+          5
+        ]
+      },
+      {
+        "code": "both_feet_lift",
+        "message": "Both feet lift off the ground on frames 2, 5 — the preset curve table raises both legs mid-stride, which reads as a subtle hop. Refine those frames manually for a grounded gait.",
+        "frameIndexes": [
+          1,
+          4
+        ]
       }
     ],
     "skippedRoles": []

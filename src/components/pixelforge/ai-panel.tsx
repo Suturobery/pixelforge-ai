@@ -14,7 +14,6 @@
 
 import {
   estimateCostUsd,
-  requestSizeFor,
   RECIPE_PRESETS,
   SIZE_PRESETS,
   type Normalize2Options,
@@ -24,7 +23,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useEditor, getActiveClip } from '@/lib/pixelforge/store'
 import { useAppSettings, getActiveProvider } from '@/lib/pixelforge/settings'
-import { isDesktop } from '@/lib/pixelforge/desktop-bridge'
+import { isDesktop, notifyInBackground } from '@/lib/pixelforge/desktop-bridge'
 import {
   aiCandidateStore,
   loadAiHistoryFor,
@@ -35,6 +34,7 @@ import {
 } from '@/lib/pixelforge/ai/candidates'
 import { normalizeCandidate, cancelGeneration, submitGeneration } from '@/lib/pixelforge/ai/generate'
 import { uid } from '@/lib/pixelforge/factory'
+import { friendlyError } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Switch } from '@/components/ui/switch'
@@ -42,7 +42,7 @@ import { Slider } from '@/components/ui/slider'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useToast } from '@/hooks/use-toast'
-import { Sparkles, Upload, Trash2, ImagePlus, Layers, Film, Loader2, History, RotateCcw, Ban, RefreshCw } from 'lucide-react'
+import { Sparkles, Upload, Trash2, ImagePlus, Layers, Film, Loader2, History, RotateCcw, Ban, RefreshCw, ChevronDown } from 'lucide-react'
 
 const SUGGESTIONS = [
   '32x32 farmer character, overalls and straw hat, front view, idle stance',
@@ -51,15 +51,22 @@ const SUGGESTIONS = [
   'treasure chest, closed, wooden with gold trim',
 ]
 
-/** Small PNG thumbnail of a normalized buffer (history strip). */
+/** Small PNG thumbnail of a normalized buffer (history strip).
+ *  Buffers are immutable per candidate state — cache by identity so store
+ *  ticks don't re-encode every thumbnail on each render. */
+const thumbCache = new WeakMap<Uint8ClampedArray, string>()
 function makeThumb(buffer: Uint8ClampedArray, w: number, h: number): string {
+  const hit = thumbCache.get(buffer)
+  if (hit) return hit
   const canvas = document.createElement('canvas')
   canvas.width = w
   canvas.height = h
   const ctx = canvas.getContext('2d')
   if (!ctx) return ''
   ctx.putImageData(new ImageData(new Uint8ClampedArray(buffer), w, h), 0, 0)
-  return canvas.toDataURL('image/png')
+  const url = canvas.toDataURL('image/png')
+  thumbCache.set(buffer, url)
+  return url
 }
 
 function fmtCost(usd: number | null): string {
@@ -75,6 +82,7 @@ export function AiPanel() {
   const { toast } = useToast()
   const [prompt, setPrompt] = useState('')
   const [recipeId, setRecipeId] = useState('character')
+  const [showNormalize, setShowNormalize] = useState(false)
   const [size, setSize] = useState<{ w: number; h: number }>({ w: project.width, h: project.height })
   const [paletteMode, setPaletteMode] = useState<PaletteMode>('auto')
   const [maxColors, setMaxColors] = useState(16)
@@ -105,7 +113,7 @@ export function AiPanel() {
   // key check cannot see vault-stored keys — keyStatus (hasKey booleans from
   // main) is the source of truth there. Web: the legacy inline key decides.
   const desktopProvider = secureMode
-    ? (aiProviders.find((p) => p.id === activeProviderId && p.enabled && p.kind !== 'anthropic' && (p.kind === 'zai' || keyStatus[p.id]?.hasKey)) ?? null)
+    ? (aiProviders.find((p) => p.id === activeProviderId && p.enabled && (p.kind === 'zai' || keyStatus[p.id]?.hasKey)) ?? null)
     : null
   const effectiveProvider = activeProvider ?? desktopProvider
   const effectiveProviderId = effectiveProvider?.id ?? (secureMode ? activeProviderId || 'zai' : 'zai')
@@ -180,13 +188,14 @@ export function AiPanel() {
         },
       )
       toast({ title: 'Candidates ready', description: 'Review, then import as layer or frame.' })
+      notifyInBackground('AI candidates ready', 'Review, then import as layer or frame.')
       setSelectedId(aiCandidateStore.getState().candidates[0]?.id ?? null)
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Unknown error'
+      const msg = friendlyError(err)
       // provider-side hiccups (5xx, "network error, retry later", connection
       // drops) are usually transient — say so instead of showing raw text
       const transient =
-        /status 5\d\d|网络错误|请稍后|temporar|unavailable|ECONN|ETIMEDOUT|fetch failed|timeout|503|overloaded/i.test(msg)
+        /status 5\d\d|网络错误|请稍后|temporar|unavailable|ECONN|ETIMEDOUT|fetch failed|timeout|503|overloaded|temporary network error/i.test(msg)
       toast({
         title: 'Generation failed',
         description: transient
@@ -238,7 +247,7 @@ export function AiPanel() {
     } catch (err) {
       toast({
         title: 'Import failed',
-        description: err instanceof Error ? err.message : 'Unknown error',
+        description: friendlyError(err),
         variant: 'destructive',
       })
     }
@@ -301,16 +310,22 @@ export function AiPanel() {
     <TooltipProvider delayDuration={200}>
       {/* overflow-x-hidden: rows below shrink/wrap — never poke outside the dock */}
       <div className="mx-auto flex h-full w-full max-w-[520px] flex-col gap-3 overflow-x-hidden overflow-y-auto pixelforge-scroll p-3">
-        {/* ------------------------------------------------ prompt + recipe */}
-        <div>
-          <div className="mb-1.5 flex items-center gap-1.5 font-mono text-xs uppercase tracking-wider text-zinc-400">
-            <Sparkles className="h-3.5 w-3.5 text-teal-400" /> Text → sprite
+        {/* ------------------------------------------------ prompt + recipe (one card) */}
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-3">
+          <div className="mb-2 flex items-center gap-1.5 font-mono text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
+            <Sparkles className="h-3.5 w-3.5 text-frost-400" /> Text → sprite
           </div>
           <Textarea
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
-            placeholder={`Describe a sprite for the ${size.w}×${size.h} canvas…`}
-            className="min-h-[64px] resize-none border-zinc-800 bg-zinc-900 font-mono text-xs"
+            onKeyDown={(e) => {
+              if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                e.preventDefault()
+                void generate()
+              }
+            }}
+            placeholder={`Describe a sprite for the ${size.w}×${size.h} canvas… (Ctrl+Enter to generate)`}
+            className="max-h-[220px] min-h-[56px] resize-none field-sizing-content overflow-y-auto border-zinc-800 bg-zinc-900 font-mono text-xs leading-relaxed"
             aria-label="Sprite description"
           />
           <div className="mt-1.5 flex flex-wrap gap-1">
@@ -319,29 +334,32 @@ export function AiPanel() {
                 key={s}
                 type="button"
                 onClick={() => setPrompt(s)}
-                className="rounded-full border border-zinc-800 bg-zinc-900 px-2 py-0.5 text-[10px] text-zinc-400 hover:border-teal-500/50 hover:text-teal-300"
+                className="rounded-full border border-zinc-800 bg-zinc-900 px-2 py-0.5 text-[10px] text-zinc-400 hover:border-frost-500/50 hover:text-frost-300"
               >
                 {s.split(',')[0]}
               </button>
             ))}
           </div>
 
-          {/* recipe presets */}
-          <div className="mt-2 grid grid-cols-2 gap-1">
-            {RECIPE_PRESETS.map((r) => (
-              <button
-                key={r.id}
-                type="button"
-                onClick={() => setRecipeId(r.id)}
-                title={r.description}
-                aria-pressed={recipeId === r.id}
-                className={`rounded-md border px-2 py-1 text-left font-mono text-[10px] ${
-                  recipeId === r.id ? 'border-teal-500/60 bg-teal-900/30 text-teal-300' : 'border-zinc-800 bg-zinc-900 text-zinc-400 hover:border-zinc-700'
-                }`}
-              >
-                {r.label}
-              </button>
-            ))}
+          {/* recipe presets — compact chips */}
+          <div className="mt-1.5 flex items-start gap-1.5">
+            <span className="w-14 shrink-0 pt-0.5 font-mono text-[10px] text-zinc-400">STYLE</span>
+            <div className="flex min-w-0 flex-1 flex-wrap gap-1">
+              {RECIPE_PRESETS.map((r) => (
+                <button
+                  key={r.id}
+                  type="button"
+                  onClick={() => setRecipeId(r.id)}
+                  title={r.description}
+                  aria-pressed={recipeId === r.id}
+                  className={`rounded-full border px-2 py-0.5 font-mono text-[10px] transition-colors ${
+                    recipeId === r.id ? 'border-frost-500/60 bg-frost-900/30 text-frost-300' : 'border-zinc-800 bg-zinc-900 text-zinc-400 hover:border-zinc-700'
+                  }`}
+                >
+                  {r.label}
+                </button>
+              ))}
+            </div>
           </div>
 
           {/* size presets */}
@@ -354,7 +372,7 @@ export function AiPanel() {
                 if (w && h) setSize({ w, h })
               }}
             >
-              <SelectTrigger className="h-7 min-w-0 flex-1 border-zinc-800 bg-zinc-900 font-mono text-[11px]" aria-label="Sprite size">
+              <SelectTrigger className="h-7 w-full border-zinc-800 bg-zinc-900 font-mono text-[11px]" aria-label="Sprite size">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -395,7 +413,7 @@ export function AiPanel() {
                 onClick={() => setCount(n)}
                 aria-pressed={count === n}
                 className={`h-6 w-6 rounded border font-mono text-[10px] ${
-                  count === n ? 'border-teal-500/60 bg-teal-900/30 text-teal-300' : 'border-zinc-800 bg-zinc-900 text-zinc-400'
+                  count === n ? 'border-frost-500/60 bg-frost-900/30 text-frost-300' : 'border-zinc-800 bg-zinc-900 text-zinc-400'
                 }`}
               >
                 {n}
@@ -419,7 +437,7 @@ export function AiPanel() {
           <Button
             onClick={generate}
             disabled={busy || !prompt.trim()}
-            className="mt-2 h-8 w-full bg-teal-600 font-mono text-xs text-white hover:bg-teal-500"
+            className="mt-2 h-8 w-full bg-frost-600 font-mono text-xs text-white hover:bg-frost-500"
           >
             {busy || busyCandidate ? (
               <>
@@ -436,20 +454,13 @@ export function AiPanel() {
               <Ban className="mr-1 h-3 w-3" /> Cancel
             </Button>
           )}
-          <p className="mt-1 text-center font-mono text-[9px] leading-relaxed text-zinc-400">
-            engine: {effectiveProvider ? effectiveProvider.label : 'Z.AI built-in'} · {requestSizeFor(size.w, size.h)} request
-            <br />
-            {fmtCost(preflightEstimate)}
-            {usageSpend !== null && aiMonthlyLimitUsd > 0 ? ` · month ≈ $${usageSpend.toFixed(2)} / $${aiMonthlyLimitUsd.toFixed(2)}` : ''}
-            {secureMode ? '' : ' · change in Settings → AI & MCP'}
+          <p className="mt-1.5 truncate text-center font-mono text-[9px] text-zinc-500">
+            {effectiveProvider ? effectiveProvider.label : 'Z.AI built-in'} · {fmtCost(preflightEstimate)}
+            {usageSpend !== null && aiMonthlyLimitUsd > 0 ? ` · $${usageSpend.toFixed(2)}/$${aiMonthlyLimitUsd.toFixed(2)} mo` : ''}
+            {seedOn && !isDesktop() ? ' · seed n/a on web' : ''}
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
-          <div className="h-px flex-1 bg-zinc-800" />
-          <span className="font-mono text-[10px] text-zinc-400">OR IMPORT</span>
-          <div className="h-px flex-1 bg-zinc-800" />
-        </div>
         <input
           ref={fileRef}
           type="file"
@@ -465,10 +476,19 @@ export function AiPanel() {
           <Upload className="mr-1.5 h-3.5 w-3.5" /> Import image file
         </Button>
 
-        {/* ------------------------------------------------ normalize pipeline */}
-        <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-2.5">
-          <div className="mb-2 font-mono text-[10px] uppercase tracking-wider text-zinc-400">Normalize v2 pipeline</div>
-          <div className="space-y-2 text-xs">
+        {/* ------------------------------------------------ normalize pipeline (collapsed by default) */}
+        <div className="rounded-lg border border-zinc-800 bg-zinc-900/50">
+          <button
+            type="button"
+            onClick={() => setShowNormalize((v) => !v)}
+            aria-expanded={showNormalize}
+            className="flex w-full items-center gap-1.5 px-2.5 py-2 font-mono text-[10px] uppercase tracking-wider text-zinc-400 hover:text-zinc-200"
+          >
+            Normalize v2 pipeline
+            <ChevronDown className={`ml-auto h-3.5 w-3.5 transition-transform ${showNormalize ? 'rotate-180' : ''}`} />
+          </button>
+          {showNormalize && (
+          <div className="space-y-2 px-2.5 pb-2.5 text-xs">
             <label className="flex items-center justify-between gap-2">
               <span className="text-zinc-300">Remove background</span>
               <Switch checked={removeBg} onCheckedChange={setRemoveBg} aria-label="Remove background" />
@@ -483,7 +503,7 @@ export function AiPanel() {
             <div className="flex items-center gap-2">
               <span className="w-16 shrink-0 font-mono text-[10px] text-zinc-400">PALETTE</span>
               <Select value={paletteMode} onValueChange={(v) => setPaletteMode(v as PaletteMode)}>
-                <SelectTrigger className="h-7 min-w-0 flex-1 border-zinc-800 bg-zinc-900 font-mono text-[11px]" aria-label="Palette mode">
+                <SelectTrigger className="h-7 w-full border-zinc-800 bg-zinc-900 font-mono text-[11px]" aria-label="Palette mode">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -504,16 +524,17 @@ export function AiPanel() {
               <span className="text-zinc-300">Outline cleanup</span>
               <Switch checked={outlineCleanup} onCheckedChange={setOutlineCleanup} aria-label="Outline fringe cleanup" />
             </label>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-6 w-full font-mono text-[10px] text-zinc-400"
-              onClick={() => selected && void renormalize(selected)}
-              disabled={!selected || !selected.originalSrc}
-            >
-              <RefreshCw className="mr-1 h-3 w-3" /> Re-run on selected
-            </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 w-full font-mono text-[10px] text-zinc-400"
+            onClick={() => selected && void renormalize(selected)}
+            disabled={!selected || !selected.originalSrc}
+          >
+            <RefreshCw className="mr-1 h-3 w-3" /> Re-run on selected
+          </Button>
           </div>
+          )}
         </div>
 
         {/* ------------------------------------------------ candidates */}
@@ -528,7 +549,7 @@ export function AiPanel() {
                     type="button"
                     onClick={() => setSelectedId(c.id)}
                     className={`block h-16 w-16 overflow-hidden rounded-md border ${
-                      c.id === selected?.id ? 'border-teal-400 ring-1 ring-teal-400/60' : 'border-zinc-700'
+                      c.id === selected?.id ? 'border-frost-400 ring-1 ring-frost-400/60' : 'border-zinc-700'
                     }`}
                     aria-label={`Candidate from ${c.createdAt}`}
                     aria-pressed={c.id === selected?.id}
@@ -541,13 +562,13 @@ export function AiPanel() {
                       <span className="flex h-full w-full items-center justify-center text-[9px] text-zinc-400">…</span>
                     )}
                   </button>
-                  {c.status === 'normalizing' && <span className="absolute left-1 top-1"><Loader2 className="h-3 w-3 animate-spin text-teal-300" /></span>}
+                  {c.status === 'normalizing' && <span className="absolute left-1 top-1"><Loader2 className="h-3 w-3 animate-spin text-frost-300" /></span>}
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <button
                         type="button"
                         onClick={() => discard(c.id)}
-                        className="absolute -right-1.5 -top-1.5 flex h-6 w-6 items-center justify-center rounded-full border border-zinc-600 bg-zinc-900 text-zinc-200 shadow-md before:absolute before:-inset-1.5 before:rounded-full before:content-[''] hover:border-red-400/60 hover:bg-red-500/20 hover:text-red-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 touch-manipulation"
+                        className="absolute -right-1.5 -top-1.5 flex h-6 w-6 items-center justify-center rounded-full border border-zinc-600 bg-zinc-900 text-zinc-200 shadow-md before:absolute before:-inset-1.5 before:rounded-full before:content-[''] hover:border-red-400/60 hover:bg-red-500/20 hover:text-red-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-frost-400 touch-manipulation"
                         aria-label="Discard candidate"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
@@ -584,14 +605,14 @@ export function AiPanel() {
               </figure>
               {compare && (
                 <figure className="min-w-0 flex-1">
-                  <div className="pixelforge-checker h-20 overflow-hidden rounded-md border border-teal-700/60">
+                  <div className="pixelforge-checker h-20 overflow-hidden rounded-md border border-frost-700/60">
                     {selected.normalized ? (
                       <img src={makeThumb(selected.normalized.buffer, selected.normalized.w, selected.normalized.h)} alt="Normalized pixel art" className="h-full w-full object-contain [image-rendering:pixelated]" />
                     ) : (
                       <span className="flex h-full items-center justify-center font-mono text-[9px] text-zinc-400">normalizing…</span>
                     )}
                   </div>
-                  <figcaption className="mt-0.5 text-center font-mono text-[9px] text-teal-300/80">
+                  <figcaption className="mt-0.5 text-center font-mono text-[9px] text-frost-300/80">
                     v2 · {size.w}×{size.h}
                     {selected.normalized ? ` · ${selected.normalized.colors} colors` : ''}
                   </figcaption>
@@ -612,7 +633,7 @@ export function AiPanel() {
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
-                    className="h-8 bg-teal-600 font-mono text-xs text-white hover:bg-teal-500"
+                    className="h-8 bg-frost-600 font-mono text-xs text-white hover:bg-frost-500"
                     onClick={() => acceptAsLayer(selected)}
                     disabled={!selected.normalized || selected.status === 'accepted'}
                   >
@@ -629,7 +650,7 @@ export function AiPanel() {
                 <TooltipTrigger asChild>
                   <Button
                     variant="outline"
-                    className="h-8 border-teal-700/60 font-mono text-xs text-teal-300 hover:bg-teal-900/30"
+                    className="h-8 border-frost-700/60 font-mono text-xs text-frost-300 hover:bg-frost-900/30"
                     onClick={() => acceptAsFrame(selected)}
                     disabled={!selected.normalized || selected.status === 'accepted'}
                   >

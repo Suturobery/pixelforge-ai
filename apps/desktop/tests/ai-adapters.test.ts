@@ -71,6 +71,17 @@ describe('openai-compatible adapter', () => {
     }
   });
 
+  test('local or plain-http provider URLs are refused before a request is made', async () => {
+    let called = false;
+    const adapter = createOpenAiCompatibleAdapter({
+      providerId: 'custom', providerLabel: 'Custom', model: 'model',
+      baseUrl: 'http://127.0.0.1:11434/v1', apiKey: 'k',
+      fetch: (async () => { called = true; return jsonRes(200, { data: [] })(); }) as FetchLike,
+    });
+    await expect(adapter.generate({ fullPrompt: 'x', requestSize: '1024x1024', count: 1, signal: SIGNAL })).rejects.toThrow(AiJobError);
+    expect(called).toBe(false);
+  });
+
   test('https url responses are downloaded (https-only) and converted to base64', async () => {
     const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).buffer;
     const fetchMock: FetchLike = (url) => {

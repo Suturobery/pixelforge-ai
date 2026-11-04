@@ -39,6 +39,16 @@ start_mini_services() {
 		return 0
 	fi
 
+	# A crashed --hot watcher can leave a stale server serving OLD code on
+	# :3030 — kill it so the fresh start serves current sources.
+	local stale_pid
+	stale_pid=$(netstat -ano 2>/dev/null | grep ":3030" | grep LISTENING | awk '{print $5}' | head -1 || true)
+	if [ -n "$stale_pid" ]; then
+		echo "Killing stale listener on :3030 (PID: $stale_pid)"
+		taskkill //F //PID "$stale_pid" >/dev/null 2>&1 || kill -9 "$stale_pid" 2>/dev/null || true
+		sleep 1
+	fi
+
 	echo "Found mini-services directory, scanning for sub-services..."
 
 	for service_dir in "$mini_services_dir"/*; do
@@ -147,6 +157,11 @@ echo "[BUN] Health check passed"
 log_step_end "Health check"
 
 start_mini_services
+
+# Mini-service health: agent relay + editor pairing depend on the MCP server.
+if ! wait_for_service "127.0.0.1" "3030" "MCP server (mcp-server)" 30; then
+	echo "WARNING: MCP server did not come up on :3030 — check .zscripts/mini-service-mcp-server.log"
+fi
 
 echo "Next.js dev server is running in background (PID: $DEV_PID)."
 echo "Use 'kill $DEV_PID' to stop it."

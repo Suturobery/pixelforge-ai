@@ -11,11 +11,15 @@ export type RendererTarget =
   | { kind: 'dev-server'; url: string }
   | { kind: 'shell'; file: string };
 
+/** Internal port of the embedded Next standalone renderer (Task 4). */
+export const RENDERER_PORT = Number(process.env.PF_RENDERER_PORT ?? 3131);
+
 /**
- * Resolve which renderer the shell loads (v3.1 §12 Task 1 → Task 4 transition):
- *  - PF_RENDERER=shell  → bundled static shell page (bridge smoke / prod fallback)
+ * Resolve which renderer the shell loads (v3.1 §12 Task 1 → Task 4):
+ *  - PF_RENDERER=shell  → bundled static shell page (bridge smoke / diagnostic)
  *  - dev (default)      → the existing web prototype on localhost:3000 (§10 reuse plan)
- *  - packaged (prod)    → static shell until Task 4 ports the real renderer
+ *  - packaged (prod)    → the embedded Next standalone renderer on a private
+ *                         loopback port (started by RenderServer in main)
  */
 export function resolveRendererTarget(): RendererTarget {
   const shellFile = path.join(app.getAppPath(), 'static', 'shell.html');
@@ -25,5 +29,5 @@ export function resolveRendererTarget(): RendererTarget {
   if (isDev) {
     return { kind: 'dev-server', url: process.env.PF_DEV_URL ?? 'http://localhost:3000' };
   }
-  return { kind: 'shell', file: shellFile };
+  return { kind: 'dev-server', url: `http://127.0.0.1:${RENDERER_PORT}` };
 }

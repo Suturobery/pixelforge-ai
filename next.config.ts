@@ -9,10 +9,10 @@ const CORE_ALIAS = "./packages/core/src/index.ts";
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  // pin the standalone root to the project — prevents nesting when a
+  // stray package.json exists in a parent directory (C:/Users/<name>)
+  outputFileTracingRoot: path.resolve(__dirname),
   /* config options here */
-  typescript: {
-    ignoreBuildErrors: true,
-  },
   reactStrictMode: false,
   // keep the studio chrome clean — no dev-mode badge/icon overlays
   devIndicators: false,

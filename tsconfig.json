@@ -47,6 +47,7 @@
     "apps/desktop",
     "mini-services/mcp-server",
     "packages/core/dist",
+    "packages/core/tests",
     "examples"
   ]
 }

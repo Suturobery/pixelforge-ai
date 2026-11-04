@@ -42,10 +42,6 @@ describe('gen-contract: capability matrix', () => {
     expect(caps.builtIn).toBe(false);
   });
 
-  test('#C3 anthropic: NO image generation at all (verified)', () => {
-    expect(capabilitiesFor('anthropic').imageGeneration).toBe(false);
-  });
-
   test('#C4 custom: conservative subset', () => {
     const caps = capabilitiesFor('custom');
     expect(caps.imageGeneration).toBe(true);
@@ -136,15 +132,6 @@ describe('gen-contract: request planning (capability-checked)', () => {
     }
   });
 
-  test('#R4 anthropic is refused outright (no image API)', () => {
-    try {
-      planOpenAiImagesRequest({ ...base, kind: 'anthropic' });
-      throw new Error('should have thrown');
-    } catch (err) {
-      expect((err as CapabilityError).code).toBe('image_generation_unsupported');
-    }
-  });
-
   test('#R5 missing config produces structured config errors', () => {
     expect(() => planOpenAiImagesRequest({ ...base, apiKey: '' })).toThrow(/API key/);
     expect(() => planOpenAiImagesRequest({ ...base, baseUrl: '' })).toThrow(/base URL/);
@@ -188,10 +175,9 @@ describe('gen-contract: cost estimation (ESTIMATES only)', () => {
     expect(estimateCostUsd('openai', 'DALL-E-3', 1)).toBeCloseTo(0.04, 10); // case-insensitive
   });
 
-  test('#E2 unknown models and zai/anthropic → null (never a made-up number)', () => {
+  test('#E2 unknown models and zai → null (never a made-up number)', () => {
     expect(estimateCostUsd('openai', 'mystery-model', 1)).toBeNull();
     expect(estimateCostUsd('zai', 'auto', 1)).toBeNull();
-    expect(estimateCostUsd('anthropic', 'claude-sonnet-4-5', 1)).toBeNull();
     expect(priceBasisFor('gpt-image-1-mini')).toContain('openai');
     expect(priceBasisFor('mystery-model')).toBeNull();
   });

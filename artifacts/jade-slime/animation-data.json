@@ -1,0 +1,291 @@
+{
+  "name": "Jade Slime",
+  "frameWidth": 64,
+  "frameHeight": 64,
+  "pivot": {
+    "x": 31,
+    "y": 50
+  },
+  "atlas": "jade-slime-spritesheet.png",
+  "columns": 8,
+  "rows": 5,
+  "animations": [
+    {
+      "name": "Idle",
+      "row": 0,
+      "frameCount": 8,
+      "fps": 8,
+      "loop": true,
+      "schedule": [
+        {
+          "frame": 0,
+          "ms": 125
+        },
+        {
+          "frame": 1,
+          "ms": 125
+        },
+        {
+          "frame": 2,
+          "ms": 125
+        },
+        {
+          "frame": 3,
+          "ms": 125
+        },
+        {
+          "frame": 4,
+          "ms": 125
+        },
+        {
+          "frame": 5,
+          "ms": 125
+        },
+        {
+          "frame": 6,
+          "ms": 125
+        },
+        {
+          "frame": 7,
+          "ms": 125
+        }
+      ]
+    },
+    {
+      "name": "Attack",
+      "row": 1,
+      "frameCount": 8,
+      "fps": 12,
+      "loop": false,
+      "schedule": [
+        {
+          "frame": 0,
+          "ms": 83
+        },
+        {
+          "frame": 1,
+          "ms": 83
+        },
+        {
+          "frame": 2,
+          "ms": 83
+        },
+        {
+          "frame": 3,
+          "ms": 83
+        },
+        {
+          "frame": 4,
+          "ms": 83
+        },
+        {
+          "frame": 5,
+          "ms": 83
+        },
+        {
+          "frame": 6,
+          "ms": 83
+        },
+        {
+          "frame": 7,
+          "ms": 83
+        }
+      ]
+    },
+    {
+      "name": "Walk",
+      "row": 2,
+      "frameCount": 8,
+      "fps": 10,
+      "loop": true,
+      "schedule": [
+        {
+          "frame": 0,
+          "ms": 100
+        },
+        {
+          "frame": 1,
+          "ms": 100
+        },
+        {
+          "frame": 2,
+          "ms": 100
+        },
+        {
+          "frame": 3,
+          "ms": 100
+        },
+        {
+          "frame": 4,
+          "ms": 100
+        },
+        {
+          "frame": 5,
+          "ms": 100
+        },
+        {
+          "frame": 6,
+          "ms": 100
+        },
+        {
+          "frame": 7,
+          "ms": 100
+        }
+      ]
+    },
+    {
+      "name": "Hurt",
+      "row": 3,
+      "frameCount": 8,
+      "fps": 12,
+      "loop": false,
+      "schedule": [
+        {
+          "frame": 0,
+          "ms": 83
+        },
+        {
+          "frame": 1,
+          "ms": 83
+        },
+        {
+          "frame": 2,
+          "ms": 83
+        },
+        {
+          "frame": 3,
+          "ms": 83
+        },
+        {
+          "frame": 4,
+          "ms": 83
+        },
+        {
+          "frame": 5,
+          "ms": 83
+        },
+        {
+          "frame": 6,
+          "ms": 83
+        },
+        {
+          "frame": 7,
+          "ms": 83
+        }
+      ]
+    },
+    {
+      "name": "Die",
+      "row": 4,
+      "frameCount": 8,
+      "fps": 10,
+      "loop": false,
+      "schedule": [
+        {
+          "frame": 0,
+          "ms": 100
+        },
+        {
+          "frame": 1,
+          "ms": 100
+        },
+        {
+          "frame": 2,
+          "ms": 100
+        },
+        {
+          "frame": 3,
+          "ms": 100
+        },
+        {
+          "frame": 4,
+          "ms": 100
+        },
+        {
+          "frame": 5,
+          "ms": 100
+        },
+        {
+          "frame": 6,
+          "ms": 100
+        },
+        {
+          "frame": 7,
+          "ms": 100
+        }
+      ]
+    }
+  ],
+  "validation": [
+    {
+      "clip": "Idle",
+      "frames": 8,
+      "fps": 8,
+      "loop": true,
+      "exactPixelMatch": true,
+      "transparentMargin": 13,
+      "bounds": {
+        "minX": 15,
+        "minY": 22,
+        "maxX": 48,
+        "maxY": 50
+      }
+    },
+    {
+      "clip": "Attack",
+      "frames": 8,
+      "fps": 12,
+      "loop": false,
+      "exactPixelMatch": true,
+      "transparentMargin": 5,
+      "bounds": {
+        "minX": 8,
+        "minY": 22,
+        "maxX": 58,
+        "maxY": 50
+      }
+    },
+    {
+      "clip": "Walk",
+      "frames": 8,
+      "fps": 10,
+      "loop": true,
+      "exactPixelMatch": true,
+      "transparentMargin": 13,
+      "bounds": {
+        "minX": 13,
+        "minY": 16,
+        "maxX": 49,
+        "maxY": 50
+      }
+    },
+    {
+      "clip": "Hurt",
+      "frames": 8,
+      "fps": 12,
+      "loop": false,
+      "exactPixelMatch": true,
+      "transparentMargin": 7,
+      "bounds": {
+        "minX": 7,
+        "minY": 22,
+        "maxX": 47,
+        "maxY": 50
+      }
+    },
+    {
+      "clip": "Die",
+      "frames": 8,
+      "fps": 10,
+      "loop": false,
+      "exactPixelMatch": true,
+      "transparentMargin": 4,
+      "bounds": {
+        "minX": 4,
+        "minY": 24,
+        "maxX": 58,
+        "maxY": 50
+      }
+    }
+  ]
+}

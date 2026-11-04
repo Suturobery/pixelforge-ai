@@ -6,13 +6,13 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useEditor } from '@/lib/pixelforge/store'
+import { useEditor, MIN_ZOOM, MAX_ZOOM } from '@/lib/pixelforge/store'
 import { useAppSettings } from '@/lib/pixelforge/settings'
 import { savePanelRaw, onPanelsHydrated } from '@/lib/pixelforge/panel-storage'
 import { FloatPill } from '@/components/pixelforge/float-pill'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { Scan, ZoomIn, ZoomOut, Grid3X3, EyeOff, SlidersHorizontal } from 'lucide-react'
+import { Scan, ZoomIn, ZoomOut, Grid3X3, Contrast, EyeOff, SlidersHorizontal } from 'lucide-react'
 
 const STORE_KEY = 'pixelforge-viewbar-v1'
 const MARGIN = 10
@@ -22,17 +22,29 @@ interface Pos {
   y: number
 }
 
-function loadSaved(): { pos: Pos | null; hidden: boolean } {
-  if (typeof window === 'undefined') return { pos: null, hidden: false }
+interface SavedState {
+  pos: Pos | null
+  hidden: boolean
+  /** the collapsed "View" pill remembers ITS OWN spot — decoupled from the
+      toolbar so hiding never strands the pill at the toolbar's last point */
+  pillPos: Pos | null
+}
+
+function loadSaved(): SavedState {
+  if (typeof window === 'undefined') return { pos: null, hidden: false, pillPos: null }
   try {
     const raw = window.localStorage.getItem(STORE_KEY)
-    if (!raw) return { pos: null, hidden: false }
-    const p = JSON.parse(raw) as { pos?: Pos | null; hidden?: boolean }
-    const pos =
-      p.pos && typeof p.pos.x === 'number' && typeof p.pos.y === 'number' ? p.pos : null
-    return { pos, hidden: Boolean(p.hidden) }
+    if (!raw) return { pos: null, hidden: false, pillPos: null }
+    const p = JSON.parse(raw) as { pos?: Pos | null; hidden?: boolean; pillPos?: Pos | null }
+    const num = (v: unknown): v is Pos =>
+      typeof v === 'object' && v !== null && typeof (v as Pos).x === 'number' && typeof (v as Pos).y === 'number'
+    return {
+      pos: num(p.pos) ? p.pos : null,
+      hidden: Boolean(p.hidden),
+      pillPos: num(p.pillPos) ? p.pillPos : null,
+    }
   } catch {
-    return { pos: null, hidden: false }
+    return { pos: null, hidden: false, pillPos: null }
   }
 }
 
@@ -46,8 +58,11 @@ export function ViewToolbar({
   const zoom = useEditor((s) => s.zoom)
   const showGrid = useEditor((s) => s.showGrid)
   const setShowGrid = useEditor((s) => s.setShowGrid)
+  const grayscale = useEditor((s) => s.grayscale)
+  const setGrayscale = useEditor((s) => s.setGrayscale)
   const floatBtnSize = useAppSettings((s) => s.floatBtnSize)
   const [pos, setPos] = useState<Pos | null>(null)
+  const [pillPos, setPillPos] = useState<Pos | null>(null)
   const [hidden, setHidden] = useState(false)
   const [dragging, setDragging] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -60,6 +75,7 @@ export function ViewToolbar({
     const raf = requestAnimationFrame(() => {
       const saved = loadSaved()
       setPos(saved.pos)
+      setPillPos(saved.pillPos)
       setHidden(saved.hidden)
       hydratedRef.current = true
     })
@@ -72,6 +88,7 @@ export function ViewToolbar({
       onPanelsHydrated(() => {
         const saved = loadSaved()
         setPos(saved.pos)
+        setPillPos(saved.pillPos)
         setHidden(saved.hidden)
       }),
     [],
@@ -81,21 +98,37 @@ export function ViewToolbar({
   // savePanelRaw mirrors into the desktop settings file (Task 13a)
   useEffect(() => {
     if (!hydratedRef.current || typeof window === 'undefined') return
-    savePanelRaw(STORE_KEY, { pos, hidden })
-  }, [pos, hidden])
+    savePanelRaw(STORE_KEY, { pos, hidden, pillPos })
+  }, [pos, hidden, pillPos])
 
-  // keep the pill inside the stage when the container shrinks
+  // keep the pill inside the stage when the container resizes — and because
+  // its home is the TOP-RIGHT corner, keep its distance from the RIGHT edge
+  // constant as the window width changes (the user expectation: a toolbar
+  // parked at the right edge stays at the right edge after a resize)
   useEffect(() => {
     const parent = rootRef.current?.offsetParent as HTMLElement | null
     if (!parent) return
+    let lastW: number | null = null
     const ro = new ResizeObserver(() => {
       const el = rootRef.current
+      const pw = parent.clientWidth
       setPos((cur) => {
-        if (!el || !cur) return cur
-        const maxX = Math.max(MARGIN, parent.clientWidth - el.offsetWidth - MARGIN)
+        if (!el || !cur) {
+          lastW = pw
+          return cur
+        }
+        let next = { ...cur }
+        if (lastW != null && lastW !== pw) {
+          // toolbar sat in the right half → right-anchor it across the delta
+          if (cur.x > lastW / 2) next.x = Math.max(MARGIN, cur.x + (pw - lastW))
+        }
+        lastW = pw
+        const maxX = Math.max(MARGIN, pw - el.offsetWidth - MARGIN)
         const maxY = Math.max(MARGIN, parent.clientHeight - el.offsetHeight - MARGIN)
-        if (cur.x <= maxX && cur.y <= maxY) return cur
-        return { x: Math.min(cur.x, maxX), y: Math.min(cur.y, maxY) }
+        next.x = Math.min(Math.max(MARGIN, next.x), maxX)
+        next.y = Math.min(Math.max(MARGIN, next.y), maxY)
+        if (next.x === cur.x && next.y === cur.y) return cur
+        return next
       })
     })
     ro.observe(parent)
@@ -168,10 +201,11 @@ export function ViewToolbar({
         ariaLabel="Show view toolbar"
         icon={<SlidersHorizontal className={`text-teal-400 ${floatBtnSize === 'lg' ? 'h-4 w-4' : 'h-3.5 w-3.5'}`} aria-hidden />}
         size={floatBtnSize}
-        pos={pos}
-        defaultAnchorClass="bottom-3 right-3"
+        pos={pillPos}
+        defaultAnchorClass="top-3 right-3"
         onActivate={() => setHidden(false)}
-        onMoved={setPos}
+        onMoved={setPillPos}
+        onReset={() => setPillPos(null)}
       />
     )
   }
@@ -193,11 +227,20 @@ export function ViewToolbar({
     >
       <Tooltip>
         <TooltipTrigger asChild>
-          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onZoomBy(1 / 1.25)} aria-label="Zoom out">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={() => onZoomBy(1 / 1.25)}
+            disabled={zoom <= MIN_ZOOM + 0.01}
+            aria-label="Zoom out"
+          >
             <ZoomOut className="h-4 w-4" />
           </Button>
         </TooltipTrigger>
-        <TooltipContent side="top">Zoom out</TooltipContent>
+        <TooltipContent side="top">
+          {zoom <= MIN_ZOOM + 0.01 ? 'Minimum zoom (25%)' : 'Zoom out'}
+        </TooltipContent>
       </Tooltip>
       <Tooltip>
         <TooltipTrigger asChild>
@@ -213,11 +256,20 @@ export function ViewToolbar({
       </Tooltip>
       <Tooltip>
         <TooltipTrigger asChild>
-          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onZoomBy(1.25)} aria-label="Zoom in">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={() => onZoomBy(1.25)}
+            disabled={zoom >= MAX_ZOOM - 0.01}
+            aria-label="Zoom in"
+          >
             <ZoomIn className="h-4 w-4" />
           </Button>
         </TooltipTrigger>
-        <TooltipContent side="top">Zoom in</TooltipContent>
+        <TooltipContent side="top">
+          {zoom >= MAX_ZOOM - 0.01 ? 'Maximum zoom (6400%)' : 'Zoom in'}
+        </TooltipContent>
       </Tooltip>
       <Tooltip>
         <TooltipTrigger asChild>
@@ -241,6 +293,21 @@ export function ViewToolbar({
           </Button>
         </TooltipTrigger>
         <TooltipContent side="top">Toggle grid</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant={grayscale ? 'secondary' : 'ghost'}
+            size="icon"
+            className="h-7 w-7"
+            onClick={() => setGrayscale(!grayscale)}
+            aria-label="Toggle grayscale preview"
+            aria-pressed={grayscale}
+          >
+            <Contrast className="h-4 w-4" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="top">Grayscale preview (check values)</TooltipContent>
       </Tooltip>
       <Tooltip>
         <TooltipTrigger asChild>

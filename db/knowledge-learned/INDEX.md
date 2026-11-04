@@ -1,0 +1,1 @@
+- **test-donut** — `u20261031-9tkw-test-donut` · 64x64 · 3 colors · symmetry 81.9

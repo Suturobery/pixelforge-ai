@@ -294,6 +294,7 @@ export function PreviewOverlay() {
         defaultAnchorClass="bottom-3 left-3"
         onActivate={() => setOpen(true)}
         onMoved={setPillPos}
+        onReset={() => setPillPos(null)}
       />
     )
   }
@@ -326,7 +327,7 @@ export function PreviewOverlay() {
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-5 w-5 text-zinc-400 hover:text-teal-300"
+                className="h-5 w-5 text-zinc-400 hover:text-zinc-100"
                 onClick={() => setLoopOn(!loopOn)}
                 aria-label={loopOn ? 'Pause preview loop' : 'Resume preview loop'}
                 aria-pressed={loopOn}
@@ -360,7 +361,7 @@ export function PreviewOverlay() {
           width={256}
           height={256}
           style={{ width: size, height: size, imageRendering: 'pixelated' }}
-          className="pixelforge-checker block rounded-md border border-zinc-800"
+          className="pixelforge-canvas-checker block rounded-md border border-zinc-800"
           aria-label="Looping animation preview of the active clip"
         />
         <div
@@ -368,7 +369,7 @@ export function PreviewOverlay() {
           aria-label="Drag to resize preview"
           title="Drag to resize"
           onPointerDown={onGripDown}
-          className="absolute bottom-0.5 right-0.5 h-4 w-4 touch-none cursor-nwse-resize text-zinc-400 hover:text-teal-300"
+          className="absolute bottom-0.5 right-0.5 h-4 w-4 touch-none cursor-nwse-resize text-zinc-400 hover:text-zinc-100"
         >
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" className="h-full w-full" aria-hidden>
             <path d="M14 7 7 14" />
@@ -390,7 +391,7 @@ export function PreviewOverlay() {
         <Button
           variant="ghost"
           size="icon"
-          className="h-5 w-5 text-zinc-400 hover:text-teal-300"
+          className="h-5 w-5 text-zinc-400 hover:text-zinc-100"
           onClick={() => stepSize(-SIZE_STEP)}
           disabled={size <= MIN_SIZE}
           aria-label="Smaller preview"
@@ -403,7 +404,7 @@ export function PreviewOverlay() {
         <Button
           variant="ghost"
           size="icon"
-          className="h-5 w-5 text-zinc-400 hover:text-teal-300"
+          className="h-5 w-5 text-zinc-400 hover:text-zinc-100"
           onClick={() => stepSize(SIZE_STEP)}
           disabled={size >= MAX_SIZE}
           aria-label="Bigger preview"

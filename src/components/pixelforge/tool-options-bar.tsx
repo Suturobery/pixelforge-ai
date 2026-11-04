@@ -13,6 +13,7 @@ import type { TransformKind } from '@/lib/pixelforge/types'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { StepperInput } from '@/components/pixelforge/stepper-input'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
   Tooltip,
   TooltipContent,
@@ -20,7 +21,6 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import {
-  Check,
   Copy,
   ClipboardPaste,
   Scissors,
@@ -30,6 +30,7 @@ import {
   RotateCw,
   RotateCcw,
   X,
+  Brush,
 } from 'lucide-react'
 
 function OptButton({
@@ -49,7 +50,7 @@ function OptButton({
         <Button
           variant="ghost"
           size="icon"
-          className="h-7 w-7 text-zinc-300 hover:text-teal-300 disabled:opacity-40"
+          className="h-7 w-7 text-zinc-300 hover:text-zinc-100 disabled:opacity-40"
           onClick={onClick}
           disabled={disabled}
           aria-label={label}
@@ -154,58 +155,92 @@ export function ToolOptionsBar() {
           </>
         )}
 
+        {/* Task 10b tilemap toggle — the full controls live in the tool rail */}
+
         {tool === 'marquee' && (
           <>
             {!selection && (
               <span className="px-1.5 font-mono text-[10px] text-zinc-400 hidden @[560px]:inline">
-                drag on the canvas to select — drag inside to move pixels
+                drag to select — drag inside to move
               </span>
             )}
             {selection && (
               <>
-                <span className="px-1 font-mono text-[10px] text-zinc-400">
-                  {selection.w}×{selection.h}
-                </span>
-                <span className="px-0.5 font-mono text-[10px] text-zinc-400" aria-hidden>
-                  →
-                </span>
-                <StepperInput
-                  value={scaleW}
-                  onChange={(v) =>
-                    setSizeEd({ w: Math.min(project.width, Math.max(1, v)), h: scaleH, key: selKey })
-                  }
-                  min={1}
-                  max={project.width}
-                  ariaLabel="Target selection width"
-                  size="sm"
-                />
-                <span className="px-0.5 font-mono text-[10px] text-zinc-400" aria-hidden>
-                  ×
-                </span>
-                <StepperInput
-                  value={scaleH}
-                  onChange={(v) =>
-                    setSizeEd({ w: scaleW, h: Math.min(project.height, Math.max(1, v)), key: selKey })
-                  }
-                  min={1}
-                  max={project.height}
-                  ariaLabel="Target selection height"
-                  size="sm"
-                />
-                <OptButton
-                  icon={<Check className="h-3.5 w-3.5" />}
-                  label={`Scale selection to ${scaleW}×${scaleH} (nearest-neighbor)`}
-                  onClick={() =>
-                    useEditor
-                      .getState()
-                      .selectionScaleTo({ x: selection.x, y: selection.y, w: scaleW, h: scaleH })
-                  }
-                  disabled={scaleW === selection.w && scaleH === selection.h}
-                />
+                <Popover>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <PopoverTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          className="h-7 gap-1 px-1.5 font-mono text-[10px] font-bold text-zinc-300 hover:text-zinc-100"
+                          aria-label={`Scale selection (now ${selection.w}×${selection.h})`}
+                        >
+                          {selection.w}×{selection.h}
+                          <span aria-hidden className="text-zinc-500">⤢</span>
+                        </Button>
+                      </PopoverTrigger>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" className="font-mono text-xs">
+                      Scale selection
+                    </TooltipContent>
+                  </Tooltip>
+                  <PopoverContent side="bottom" align="start" className="w-56 p-3">
+                    <div className="flex items-center justify-between">
+                      <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
+                        Scale to
+                      </p>
+                      <span className="font-mono text-[10px] text-zinc-500">
+                        {selection.w}×{selection.h} → {scaleW}×{scaleH}
+                      </span>
+                    </div>
+                    <div className="mt-2 flex items-center gap-1.5">
+                      <StepperInput
+                        value={scaleW}
+                        onChange={(v) =>
+                          setSizeEd({ w: Math.min(project.width, Math.max(1, v)), h: scaleH, key: selKey })
+                        }
+                        min={1}
+                        max={project.width}
+                        ariaLabel="Target selection width"
+                        size="sm"
+                        className="flex-1 justify-between"
+                      />
+                      <span className="font-mono text-[10px] text-zinc-400">×</span>
+                      <StepperInput
+                        value={scaleH}
+                        onChange={(v) =>
+                          setSizeEd({ w: scaleW, h: Math.min(project.height, Math.max(1, v)), key: selKey })
+                        }
+                        min={1}
+                        max={project.height}
+                        ariaLabel="Target selection height"
+                        size="sm"
+                        className="flex-1 justify-between"
+                      />
+                    </div>
+                    <Button
+                      className="mt-2 h-7 w-full bg-teal-600 font-mono text-xs text-white hover:bg-teal-500"
+                      disabled={scaleW === selection.w && scaleH === selection.h}
+                      onClick={() =>
+                        useEditor
+                          .getState()
+                          .selectionScaleTo({ x: selection.x, y: selection.y, w: scaleW, h: scaleH })
+                      }
+                    >
+                      Apply scale
+                    </Button>
+                  </PopoverContent>
+                </Popover>
+                <Separator orientation="vertical" className="mx-0.5 h-5 bg-zinc-800" />
                 <OptButton
                   icon={<Copy className="h-3.5 w-3.5" />}
                   label="Copy (Ctrl+C)"
                   onClick={() => useEditor.getState().selectionCopy()}
+                />
+                <OptButton
+                  icon={<Brush className="h-3.5 w-3.5" />}
+                  label="Save selection as brush"
+                  onClick={() => useEditor.getState().saveSelectionAsBrush()}
                 />
                 <OptButton
                   icon={<Scissors className="h-3.5 w-3.5" />}
@@ -223,6 +258,11 @@ export function ToolOptionsBar() {
                   label="Delete contents (Del)"
                   onClick={() => useEditor.getState().selectionDelete()}
                 />
+                <OptButton
+                  icon={<X className="h-3.5 w-3.5" />}
+                  label="Deselect (Esc)"
+                  onClick={() => useEditor.getState().deselect()}
+                />
                 <Separator orientation="vertical" className="mx-0.5 h-5 bg-zinc-800" />
                 {transformButtons('sel').map((b) => (
                   <OptButton
@@ -232,32 +272,24 @@ export function ToolOptionsBar() {
                     onClick={() => useEditor.getState().selectionTransform(b.kind)}
                   />
                 ))}
-                <Separator orientation="vertical" className="mx-0.5 h-5 bg-zinc-800" />
                 <ScaleButtons scope="sel" />
                 <Separator orientation="vertical" className="mx-0.5 h-5 bg-zinc-800" />
-                <OptButton
-                  icon={<X className="h-3.5 w-3.5" />}
-                  label="Deselect (Esc)"
-                  onClick={() => useEditor.getState().deselect()}
-                />
+                <span className="px-1 font-mono text-[10px] uppercase tracking-wider text-zinc-400">
+                  cel
+                </span>
+                {transformButtons('cel').map((b) => (
+                  <OptButton
+                    key={b.kind}
+                    icon={b.icon}
+                    label={b.label}
+                    onClick={() => useEditor.getState().celTransform(b.kind)}
+                  />
+                ))}
+                <ScaleButtons scope="cel" />
               </>
             )}
-            <Separator orientation="vertical" className="mx-0.5 h-5 bg-zinc-800" />
-            <span className="px-1 font-mono text-[10px] uppercase tracking-wider text-zinc-400">
-              cel
-            </span>
-            {transformButtons('cel').map((b) => (
-              <OptButton
-                key={b.kind}
-                icon={b.icon}
-                label={b.label}
-                onClick={() => useEditor.getState().celTransform(b.kind)}
-              />
-            ))}
-            <Separator orientation="vertical" className="mx-0.5 h-5 bg-zinc-800" />
-            <ScaleButtons scope="cel" />
-          </>
-        )}
+            </>
+          )}
       </div>
     </TooltipProvider>
   )

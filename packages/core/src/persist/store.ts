@@ -54,13 +54,18 @@ export interface FileFs {
   stat(path: string): Promise<{ mtimeMs: number; size: number } | null>;
 }
 
+function lastSepIndex(path: string): number {
+  // Windows accepts both separators; derive dirs/stems from either
+  return Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+}
+
 export function dirnameOf(path: string): string {
-  const i = path.lastIndexOf('/');
+  const i = lastSepIndex(path);
   return i <= 0 ? '.' : path.slice(0, i);
 }
 
 function basenameOf(path: string): string {
-  const i = path.lastIndexOf('/');
+  const i = lastSepIndex(path);
   return i >= 0 ? path.slice(i + 1) : path;
 }
 

@@ -26,7 +26,9 @@ import {
 import { describePersistError } from './project-io'
 import { getBus, getRecorder, setJournalFlushHook, useEditor } from './store'
 import { isDesktop, makeBridgeFs, getBridge, PROJECT_FILE_FILTERS } from './desktop-bridge'
+import { rememberRecentProjectFile } from './recent-files'
 import { toast } from '@/hooks/use-toast'
+import { confirmDialog } from '@/components/ui/confirm-dialog'
 
 // ---------------------------------------------------------------------------
 // journal sidecar flush (throttled full-ring rewrite)
@@ -101,15 +103,32 @@ function setFileTarget(filePath: string | null): void {
  *   dirty confirm → dialog → core load (typed errors) → recovery prompt
  *   (newer autosave / pending journal records) → load into the bus.
  */
-export async function openProjectFileViaDialog(): Promise<void> {
+export async function openProjectFileViaDialog(): Promise<boolean> {
   const bridge = getBridge()
-  if (!bridge) return
+  if (!bridge) {
+    toast({ title: 'Open unavailable', description: 'Desktop file access is unavailable.', variant: 'destructive' })
+    return false
+  }
   const st = useEditor.getState()
-  if (st.dirty && !window.confirm('Discard unsaved changes and open another project?')) return
+  if (
+    st.dirty &&
+    !(await confirmDialog({
+      title: 'Discard unsaved changes?',
+      message: 'Opening another project will lose your unsaved changes.',
+      confirmLabel: 'Discard & Open',
+      destructive: true,
+    }))
+  )
+    return false
 
-  const picked = await bridge.project.pickOpen({ filters: PROJECT_FILE_FILTERS })
-  if (picked.canceled || !picked.paths[0]) return
-  await openProjectFromPath(picked.paths[0])
+  try {
+    const picked = await bridge.project.pickOpen({ filters: PROJECT_FILE_FILTERS })
+    if (picked.canceled || !picked.paths[0]) return false
+    return await openProjectFromPath(picked.paths[0])
+  } catch (err) {
+    toast({ title: 'Could not open file picker', description: describePersistError(err), variant: 'destructive' })
+    return false
+  }
 }
 
 /**
@@ -121,11 +140,6 @@ export async function openProjectFileViaDialog(): Promise<void> {
 export async function openProjectFromPath(path: string): Promise<boolean> {
   const bridge = getBridge()
   if (!bridge) return false
-  try {
-    await bridge.project.registerPath(path)
-  } catch {
-    /* registration failure surfaces on the fs calls below */
-  }
   const fs = makeBridgeFs()
   try {
     const result = await loadPixelforgeproj(fs, path, { id: null })
@@ -140,9 +154,11 @@ export async function openProjectFromPath(path: string): Promise<boolean> {
       ]
         .filter(Boolean)
         .join(' and ')
-      const recover = window.confirm(
-        `Recovery data found for this project: ${what}.\n\nRecover it? (Cancel opens the last saved state.)`
-      )
+      const recover = await confirmDialog({
+        title: 'Recover unsaved work?',
+        message: `Recovery data found for this project: ${what}.\nCancel opens the last saved state.`,
+        confirmLabel: 'Recover',
+      })
       if (recover) {
         try {
           if (newerAutosave) {
@@ -167,6 +183,7 @@ export async function openProjectFromPath(path: string): Promise<boolean> {
     useEditor.getState().loadProject(project, { filePath: path, projectId: null })
     useEditor.getState().markSaved()
     setFileTarget(path)
+    rememberRecentProjectFile(path, project.name)
     const warnings = result.warnings.filter((w) => !w.startsWith('journal holds') && !w.startsWith('an autosave'))
     if (warnings.length > 0) {
       toast({ title: 'Project loaded (with warnings)', description: warnings.slice(0, 2).join(' · ') })
@@ -184,15 +201,55 @@ export async function openProjectFromPath(path: string): Promise<boolean> {
   }
 }
 
+/** Re-open a previously native-picker-approved project from Recents. */
+export async function openRecentProjectFromPath(path: string): Promise<boolean> {
+  const bridge = getBridge()
+  if (!bridge) return false
+  try {
+    await bridge.project.openRecent(path)
+  } catch {
+    toast({
+      title: 'Recent project needs approval',
+      description: 'Choose it again with From file to restore access.',
+      variant: 'destructive',
+    })
+    return false
+  }
+  return openProjectFromPath(path)
+}
+
 // ---------------------------------------------------------------------------
 // save / save-as / autosave
 // ---------------------------------------------------------------------------
 
-/** Save to the current file path (falls back to Save As when none). */
+/** Filesystem-safe project filename from the project name. */
+function projectFileName(name: string): string {
+  const safe = name
+    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80)
+  return `${safe || 'untitled'}.pixelforgeproj`
+}
+
+/** Save to the current file path (falls back to Save As when none).
+ *  The FILE NAME follows the project name: renaming a project re-targets
+ *  the save to `<project name>.pixelforgeproj` and removes the stale file,
+ *  so file listings always match what the tester sees. */
 export async function saveProjectFile(): Promise<boolean> {
   if (!isDesktop()) return false
-  const path = useEditor.getState().filePath
+  const st = useEditor.getState()
+  const path = st.filePath
   if (!path) return await saveProjectFileAs()
+
+  const currentName = path.split(/[\\/]/).pop() ?? ''
+  const desired = projectFileName(st.project.name || 'untitled')
+  if (currentName !== desired) {
+    const dir = path.slice(0, path.length - currentName.length)
+    const renamed = dir + desired
+    const ok = await saveProjectToPath(renamed, path)
+    return ok
+  }
   return await saveProjectToPath(path)
 }
 
@@ -210,19 +267,29 @@ export async function saveProjectFileAs(): Promise<boolean> {
   return await saveProjectToPath(picked.path)
 }
 
-/** Core atomic save to a known path (dialog flows + dev harness). */
-export async function saveProjectToPath(path: string): Promise<boolean> {
+/** Core atomic save to a known path (dialog flows + dev harness).
+ *  previousPath: when the save RETARGETS (project renamed), the stale file
+ *  is removed after a successful write so no duplicate/stale copies linger. */
+export async function saveProjectToPath(path: string, previousPath?: string): Promise<boolean> {
   const bridge = getBridge()
   if (!bridge) return false
   const st = useEditor.getState()
   st.setSavingFile(true)
   try {
-    await bridge.project.registerPath(path)
     const fs = makeBridgeFs()
     await savePixelforgeproj(fs, path, getBus().getProject(), { recorder: getRecorder() })
+    await bridge.project.rememberCurrentPath(path)
     useEditor.getState().setFilePath(path)
     useEditor.getState().markSaved()
     setFileTarget(path)
+    rememberRecentProjectFile(path, st.project.name)
+    if (previousPath && previousPath !== path) {
+      try {
+        await fs.unlink(previousPath)
+      } catch {
+        /* stale file left behind is harmless — next save won't target it */
+      }
+    }
     return true
   } catch (err) {
     toast({

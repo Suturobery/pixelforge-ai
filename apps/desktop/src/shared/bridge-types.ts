@@ -236,6 +236,13 @@ export interface BridgeAiUsageRecord {
   finishedAt: string;
 }
 
+export interface BridgeAiConnectionTest {
+  ok: boolean;
+  latencyMs: number;
+  note?: string;
+  error?: string;
+}
+
 export type BridgeAiEvent =
   | { type: 'job'; job: BridgeAiJobView }
   | { type: 'spend_warning'; spentUsd: number; warnUsd: number; limitUsd: number };
@@ -246,6 +253,19 @@ export interface PixelForgeBridge {
   ping(): Promise<'pong'>;
   app: {
     getInfo(): Promise<BridgeAppInfo>;
+    /** OS notification for background events (approval requests, finished
+     *  AI jobs) while the window is minimized. Clicking focuses the window. */
+    notify(title: string, body?: string): Promise<{ ok: boolean; reason?: string }>;
+    /** Read-only tail (last 200 lines / 48 KB) of today's main log. */
+    logsTail(): Promise<{ ok: boolean; text?: string; file?: string; error?: string }>;
+  };
+  /** Native clipboard write for desktop windows where navigator.clipboard is unavailable. */
+  clipboard: {
+    writeText(text: string): Promise<void>;
+  };
+  /** Desktop-owned MCP endpoint. Unavailable when the bundled service failed. */
+  mcp: {
+    status(): Promise<{ ready: boolean; endpoint: string | null }>;
   };
   dialog: {
     openFile(options?: BridgeDialogOpenOptions): Promise<BridgeDialogOpenResult>;
@@ -263,11 +283,18 @@ export interface PixelForgeBridge {
      * and the chosen path returned (null when canceled).
      */
     pickSave(options?: BridgeDialogSaveOptions): Promise<BridgeDialogSaveResult>;
+    /** Re-open only a path previously chosen through a native picker. */
+    openRecent(path: string): Promise<BridgeRegisterResult>;
+    /** Remove a file from Recents without touching the user's disk file. */
+    forgetRecent(path: string): Promise<void>;
+    /** Move a picker-approved recent file to the OS Recycle Bin/Trash. */
+    trashRecent(path: string): Promise<{ trashed: boolean }>;
+    /** Remember a renamed file only when it remains inside an approved root. */
+    rememberCurrentPath(path: string): Promise<BridgeRegisterResult>;
     /**
-     * Programmatic path registration (recent files, dev/CI harnesses).
-     * Registers the file's parent directory; the file itself is NOT opened.
+     * Native warning confirm (Electron has no window.confirm). True = OK.
      */
-    registerPath(path: string): Promise<BridgeRegisterResult>;
+    confirm(message: string, detail?: string): Promise<boolean>;
     /**
      * Primitive file transport restricted to directories registered in this
      * session. @pixelforge/core's FileFs adapters over these — atomicity,
@@ -324,7 +351,31 @@ export interface PixelForgeBridge {
     list(): Promise<BridgeAiJobView[]>;
     /** Usage history + ESTIMATED month spend (for the meter; cache hits are $0). */
     usage(): Promise<{ records: BridgeAiUsageRecord[]; monthSpendUsd: number }>;
+    /** Read-only provider probe; credentials remain in the main-process vault. */
+    testConnection(providerId: string): Promise<BridgeAiConnectionTest>;
     /** Subscribe to job/spend events pushed from main. Returns an unsubscriber. */
     onEvent(listener: (event: BridgeAiEvent) => void): () => void;
   };
+  /** Packaging milestone: guarded software updates (no-op without a feed). */
+  updates: {
+    status(): Promise<UpdateStatusView>;
+    check(): Promise<UpdateStatusView>;
+    install(): Promise<{ ok: boolean }>;
+    onStatus(listener: (status: UpdateStatusView) => void): () => void;
+  };
+}
+
+export interface UpdateStatusView {
+  state:
+    | 'no-feed'
+    | 'idle'
+    | 'checking'
+    | 'available'
+    | 'not-available'
+    | 'downloading'
+    | 'downloaded'
+    | 'error';
+  info?: string;
+  version?: string;
+  progress?: number;
 }

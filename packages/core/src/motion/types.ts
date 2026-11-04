@@ -11,7 +11,17 @@
 
 import type { PartRect } from '../types/document';
 
-export type MotionPresetId = 'idle' | 'walk' | 'run' | 'attack' | 'jump';
+export type MotionPresetId =
+  | 'idle'
+  | 'walk'
+  | 'run'
+  | 'attack'
+  | 'jump'
+  | 'spin'
+  | 'duck'
+  | 'hurt'
+  | 'swim'
+  | 'death';
 
 /** Vacated-pixel handling (R4 / C26). */
 export type GapFillMode = 'none' | 'edge-extend';

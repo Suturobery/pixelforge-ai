@@ -32,6 +32,8 @@ import { Switch } from '@/components/ui/switch'
 import { StepperInput } from '@/components/pixelforge/stepper-input'
 import { ColorPickerContent } from '@/components/pixelforge/color-picker'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { importPngSequence } from '@/lib/pixelforge/png-sequence-import'
+import { useToast } from '@/hooks/use-toast'
 import {
   Play,
   Pause,
@@ -50,7 +52,10 @@ import {
   Square,
   Timer,
   ArrowLeftRight,
+  Images,
+  ClipboardPaste,
 } from 'lucide-react'
+import { composeFrameRgba } from '@pixelforge/core'
 import type { Clip, Frame } from '@/lib/pixelforge/types'
 
 const DURATION_MAX = 60_000
@@ -106,6 +111,8 @@ function FrameThumb({
 }) {
   const ref = useRef<HTMLCanvasElement>(null)
   const [durOpen, setDurOpen] = useState(false)
+  const [durDragActive, setDurDragActive] = useState(false)
+  const durDrag = useRef<{ sx: number; base: number } | null>(null)
   const setFrameDuration = useEditor((s) => s.setFrameDuration)
   useEffect(() => {
     const canvas = ref.current
@@ -135,10 +142,10 @@ function FrameThumb({
       <button
         type="button"
         onClick={onSelect}
-        className={`relative rounded-md border p-1 transition-colors ${
+        className={`relative rounded-lg border p-1 transition-colors ${
           active
-            ? 'border-teal-400 bg-teal-500/10 ring-1 ring-teal-400/60'
-            : 'border-zinc-700 bg-zinc-900 hover:border-zinc-500'
+            ? 'pf-ticks border-transparent bg-zinc-800/60'
+            : 'border-zinc-700/80 bg-zinc-900 hover:border-zinc-500'
         } ${playing && active ? 'animate-pulse' : ''}`}
         aria-label={`Frame ${index + 1}${ms > 0 ? `, ${ms} milliseconds` : ', inherited duration'}`}
         aria-pressed={active}
@@ -173,18 +180,37 @@ function FrameThumb({
           </Tooltip>
         )}
       </button>
-      {/* duration badge → popover editor (Task 6 §2) */}
+      {/* duration badge → popover editor (Task 6 §2) + horizontal drag
+          (10a): grab the badge and drag left/right to change ms — 10ms/px,
+          0 floor (0 = inherit clip FPS). Single click still opens the popover. */}
       <Popover open={durOpen} onOpenChange={setDurOpen}>
         <PopoverTrigger asChild>
           <button
             type="button"
-            className={`absolute -top-1.5 -right-0.5 flex h-4 items-center gap-0.5 rounded-full border px-1 font-mono text-[8px] leading-none transition-colors ${
+            className={`absolute -top-1.5 -right-0.5 flex h-4 cursor-ew-resize items-center gap-0.5 rounded-full border px-1 font-mono text-[8px] leading-none transition-colors ${
               ms > 0
                 ? 'border-amber-500/60 bg-amber-500/15 text-amber-300 hover:bg-amber-500/25'
                 : 'border-zinc-700 bg-zinc-900 text-zinc-400 hover:text-zinc-300'
             }`}
-            aria-label={`Edit duration of frame ${index + 1}`}
-            title="Frame duration (0 = inherit clip FPS)"
+            aria-label={`Edit or drag duration of frame ${index + 1}`}
+            title="Frame duration — drag left/right to change · click for the editor"
+            onPointerDown={(e) => {
+              if (e.button !== 0) return
+              e.currentTarget.setPointerCapture(e.pointerId)
+              durDrag.current = { sx: e.clientX, base: ms > 0 ? ms : Math.round(1000 / clip.fps) }
+              setDurDragActive(true)
+            }}
+            onPointerMove={(e) => {
+              const d = durDrag.current
+              if (!d) return
+              const next = Math.min(DURATION_MAX, Math.max(0, d.base + Math.round((e.clientX - d.sx) / 2) * 10))
+              setFrameDuration(index, next)
+            }}
+            onPointerUp={(e) => {
+              e.currentTarget.releasePointerCapture(e.pointerId)
+              durDrag.current = null
+              setDurDragActive(false)
+            }}
           >
             <Timer className="h-2 w-2" aria-hidden />
             {ms > 0 ? `${ms}` : 'auto'}
@@ -218,7 +244,7 @@ function FrameThumb({
             <Button
               variant="ghost"
               size="sm"
-              className="mt-1 h-6 w-full text-[10px] text-zinc-400 hover:text-teal-300"
+              className="mt-1 h-6 w-full text-[10px] text-zinc-400 hover:text-zinc-100"
               onClick={() => setFrameDuration(index, 0)}
             >
               Reset to auto ({clip.fps}fps)
@@ -300,7 +326,7 @@ function Scrubber({ clip, activeIndex }: { clip: Clip; activeIndex: number }) {
         <div
           ref={markerRef}
           aria-hidden
-          className="pointer-events-none absolute inset-y-0 left-0 w-0.5 bg-teal-400 shadow-[0_0_6px_rgba(45,212,191,0.8)]"
+          className="pointer-events-none absolute inset-y-0 left-0 w-0.5 rounded-full bg-teal-400 shadow-[0_0_6px_rgba(10,132,255,0.8)]"
         />
       </div>
       <div className="mt-0.5 flex justify-between font-mono text-[9px] text-zinc-400">
@@ -342,7 +368,7 @@ function TintField({
         <PopoverTrigger asChild>
           <button
             type="button"
-            className="flex h-7 w-full items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-900 px-1.5 transition-colors hover:border-teal-400/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+            className="flex h-7 w-full items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-900 px-1.5 transition-colors hover:border-zinc-500/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-400"
             aria-label={`${label} ${color} — click to open the palette-style color editor`}
           >
             <span
@@ -501,7 +527,33 @@ export function Timeline() {
   const addClip = useEditor((s) => s.addClip)
   const deleteClip = useEditor((s) => s.deleteClip)
   const setClipProp = useEditor((s) => s.setClipProp)
+  const importCandidateAsFrame = useEditor((s) => s.importCandidateAsFrame)
   const [renamingClip, setRenamingClip] = useState<string | null>(null)
+  const clipStripRef = useRef<HTMLDivElement>(null)
+  const seqInputRef = useRef<HTMLInputElement>(null)
+  const { toast } = useToast()
+  // 10a frame clipboard: composited snapshot of one frame, pasteable into ANY
+  // clip (importCandidateAsFrame inserts after the playhead). Session-only.
+  const [frameClipboard, setFrameClipboard] = useState<{
+    buffer: Uint8ClampedArray
+    from: string
+  } | null>(null)
+  // tabs fit → tab strip; they would overflow → Select dropdown (Forward-style)
+  const [clipsOverflow, setClipsOverflow] = useState(false)
+
+  // keep the ACTIVE clip tab visible when clips overflow the strip
+  useEffect(() => {
+    clipStripRef.current
+      ?.querySelector(`[data-clip-tab="${activeClipId}"]`)
+      ?.scrollIntoView({ inline: 'nearest', block: 'nearest' })
+  }, [activeClipId, project.clips.length])
+
+  // measure AFTER render: tabs wider than the strip → switch to dropdown
+  useEffect(() => {
+    const el = clipStripRef.current
+    if (!el) return
+    setClipsOverflow(el.scrollWidth > el.clientWidth + 1)
+  }, [project.clips, activeClipId, project.clips.length])
   // drag-and-drop reorder state
   const dragFromRef = useRef<number | null>(null)
   const [dropTarget, setDropTarget] = useState<number | null>(null)
@@ -578,7 +630,7 @@ export function Timeline() {
             {playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
           </Button>
         </TooltipTrigger>
-        <TooltipContent>Play / pause (Enter)</TooltipContent>
+        <TooltipContent>Play / pause (Space)</TooltipContent>
       </Tooltip>
       <Tooltip>
         <TooltipTrigger asChild>
@@ -601,9 +653,95 @@ export function Timeline() {
 
   return (
     <TooltipProvider delayDuration={200}>
-      <section aria-label="Animation timeline" className="shrink-0 border-t border-zinc-800 bg-zinc-950/80">
-        {/* clips + transport row */}
-        <div className="flex h-9 items-center gap-1 overflow-x-auto border-b border-zinc-800 px-2 pixelforge-scroll">
+      <section aria-label="Animation timeline" className="shrink-0 border-t border-zinc-800/80 bg-zinc-950/60 backdrop-blur-xl">
+        {/* clips + transport row — few clips show as tabs; once they would
+            overflow, the tabs collapse into a Select (like the playback-mode
+            picker) and the transport stays pinned right, never scrolled away */}
+        <div className="flex h-9 items-center gap-1 border-b border-zinc-800 px-2">
+          {clipsOverflow ? (
+            <>
+              <Select value={clip.id} onValueChange={selectClip}>
+                <SelectTrigger
+                  size="sm"
+                  aria-label="Active clip"
+                  className="h-7 min-w-0 flex-1 border-zinc-800 bg-zinc-900 font-mono text-[11px]"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {project.clips.map((c) => (
+                    <SelectItem key={c.id} value={c.id} className="font-mono text-[11px]">
+                      {c.name} · {c.frames.length}f
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6 shrink-0 text-zinc-400"
+                    onClick={() => addClip(`clip ${project.clips.length + 1}`)}
+                    aria-label="Add clip"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>New clip</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6 shrink-0 text-zinc-400"
+                    onClick={() => seqInputRef.current?.click()}
+                    aria-label="Import PNG sequence"
+                  >
+                    <Images className="h-3.5 w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Import PNG sequence → new clip</TooltipContent>
+              </Tooltip>
+              <input
+                ref={seqInputRef}
+                type="file"
+                accept="image/png"
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  const files = [...(e.target.files ?? [])].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
+                  e.target.value = ''
+                  if (files.length === 0) return
+                  void importPngSequence(files, { name: `sequence ${project.clips.length + 1}`, fps: 12 }).then((r) => {
+                    if (!r.ok) toast({ title: 'Import failed', description: r.error?.message, variant: 'destructive' })
+                    else toast({ title: `Imported ${r.frames} frames`, description: `New clip "${r.clipName}" @ ${r.fps}fps.` })
+                  })
+                }}
+              />
+              {project.clips.length > 1 && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6 shrink-0 text-red-400/70 hover:text-red-300"
+                      onClick={() => deleteClip(clip.id)}
+                      aria-label="Delete current clip"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Delete clip <kbd className="ml-1 rounded bg-white/20 px-1 font-sans text-[10px] font-semibold text-white">D</kbd></TooltipContent>
+                </Tooltip>
+              )}
+            </>
+          ) : (
+          <div
+            ref={clipStripRef}
+            className="pixelforge-scroll flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
+          >
           {project.clips.map((c) => (
             <div key={c.id} className="flex shrink-0 items-center">
               {renamingClip === c.id ? (
@@ -631,6 +769,7 @@ export function Timeline() {
                       : 'border-transparent text-zinc-400 hover:text-zinc-300'
                   }`}
                   title={`${c.name} — ${c.frames.length} frames · double-click to rename`}
+                  data-clip-tab={c.id}
                 >
                   {c.name}
                   <span className="ml-2 text-[10px] text-zinc-400">{c.frames.length}f</span>
@@ -665,11 +804,13 @@ export function Timeline() {
                   <Trash2 className="h-3.5 w-3.5" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>Delete clip</TooltipContent>
+              <TooltipContent>Delete clip <kbd className="ml-1 rounded bg-white/20 px-1 font-sans text-[10px] font-semibold text-white">D</kbd></TooltipContent>
             </Tooltip>
           )}
+          </div>
+          )}
 
-          <div className="ml-auto flex shrink-0 items-center gap-1 pl-3">
+          <div className="flex shrink-0 items-center gap-1 pl-1">
             {/* playback state chip (Task 6 §5 visible playback state) */}
             <span
               role="status"
@@ -741,7 +882,7 @@ export function Timeline() {
                   {timelineOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>{timelineOpen ? 'Collapse frames' : 'Expand frames'}</TooltipContent>
+              <TooltipContent>{timelineOpen ? 'Collapse frames' : 'Expand frames'} <kbd className="ml-1 rounded bg-white/20 px-1 font-sans text-[10px] font-semibold text-white">T</kbd></TooltipContent>
             </Tooltip>
           </div>
         </div>
@@ -758,6 +899,52 @@ export function Timeline() {
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>Add frame (Alt+N)</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className={`h-6 w-6 ${frameClipboard ? 'text-teal-300' : 'text-zinc-400'}`}
+                    onClick={() => {
+                      const clip = project.clips.find((c) => c.id === activeClipId)
+                      const frame = clip?.frames[frameIndex]
+                      if (!clip || !frame) return
+                      const composed = composeFrameRgba(project, clip, frame)
+                      setFrameClipboard({
+                        buffer: new Uint8ClampedArray(composed),
+                        from: `${clip.name} · frame ${frameIndex + 1}`,
+                      })
+                      toast({ title: 'Frame copied', description: `${clip.name} · frame ${frameIndex + 1} — open the target clip, position the playhead, then Paste.` })
+                    }}
+                    aria-label="Copy current frame"
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Copy frame (composited) — paste into any clip</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className={`h-6 w-6 ${frameClipboard ? 'text-teal-300' : 'text-zinc-600'}`}
+                    disabled={!frameClipboard}
+                    onClick={() => {
+                      const clip = project.clips.find((c) => c.id === activeClipId)
+                      if (!clip || !frameClipboard) return
+                      const ref = importCandidateAsFrame(frameClipboard.buffer, `pasted ${frameClipboard.from}`)
+                      if (ref) toast({ title: 'Frame pasted', description: `From ${frameClipboard.from} → ${clip.name} · frame ${frameIndex + 2}.` })
+                    }}
+                    aria-label={frameClipboard ? `Paste frame from ${frameClipboard.from}` : 'Paste frame (copy one first)'}
+                  >
+                    <ClipboardPaste className="h-3.5 w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {frameClipboard ? `Paste ${frameClipboard.from}` : 'Copy a frame first'}
+                </TooltipContent>
               </Tooltip>
               <Tooltip>
                 <TooltipTrigger asChild>

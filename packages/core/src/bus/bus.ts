@@ -49,6 +49,10 @@ interface TxFrame {
   children: HistoryEntry[];
 }
 
+function isThenable(value: unknown): value is Promise<unknown> {
+  return typeof (value as Promise<unknown> | undefined)?.then === 'function';
+}
+
 interface StrokeState {
   params: StrokeParams;
   /** Buffer as it was when the stroke began (diff source). */
@@ -209,55 +213,81 @@ export class CommandBus {
   // -------------------------------------------------------------------------
 
   /**
-   * Group several executes into ONE undoable history entry. If `fn` throws,
-   * the document is rolled back to the transaction start and the error is
-   * rethrown — no partial application, no history pollution.
-   * Nested transactions fold into their parent.
+   * Group several executes into ONE undoable history entry. If `fn` throws
+   * (or the returned promise rejects), the document is rolled back to the
+   * transaction start and the error is rethrown — no partial application,
+   * no history pollution. Nested transactions fold into their parent.
+   *
+   * `fn` may be async: the commit/rollback then happens when the promise
+   * settles. While an async transaction is open, commands executed from
+   * other sources fold into it as children — keep the async window short.
    */
-  transaction<T>(label: string, origin: CommandOrigin, fn: () => T): T {
+  transaction<T>(label: string, origin: CommandOrigin, fn: () => T): T | Promise<T> {
     if (this.stroke) {
       throw new CommandError('TRANSACTION_CONFLICT', 'Cannot open a transaction while a stroke is active');
     }
     const tx: TxFrame = { label, origin, start: this.project, children: [] };
     this.txStack.push(tx);
+    let result: T;
     try {
-      const result = fn();
-      this.txStack.pop();
-      if (tx.children.length > 0) {
-        const entry =
-          tx.children.length === 1
-            ? tx.children[0]
-            : makeCompositeEntry(label, origin, tx.children);
-        if (this.txStack.length > 0) {
-          // Nested transaction: fold into the parent's children so the whole
-          // outer transaction becomes ONE undoable entry.
-          this.txStack[this.txStack.length - 1].children.push(entry);
-        } else {
-          this.engine.push(entry);
-          this.dirty = true;
-          this.emit({
-            reason: 'executed',
-            project: this.project,
-            label,
-            origin,
-            historyChanged: true,
-          });
-        }
-      }
-      return result;
+      result = fn();
     } catch (err) {
       this.txStack.pop();
-      // Commands are pure and buffers copy-on-write → restoring the start
-      // document is an exact rollback.
-      this.project = tx.start;
-      this.emit({
-        reason: 'transaction-rolled-back',
-        project: this.project,
-        label,
-        origin,
-      });
+      this.rollbackTx(tx, label, origin);
       throw err;
     }
+    if (isThenable(result)) {
+      return (result as unknown as Promise<T>).then(
+        (value) => {
+          this.txStack.pop();
+          return this.commitTx(tx, label, origin, value);
+        },
+        (err) => {
+          this.txStack.pop();
+          this.rollbackTx(tx, label, origin);
+          throw err;
+        },
+      );
+    }
+    this.txStack.pop();
+    return this.commitTx(tx, label, origin, result);
+  }
+
+  private commitTx<T>(tx: TxFrame, label: string, origin: CommandOrigin, value: T): T {
+    if (tx.children.length > 0) {
+      const entry =
+        tx.children.length === 1
+          ? tx.children[0]
+          : makeCompositeEntry(label, origin, tx.children);
+      if (this.txStack.length > 0) {
+        // Nested transaction: fold into the parent's children so the whole
+        // outer transaction becomes ONE undoable entry.
+        this.txStack[this.txStack.length - 1].children.push(entry);
+      } else {
+        this.engine.push(entry);
+        this.dirty = true;
+        this.emit({
+          reason: 'executed',
+          project: this.project,
+          label,
+          origin,
+          historyChanged: true,
+        });
+      }
+    }
+    return value;
+  }
+
+  private rollbackTx(tx: TxFrame, label: string, origin: CommandOrigin): void {
+    // Commands are pure and buffers copy-on-write → restoring the start
+    // document is an exact rollback.
+    this.project = tx.start;
+    this.emit({
+      reason: 'transaction-rolled-back',
+      project: this.project,
+      label,
+      origin,
+    });
   }
 
   /** True while inside transaction() — strokes are rejected in that window. */

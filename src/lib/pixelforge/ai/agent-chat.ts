@@ -1,0 +1,177 @@
+/**
+ * AI agent chat — provider call with tool calling over OpenAI-compatible
+ * APIs (zai/openai/custom). Client-safe: the Agent panel imports the
+ * schema/instructions builders; the API route imports callProvider (no DOM
+ * here).
+ */
+
+import { MCP_TOOLS, type McpToolInfo } from '@/lib/pixelforge/mcp-tool-catalog'
+
+export interface AgentProviderConfig {
+  kind: string
+  baseUrl: string
+  apiKey: string
+  model: string
+}
+
+export interface AgentToolCall {
+  id: string
+  name: string
+  args: Record<string, unknown>
+}
+
+export interface AgentMsg {
+  role: 'user' | 'assistant'
+  text?: string
+  toolCalls?: AgentToolCall[]
+  toolResults?: Array<{ id: string; name: string; ok: boolean; content: string }>
+}
+
+/** Loose JSON schema derived from the catalog example's key names — the
+ *  descriptions carry the semantics; the schema only names the arguments. */
+export function toolJsonSchema(t: McpToolInfo): Record<string, unknown> {
+  const properties: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(t.example ?? {})) {
+    const type = Array.isArray(v)
+      ? 'array'
+      : typeof v === 'number'
+        ? 'number'
+        : typeof v === 'boolean'
+          ? 'boolean'
+          : typeof v === 'object' && v !== null
+            ? 'object'
+            : 'string'
+    properties[k] = { type }
+  }
+  return { type: 'object', properties, required: [] }
+}
+
+export function agentTools(): Array<{ name: string; description: string; parameters: Record<string, unknown> }> {
+  return MCP_TOOLS.map((t) => ({
+    name: t.name,
+    description: `[${t.tier}] ${t.description}`,
+    parameters: toolJsonSchema(t),
+  }))
+}
+
+function resolveModel(cfg: AgentProviderConfig): string {
+  if (cfg.model && cfg.model !== 'auto') return cfg.model
+  if (cfg.kind === 'zai') return 'glm-4.6'
+  if (cfg.kind === 'openai') return 'gpt-4o-mini'
+  return 'gpt-4o-mini'
+}
+
+// --- OpenAI-compatible (zai / openai / custom) -----------------------------
+
+interface OpenAIMessage {
+  role: 'system' | 'user' | 'assistant' | 'tool'
+  content?: string | null
+  tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>
+  tool_call_id?: string
+}
+
+function toOpenAIMessages(system: string, messages: AgentMsg[]): OpenAIMessage[] {
+  const out: OpenAIMessage[] = [{ role: 'system', content: system }]
+  for (const m of messages) {
+    if (m.role === 'user') {
+      if (m.toolResults) {
+        for (const r of m.toolResults) {
+          out.push({ role: 'tool', tool_call_id: r.id, content: r.content })
+        }
+      } else {
+        out.push({ role: 'user', content: m.text ?? '' })
+      }
+    } else {
+      out.push({
+        role: 'assistant',
+        content: m.text ?? null,
+        ...(m.toolCalls
+          ? {
+              tool_calls: m.toolCalls.map((tc) => ({
+                id: tc.id,
+                type: 'function' as const,
+                function: { name: tc.name, arguments: JSON.stringify(tc.args) },
+              })),
+            }
+          : {}),
+      })
+    }
+  }
+  return out
+}
+
+// --- entry -------------------------------------------------------------------
+
+export async function callProvider(
+  cfg: AgentProviderConfig,
+  system: string,
+  messages: AgentMsg[],
+): Promise<{ text: string; toolCalls: AgentToolCall[] }> {
+  const base =
+    cfg.baseUrl.replace(/\/$/, '') ||
+    (cfg.kind === 'zai'
+      ? 'https://api.z.ai/api/paas/v4'
+      : cfg.kind === 'openai'
+        ? 'https://api.openai.com/v1'
+        : '')
+  if (!base) throw new Error('Provider has no base URL — set it in Settings → AI & MCP.')
+  const model = resolveModel(cfg)
+
+  // OpenAI-compatible
+  const res = await fetch(`${base}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${cfg.apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      messages: toOpenAIMessages(system, messages),
+      tools: agentTools().map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } })),
+    }),
+    signal: AbortSignal.timeout(60_000),
+  })
+  if (!res.ok) throw new Error(`Provider ${res.status}: ${(await res.text()).slice(0, 300)}`)
+  const json = (await res.json()) as {
+    choices?: Array<{ message?: { content?: string | null; tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }> } }>
+  }
+  const msg = json.choices?.[0]?.message
+  const toolCalls: AgentToolCall[] = (msg?.tool_calls ?? []).map((tc) => {
+    let args: Record<string, unknown> = {}
+    try {
+      args = JSON.parse(tc.function.arguments) as Record<string, unknown>
+    } catch {
+      args = {}
+    }
+    return { id: tc.id, name: tc.function.name, args }
+  })
+  return { text: msg?.content ?? '', toolCalls }
+}
+
+/** Instructions block for external agents (Claude Desktop / Cline / ChatGPT)
+ *  — generated from the LIVE in-process catalog at click time. */
+export function buildAgentInstructions(endpoint: string): string {
+  const lines: string[] = [
+    '# PixelForge AI — MCP agent instructions',
+    '',
+    `Endpoint: ${endpoint} (Streamable HTTP)`,
+    'Auth: pair once — Settings → MCP in the app shows a pairing code; call `pair_client {name}` with it to receive your client token. Include it as a Bearer token afterward.',
+    'Tiers: L0 tools are read-only (safe to call freely). L1 tools EDIT the document — confirm with the user before running them. Deleted work is trash-restorable; merges/resizes are NOT undoable via trash.',
+    'All pixel coordinates are canvas pixels. Absent clip/frame/layer refs resolve to the ACTIVE ones.',
+    '',
+    '## Tools',
+    '',
+  ]
+  for (const tier of ['L0', 'L1', 'L2', 'L3'] as const) {
+    const label = { L0: 'read-only', L1: 'editors', L2: 'destructive', L3: 'paid / AI' }[tier]
+    const tools = MCP_TOOLS.filter((t) => t.tier === tier)
+    lines.push(`### ${tier} — ${label} (${tools.length})`)
+    lines.push('')
+    for (const t of tools.sort((a, b) => a.name.localeCompare(b.name))) {
+      lines.push(`- **${t.name}** — ${t.description}`)
+      lines.push(`  example args: \`${JSON.stringify(t.example)}\``)
+    }
+    lines.push('')
+  }
+  return lines.join('\n')
+}

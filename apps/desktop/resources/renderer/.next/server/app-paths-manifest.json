@@ -1,0 +1,16 @@
+{
+  "/_global-error/page": "app/_global-error/page.js",
+  "/_not-found/page": "app/_not-found/page.js",
+  "/api/ai/agent/route": "app/api/ai/agent/route.js",
+  "/api/ai/sprite/route": "app/api/ai/sprite/route.js",
+  "/api/ai/test/route": "app/api/ai/test/route.js",
+  "/api/generate/route": "app/api/generate/route.js",
+  "/api/mcp/ops/route": "app/api/mcp/ops/route.js",
+  "/api/mcp/run/route": "app/api/mcp/run/route.js",
+  "/api/mcp/status/route": "app/api/mcp/status/route.js",
+  "/api/mcp/tools/route": "app/api/mcp/tools/route.js",
+  "/api/projects/[id]/route": "app/api/projects/[id]/route.js",
+  "/api/projects/route": "app/api/projects/route.js",
+  "/api/route": "app/api/route.js",
+  "/page": "app/page.js"
+}

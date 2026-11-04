@@ -1,0 +1,50 @@
+# PixelForge AI — electron-builder config (packaging milestone)
+appId: ai.pixelforge.desktop
+productName: PixelForge AI
+copyright: Copyright © 2026 PixelForge AI
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - dist/**/*
+  - static/**/*
+  - package.json
+
+# The bundled MCP mini-service (compiled by `bun build --compile`,
+# see resources/mcp/mcp-server.exe) ships OUTSIDE the asar so the
+# supervisor launcher can execute it directly. The renderer is the
+# embedded Next standalone build (Task 4) served by RenderServer.
+extraResources:
+  - from: resources/mcp
+    to: mcp
+    filter:
+      - mcp-server.exe
+      - mcp-server
+  - from: ../../mini-services/mcp-server/knowledge
+    to: mcp/knowledge
+  - from: resources/renderer
+    to: renderer
+  - from: resources/prisma
+    to: prisma
+
+asar: true
+
+win:
+  icon: build/icon.ico
+  target:
+    - nsis
+  # code signing: add certificateSubjectName/certificateFile here once the
+  # app has a certificate — unsigned builds trigger SmartScreen warnings.
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  artifactName: ${productName}-Setup-${version}.${ext}
+
+# Updater feed — set PF_UPDATE_PUBLISH (generic provider URL) or replace with
+# a GitHub provider block when releases live on GitHub. electron-updater
+# reads `publish` from here or from electron-updater CLI flags.
+publish: null

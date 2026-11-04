@@ -28,6 +28,8 @@ export interface AttachResult {
 
 const TOOL_TIMEOUT_MS = 30_000;
 const HELLO_TIMEOUT_MS = 5_000;
+/** bridge pings every 15 s — a holder silent longer than this looks dead */
+const EDITOR_FRESH_MS = 25_000;
 
 interface PendingCall {
   resolve: (envelope: ToolEnvelope) => void;
@@ -37,8 +39,14 @@ interface PendingCall {
 export class EditorLink {
   private socket: EditorSocket | null = null;
   private helloTimer: ReturnType<typeof setTimeout> | null = null;
+  /** a second connection awaiting its hello (takeover or reject) */
+  private candidate: { socket: EditorSocket; timer: ReturnType<typeof setTimeout> } | null = null;
   private pending = new Map<string, PendingCall>();
   private eventListeners = new Set<(evt: EditorEvent) => void>();
+  private approvalListeners = new Set<(msg: { id: string; approve: boolean }) => void>();
+  private helloListeners = new Set<() => void>();
+  /** last sign of life from the attached editor (hello or ping) */
+  private lastAliveAt = 0;
 
   appVersion: string | null = null;
   bridgeVersion: number | null = null;
@@ -57,38 +65,96 @@ export class EditorLink {
     return () => this.eventListeners.delete(fn);
   }
 
+  /** Human approval decisions from the editor UI (approval center). */
+  onApprovalResponse(fn: (msg: { id: string; approve: boolean }) => void): () => void {
+    this.approvalListeners.add(fn);
+    return () => this.approvalListeners.delete(fn);
+  }
+
+  /** Fired after a (re)connect hello — pending approvals are re-shared. */
+  onHello(fn: () => void): () => void {
+    this.helloListeners.add(fn);
+    return () => this.helloListeners.delete(fn);
+  }
+
   /**
-   * Accept a freshly opened socket. When an editor is already attached, the
-   * NEWEST one takes over (the old socket is closed) — a page reload must
-   * never be blocked by a zombie connection the server has not noticed yet.
+   * Accept a freshly opened socket. A HEALTHY holder keeps the slot: the
+   * editor bridge pings every 15 s, so any holder that signaled life within
+   * EDITOR_FRESH_MS is alive and a newcomer is rejected — two app pages (or
+   * a stale tab running old bridge code) must never steal the slot from each
+   * other in a 4005 war. Replace happens only when the holder looks dead
+   * (pings stopped — page reload the server has not noticed yet).
    * The socket must send `hello` within HELLO_TIMEOUT_MS.
    */
   attach(socket: EditorSocket): AttachResult {
     if (this.socket && this.socket !== socket) {
-      // take over: kill the stale holder first
-      const stale = this.socket
-      this.socket = null
-      if (this.helloTimer) {
-        clearTimeout(this.helloTimer)
-        this.helloTimer = null
-      }
-      try {
-        stale.close(4005, 'replaced by a newer editor')
-      } catch {
-        /* already gone */
+      const fresh = Date.now() - this.lastAliveAt < EDITOR_FRESH_MS;
+      if (!fresh) {
+        // holder went silent (page reload the server has not noticed) — take over
+        const stale = this.socket
+        this.socket = null
+        if (this.helloTimer) {
+          clearTimeout(this.helloTimer)
+          this.helloTimer = null
+        }
+        console.error(`[pf-mcp] editor REPLACED at ${new Date().toISOString()} — previous editor went quiet (${Date.now() - this.lastAliveAt}ms)`)
+        try {
+          stale.close(4005, 'replaced by a newer editor')
+        } catch {
+          /* already gone */
+        }
+      } else {
+        // healthy holder keeps the slot; the newcomer stays connected only
+        // until its hello — a takeover flag flips ownership, anything else
+        // is rejected. Two live editors can no longer steal from each other.
+        console.error(`[pf-mcp] editor candidate at ${new Date().toISOString()} — healthy holder present, awaiting hello (takeover?)`)
+        this.clearCandidate();
+        this.candidate = { socket, timer: setTimeout(() => this.rejectCandidate(socket), HELLO_TIMEOUT_MS) };
+        return { ok: true }
       }
     }
     this.socket = socket
+    this.lastAliveAt = Date.now()
+    console.error(`[pf-mcp] editor attached at ${new Date().toISOString()}`)
+    this.startHelloTimer(socket)
+    return { ok: true }
+  }
+
+  private startHelloTimer(socket: EditorSocket): void {
+    if (this.helloTimer) clearTimeout(this.helloTimer)
     this.helloTimer = setTimeout(() => {
       if (this.socket === socket) {
         this.detach(socket)
         socket.close(4001, 'hello timeout')
       }
     }, HELLO_TIMEOUT_MS)
-    return { ok: true }
+  }
+
+  private clearCandidate(): void {
+    if (this.candidate) {
+      clearTimeout(this.candidate.timer)
+      this.candidate = null
+    }
+  }
+
+  private rejectCandidate(socket: EditorSocket): void {
+    if (this.candidate?.socket !== socket) return
+    this.candidate = null
+    console.error(`[pf-mcp] editor REJECTED at ${new Date().toISOString()} — healthy editor already connected`)
+    try {
+      socket.close(4000, 'another editor is connected')
+    } catch {
+      /* already gone */
+    }
+  }
+
+  /** True when the given socket is the current editor owner. */
+  isEditor(socket: EditorSocket): boolean {
+    return this.socket === socket
   }
 
   detach(socket: EditorSocket): void {
+    if (this.candidate?.socket === socket) this.clearCandidate();
     if (this.socket !== socket) return;
     this.socket = null;
     if (this.helloTimer) {
@@ -114,23 +180,62 @@ export class EditorLink {
     }
   }
 
-  /** Handle one inbound message from the editor. Returns nothing; all
-   *  errors resolve pending calls with structured envelopes. */
-  handleInbound(msg: EditorInbound): void {
+  /** Handle one inbound message from the editor. `fromSocket` identifies the
+   *  sender — required to arbitrate hello/takeover between two connections.
+   *  All errors resolve pending calls with structured envelopes, not hangs. */
+  handleInbound(msg: EditorInbound, fromSocket?: EditorSocket): void {
+    const from = fromSocket ?? this.socket ?? undefined;
+    if (msg.type !== 'hello' && from && from !== this.socket) {
+      return; // only the current editor can drive tools/events/state
+    }
     switch (msg.type) {
       case 'hello': {
+        if (from && from !== this.socket) {
+          this.clearCandidate();
+          if (msg.takeover === true) {
+            // lock-holding fresh page claims the slot from a stale holder
+            const stale = this.socket;
+            try {
+              stale?.close(4005, 'replaced by editor takeover');
+            } catch {
+              /* already gone */
+            }
+            this.socket = from;
+            this.lastAliveAt = Date.now();
+            console.error(`[pf-mcp] editor TAKEOVER at ${new Date().toISOString()} — new editor claimed the slot from the stale holder`);
+          } else {
+            console.error(`[pf-mcp] editor REJECTED at ${new Date().toISOString()} — healthy editor already connected (candidate sent no takeover)`);
+            try {
+              from.close(4000, 'another editor is connected');
+            } catch {
+              /* already gone */
+            }
+            return;
+          }
+        } else {
+          this.lastAliveAt = Date.now();
+        }
         this.appVersion = msg.appVersion ?? null;
         this.bridgeVersion = msg.bridgeVersion ?? null;
         this.origin = msg.origin ?? null;
         this.connectedAt = new Date().toISOString();
+        this.lastAliveAt = Date.now();
         if (this.helloTimer) {
           clearTimeout(this.helloTimer);
           this.helloTimer = null;
         }
+        for (const fn of this.helloListeners) fn();
         break;
       }
       case 'ping': {
+        this.lastAliveAt = Date.now();
         this.send({ type: 'pong' });
+        break;
+      }
+      case 'approval-response': {
+        if (typeof msg.id !== 'string' || !msg.id) return;
+        const approve = msg.approve === true;
+        for (const fn of this.approvalListeners) fn({ id: msg.id, approve });
         break;
       }
       case 'tool-result': {

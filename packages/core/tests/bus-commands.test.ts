@@ -277,4 +277,63 @@ describe('pixels.applyOp behaviors', () => {
     expect(locateCel(bus.getProject(), 'nope', clip.frames[0].id, clip.layers[0].id)).toBeNull();
     expect(findClip(bus.getProject(), clip.id)?.id).toBe(clip.id);
   });
+
+  test('canvas.resize shifts pixels, crops out-of-bounds, undoes exactly', () => {
+    const { bus, project } = makeBus();
+    const clipId = project.clips[0].id;
+    const layerId = project.clips[0].layers[0].id;
+    const frameId = project.clips[0].frames[0].id;
+    // stamp at (2,2) on 16×16
+    bus.execute('pixels.applyOp', { clipId, frameId, layerId, color: [255, 128, 0, 255], ops: [{ op: 'stamp', x: 2, y: 2 }] }, 'ui');
+
+    // grow to 24×24 anchored top-left → pixel stays at (2,2)
+    bus.execute('canvas.resize', { width: 24, height: 24, anchor: 'top-left' }, 'ui');
+    const grown = bus.getProject();
+    expect(grown.width).toBe(24);
+    expect(grown.height).toBe(24);
+    expect(pixelAt(grown.clips[0].frames[0], layerId, 24, 2, 2)).toEqual([255, 128, 0, 255]);
+    expect(pixelAt(grown.clips[0].frames[0], layerId, 24, 20, 20)).toEqual([0, 0, 0, 0]);
+
+    // one undo restores exact 16×16 document
+    expect(bus.undo().ok).toBeTrue();
+    expect(bus.getProject().width).toBe(16);
+    expect(pixelAt(bus.getProject().clips[0].frames[0], layerId, 16, 2, 2)).toEqual([255, 128, 0, 255]);
+    expect(bus.redo().ok).toBeTrue();
+    expect(bus.getProject().width).toBe(24);
+  });
+
+  test('canvas.resize center anchor offsets content and same-size is rejected', () => {
+    const { bus, project } = makeBus();
+    const clipId = project.clips[0].id;
+    const layerId = project.clips[0].layers[0].id;
+    const frameId = project.clips[0].frames[0].id;
+    bus.execute('pixels.applyOp', { clipId, frameId, layerId, color: [255, 0, 0, 255], ops: [{ op: 'stamp', x: 6, y: 6 }] }, 'ui');
+
+    // shrink 16→8 centered → offset −4; source (6,6) lands at (2,2), source (0,0) is cropped
+    bus.execute('canvas.resize', { width: 8, height: 8, anchor: 'center' }, 'ui');
+    const shrunk = bus.getProject();
+    expect(shrunk.width).toBe(8);
+    expect(pixelAt(shrunk.clips[0].frames[0], layerId, 8, 2, 2)).toEqual([255, 0, 0, 255]);
+
+    // same-size resize rejected
+    expect(() => bus.execute('canvas.resize', { width: 8, height: 8 }, 'ui')).toThrow(CommandError);
+  });
+
+  test('canvas.resize keeps linked cels linked with identical buffers', () => {
+    const { bus, project } = makeBus();
+    const clipId = project.clips[0].id;
+    const layerId = project.clips[0].layers[0].id;
+    bus.execute('layer.setLinked', { clipId, layerId, linked: true }, 'ui');
+    bus.execute('frame.add', { clipId, copy: false }, 'ui');
+
+    bus.execute('canvas.resize', { width: 32, height: 32 }, 'ui');
+    const after = bus.getProject();
+    const cel0 = after.clips[0].frames[0].cels[layerId];
+    const cel1 = after.clips[0].frames[1].cels[layerId];
+    expect(cel0?.linked).toBeTrue();
+    expect(cel1?.linked).toBeTrue();
+    expect(cel0?.buffer.length).toBe(32 * 32 * 4);
+    // both linked cels carry identical (empty) content
+    expect(Buffer.from(cel0?.buffer ?? []).equals(Buffer.from(cel1?.buffer ?? []))).toBeTrue();
+  });
 });

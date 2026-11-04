@@ -18,6 +18,7 @@ export {
   moveBuffer,
   pasteRegionInPlace,
   stampBrush,
+  stampCustomBuffer,
   flipRegionHInPlace,
   flipRegionVInPlace,
   rotateRegionCWInPlace,

@@ -1,0 +1,16 @@
+{
+  "/_global-error/page": "/_global-error",
+  "/_not-found/page": "/_not-found",
+  "/api/ai/agent/route": "/api/ai/agent",
+  "/api/ai/sprite/route": "/api/ai/sprite",
+  "/api/ai/test/route": "/api/ai/test",
+  "/api/generate/route": "/api/generate",
+  "/api/mcp/ops/route": "/api/mcp/ops",
+  "/api/mcp/run/route": "/api/mcp/run",
+  "/api/mcp/status/route": "/api/mcp/status",
+  "/api/mcp/tools/route": "/api/mcp/tools",
+  "/api/projects/[id]/route": "/api/projects/[id]",
+  "/api/projects/route": "/api/projects",
+  "/api/route": "/api",
+  "/page": "/"
+}

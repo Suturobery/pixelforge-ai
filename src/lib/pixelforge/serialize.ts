@@ -53,6 +53,8 @@ export function serializeProject(p: Project): SerializedProject {
           name: l.name,
           visible: l.visible,
           opacity: l.opacity,
+          ...(l.locked ? { locked: true } : {}),
+          ...(l.blend && l.blend !== 'normal' ? { blend: l.blend } : {}),
           png: celToPngDataUrl(f.cels[l.id]?.buffer ?? transparent, width, height),
         })),
       })),
@@ -74,6 +76,8 @@ export async function deserializeProject(s: SerializedProject): Promise<Project>
         visible: l.visible,
         opacity: l.opacity,
         linked: false,
+        ...(l.locked === true ? { locked: true } : {}),
+        ...(l.blend && l.blend !== 'normal' ? { blend: l.blend } : {}),
       }))
       const frames = await Promise.all(
         c.frames.map(async (f) => ({

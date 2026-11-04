@@ -21,7 +21,7 @@ import { persist, createJSONStorage } from 'zustand/middleware'
 import { isDesktop } from '@/lib/pixelforge/desktop-bridge'
 
 /** Provider dialects we know how to talk to. `custom` = any OpenAI-compatible endpoint. */
-export type AIProviderKind = 'zai' | 'openai' | 'anthropic' | 'custom'
+export type AIProviderKind = 'zai' | 'openai' | 'custom'
 
 export interface AIProviderConfig {
   id: string
@@ -50,15 +50,6 @@ export const DEFAULT_AI_PROVIDERS: AIProviderConfig[] = [
     baseUrl: 'https://api.openai.com/v1',
     apiKey: '',
     model: 'gpt-image-1',
-    enabled: false,
-  },
-  {
-    id: 'anthropic',
-    label: 'Anthropic · Claude',
-    kind: 'anthropic',
-    baseUrl: 'https://api.anthropic.com/v1',
-    apiKey: '',
-    model: 'claude-sonnet-4-5',
     enabled: false,
   },
   {
@@ -93,12 +84,6 @@ export const MODEL_PRESETS: Record<string, { id: string; label: string }[]> = {
     { id: 'gpt-image-1-mini', label: 'gpt-image-1-mini — fast & cheaper' },
     { id: 'dall-e-3', label: 'dall-e-3 — HD illustrations' },
     { id: 'dall-e-2', label: 'dall-e-2 — legacy' },
-  ],
-  anthropic: [
-    { id: 'claude-sonnet-4-5', label: 'claude-sonnet-4-5 — latest Sonnet' },
-    { id: 'claude-haiku-4-5', label: 'claude-haiku-4-5 — newest fast model' },
-    { id: 'claude-opus-4-1', label: 'claude-opus-4-1 — most capable' },
-    { id: 'claude-3-5-haiku-latest', label: 'claude-3-5-haiku — legacy fast' },
   ],
   gemini: [
     { id: 'gemini-2.5-flash-image', label: 'gemini-2.5-flash-image — Nano Banana (images)' },
@@ -139,6 +124,8 @@ export interface AppSettings {
   aiWarnUsd: number
   /** expose the MCP editor tools to external AI assistants */
   agentApiEnabled: boolean
+  /** port the MCP server listens on (default 3030; must match PF_MCP_PORT) */
+  mcpPort: number
   /** size of the floating restore pills (collapsed Preview / View toolbar) */
   floatBtnSize: 'sm' | 'md' | 'lg'
   // --- runtime-only (never persisted) — desktop secure mode (Task 13a) ---
@@ -166,6 +153,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   aiMonthlyLimitUsd: 5,
   aiWarnUsd: 1,
   agentApiEnabled: true,
+  mcpPort: 3030,
   floatBtnSize: 'md',
   secureMode: false,
   keyStatus: {},
@@ -176,8 +164,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
 export function getActiveProvider(s: Pick<AppSettings, 'aiProviders' | 'activeProviderId'>): AIProviderConfig | null {
   const p = s.aiProviders.find((x) => x.id === s.activeProviderId) ?? null
   if (!p || !p.enabled) return null
-  // Claude has no image-generation API — chat only; generation falls back.
-  if (p.kind === 'anthropic') return null
+  // Old saved settings may still carry kind "anthropic" (removed provider) —
+  // treat as unusable so generation falls back to built-in.
+  if ((p.kind as string) === 'anthropic') return null
   if (p.kind !== 'zai' && !p.apiKey.trim()) return null
   return p
 }
@@ -290,7 +279,7 @@ export const useAppSettings = create<SettingsStore>()(
     }),
     {
       name: 'pixelforge-settings-v1', // same storage key as v0/v1 blobs (migrated in place)
-      version: 2,
+      version: 3,
       storage: createJSONStorage(() =>
         typeof window !== 'undefined' ? window.localStorage : memoryStorage
       ),
@@ -312,6 +301,7 @@ export const useAppSettings = create<SettingsStore>()(
         ),
         activeProviderId: s.activeProviderId,
         agentApiEnabled: s.agentApiEnabled,
+        mcpPort: s.mcpPort,
         aiMonthlyLimitUsd: s.aiMonthlyLimitUsd,
         aiWarnUsd: s.aiWarnUsd,
         floatBtnSize: s.floatBtnSize,
@@ -319,11 +309,18 @@ export const useAppSettings = create<SettingsStore>()(
       // v0/v1 blobs may carry plaintext keys from an earlier build (or the web
       // prototype sharing this origin in dev): on desktop they are scrubbed
       // ONCE here — never auto-imported into the secure flow (plan C13).
-      migrate: (persisted) => {
+      migrate: (persisted, fromVersion) => {
         const p = (persisted ?? {}) as Partial<AppSettings>
         if (DESKTOP && Array.isArray(p.aiProviders)) {
           p.aiProviders = p.aiProviders.map((x) => ({ ...x, apiKey: '' }))
         }
+        // v3: the Anthropic provider was removed — stale persisted entries
+        // (and an active pointer to one) are dropped so the Settings card
+        // disappears instead of rendering a dead provider.
+        if (fromVersion < 3 && Array.isArray(p.aiProviders)) {
+          p.aiProviders = p.aiProviders.filter((x) => (x as { kind?: string }).kind !== 'anthropic')
+        }
+        if (p.activeProviderId === 'anthropic') p.activeProviderId = 'zai'
         return { ...DEFAULT_SETTINGS, ...p } as AppSettings & SettingsStore
       },
       onRehydrateStorage: () => (state) => {
@@ -332,6 +329,14 @@ export const useAppSettings = create<SettingsStore>()(
         if (DESKTOP && state && state.aiProviders.some((p) => p.apiKey !== '')) {
           useAppSettings.setState({
             aiProviders: state.aiProviders.map((p) => ({ ...p, apiKey: '' })),
+          })
+        }
+        // Anthropic provider was removed from the app — scrub stale persisted
+        // entries on EVERY hydrate (idempotent) so the dead card never renders
+        if (state && state.aiProviders.some((p) => (p.kind as string) === 'anthropic')) {
+          useAppSettings.setState({
+            aiProviders: state.aiProviders.filter((p) => (p.kind as string) !== 'anthropic'),
+            ...(state.activeProviderId === 'anthropic' ? { activeProviderId: 'zai' } : {}),
           })
         }
       },

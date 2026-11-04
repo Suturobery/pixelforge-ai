@@ -19,6 +19,7 @@ export type FetchLike = (url: string, init: {
   headers: Record<string, string>;
   body: string;
   signal: AbortSignal;
+  redirect?: 'error';
 }) => Promise<{
   ok: boolean;
   status: number;
@@ -39,6 +40,30 @@ export interface OpenAiAdapterOptions {
   timeoutMs?: number;
 }
 
+export function safeExternalHttpsBase(raw: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw.trim());
+  } catch {
+    throw new AiJobError('config_error', 'Base URL is invalid.');
+  }
+  const host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  const privateV4 = /^(?:0|10|127)\.|^169\.254\.|^192\.168\.|^172\.(?:1[6-9]|2\d|3[0-1])\./.test(host);
+  const privateV6 = host === '::' || host === '::1' || /^(?:fc|fd|fe[89ab])/.test(host);
+  if (url.protocol !== 'https:' || url.username || url.password || host === 'localhost' || privateV4 || privateV6) {
+    throw new AiJobError('config_error', 'Base URL must be a public HTTPS URL without embedded credentials.');
+  }
+  return url.toString().replace(/\/+$/, '');
+}
+
+function safeImageUrl(raw: string): string | null {
+  try {
+    return safeExternalHttpsBase(raw);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * OpenAI-compatible /images/generations adapter (OpenAI, Gemini OpenAI
  * dialect, OpenRouter, local servers). Parses b64_json and https-url
@@ -56,12 +81,13 @@ export function createOpenAiCompatibleAdapter(opts: OpenAiAdapterOptions): AiAda
     supportsN: opts.supportsN ?? kind === 'openai',
     async generate({ fullPrompt, requestSize, count, signal }) {
       if (!opts.apiKey) throw new AiJobError('config_error', 'API key is missing (Settings → AI).');
-      const base = opts.baseUrl.trim().replace(/\/+$/, '');
-      if (!base) throw new AiJobError('config_error', 'Base URL is not configured (Settings → AI).');
       const body: Record<string, unknown> = {
         model: opts.model || 'gpt-image-1',
         prompt: fullPrompt,
         size: requestSize,
+        // OpenAI accepts this and Gemini's OpenAI-compatible image endpoint
+        // requires it. Returning base64 also avoids trusting remote image URLs.
+        response_format: 'b64_json',
       };
       const n = Math.max(1, Math.min(4, count));
       if (n > 1) {
@@ -71,6 +97,8 @@ export function createOpenAiCompatibleAdapter(opts: OpenAiAdapterOptions): AiAda
         }
         body['n'] = n;
       }
+      if (!opts.baseUrl.trim()) throw new AiJobError('config_error', 'Base URL is not configured (Settings → AI).');
+      const base = safeExternalHttpsBase(opts.baseUrl);
       let res: Awaited<ReturnType<FetchLike>>;
       try {
         res = await doFetch(`${base}/images/generations`, {
@@ -78,6 +106,7 @@ export function createOpenAiCompatibleAdapter(opts: OpenAiAdapterOptions): AiAda
           headers: { 'content-type': 'application/json', Authorization: `Bearer ${opts.apiKey}` },
           body: JSON.stringify(body),
           signal,
+          redirect: 'error',
         });
       } catch (err) {
         if (err instanceof Error && err.name === 'AbortError') throw err;
@@ -93,10 +122,13 @@ export function createOpenAiCompatibleAdapter(opts: OpenAiAdapterOptions): AiAda
       const urls: string[] = [];
       for (const item of data) {
         if (typeof item?.b64_json === 'string' && item.b64_json) images.push(item.b64_json);
-        else if (typeof item?.url === 'string' && /^https:\/\//.test(item.url)) urls.push(item.url);
+        else if (typeof item?.url === 'string') {
+          const url = safeImageUrl(item.url);
+          if (url) urls.push(url);
+        }
       }
       for (const url of urls) {
-        const imgRes = await doFetch(url, { method: 'GET', headers: {}, body: '', signal: AbortSignal.timeout(30_000) });
+        const imgRes = await doFetch(url, { method: 'GET', headers: {}, body: '', signal: AbortSignal.timeout(30_000), redirect: 'error' });
         if (!imgRes.ok) throw new Error(`image download HTTP ${imgRes.status}`);
         const buf = Buffer.from(await imgRes.arrayBuffer());
         images.push(buf.toString('base64'));

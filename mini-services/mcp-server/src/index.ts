@@ -71,7 +71,9 @@ function handleCtrl(msg: EditorInbound, reply: (id: string, ok: boolean, data?: 
       return;
     }
     case 'pair-generate': {
-      const tier: Tier = ctrl.tier === 'L1' ? 'L1' : 'L0';
+      const tier: Tier = (['L1', 'L2', 'L3'] as string[]).includes(ctrl.tier as string)
+        ? (ctrl.tier as Tier)
+        : 'L0';
       const { token, pairing } = newPendingPairing(tier);
       store.addPairing(pairing);
       reply(id, true, {
@@ -107,6 +109,10 @@ function handleCtrl(msg: EditorInbound, reply: (id: string, ok: boolean, data?: 
     case 'ops-recent': {
       const limit = Math.max(1, Math.min(ctrl.limit ?? 12, 100));
       reply(id, true, { ops: store.recentOps(limit) });
+      return;
+    }
+    case 'approvals-list': {
+      reply(id, true, { approvals: host.approvals.list() });
       return;
     }
     default:
@@ -233,6 +239,7 @@ export function createPixelForgeServer() {
         if (!editorOriginAllowed(request.headers.get('origin'), request.headers.get('host'))) {
           return new Response('forbidden origin', { status: 403 });
         }
+        console.error(`[pf-mcp] ws upgrade from origin=${request.headers.get('origin') ?? 'none'} ua=${(request.headers.get('user-agent') ?? 'unknown').slice(0, 80)}`);
         const ok = server.upgrade(request, {
           data: { pendingHello: true, editorSocket: null },
         });
@@ -342,8 +349,11 @@ export function createPixelForgeServer() {
           }
           data.pendingHello = false;
           data.editorSocket = adapter;
-          link.handleInbound(msg);
+          // hello arbitration: takeover flips ownership, plain hello from a
+          // second connection is rejected inside handleInbound
+          link.handleInbound(msg, adapter);
           if (typeof msg.mcpEnabled === 'boolean') mcpEnabled = msg.mcpEnabled;
+          if (!link.isEditor(adapter)) return; // candidate was rejected — no hello-ok to a dead socket
           link.send({
             type: 'hello-ok',
             server: {
@@ -365,8 +375,9 @@ export function createPixelForgeServer() {
         switch (msg.type) {
           case 'ping':
           case 'tool-result':
+          case 'approval-response':
           case 'event':
-            link.handleInbound(msg);
+            link.handleInbound(msg, data.editorSocket ?? undefined);
             return;
           case 'status-update':
             if (typeof msg.mcpEnabled === 'boolean') mcpEnabled = msg.mcpEnabled;
@@ -384,6 +395,7 @@ export function createPixelForgeServer() {
             });
             return;
           case 'ctrl-request':
+            if (!data.editorSocket || !link.isEditor(data.editorSocket)) return; // only the owner drives the ctrl plane
             handleCtrl(msg, (id, ok, payload, error) => {
               link.send({ type: 'ctrl-result', id, ok, data: payload, error });
             });

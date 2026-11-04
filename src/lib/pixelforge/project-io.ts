@@ -81,6 +81,8 @@ export function exportLegacyProjectJson(project: Project): SerializedProject {
           name: l.name,
           visible: l.visible,
           opacity: l.opacity,
+          ...(l.locked ? { locked: true } : {}),
+          ...(l.blend && l.blend !== 'normal' ? { blend: l.blend } : {}),
           png: celToPngDataUrl(f.cels[l.id]?.buffer ?? transparent, width, height),
         })),
       })),

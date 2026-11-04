@@ -143,7 +143,6 @@ export function defaultProviders(): StoredProvider[] {
   return [
     { id: 'zai', label: 'Z.AI (built-in)', kind: 'zai', baseUrl: '', model: 'auto', enabled: true },
     { id: 'openai', label: 'OpenAI · GPT', kind: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-image-1', enabled: false },
-    { id: 'anthropic', label: 'Anthropic · Claude', kind: 'anthropic', baseUrl: 'https://api.anthropic.com/v1', model: 'claude-sonnet-4-5', enabled: false },
     { id: 'gemini', label: 'Google · Gemini', kind: 'custom', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-2.5-flash-image', enabled: false },
     { id: 'custom', label: 'Custom / MCP endpoint', kind: 'custom', baseUrl: 'http://localhost:11434/v1', model: '', enabled: false },
   ];

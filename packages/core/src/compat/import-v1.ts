@@ -98,12 +98,21 @@ async function importClip(
 
   // Union of layers across frames, matched by name, first occurrence wins.
   const layerNames: string[] = [];
-  const layerProps = new Map<string, { id: string; visible: boolean; opacity: number }>();
+  const layerProps = new Map<
+    string,
+    { id: string; visible: boolean; opacity: number; locked: boolean; blend?: 'normal' | 'multiply' | 'screen' | 'overlay' | 'darken' | 'lighten' }
+  >();
   for (const frame of v1Clip.frames) {
     for (const layer of frame.layers) {
       if (!layerProps.has(layer.name)) {
         layerNames.push(layer.name);
-        layerProps.set(layer.name, { id: layer.id, visible: layer.visible, opacity: layer.opacity });
+        layerProps.set(layer.name, {
+          id: layer.id,
+          visible: layer.visible,
+          opacity: layer.opacity,
+          locked: layer.locked === true,
+          ...(layer.blend && layer.blend !== 'normal' ? { blend: layer.blend } : {}),
+        });
       } else {
         const first = layerProps.get(layer.name)!;
         if (first.visible !== layer.visible || Math.abs(first.opacity - layer.opacity) > 1e-9) {
@@ -128,6 +137,8 @@ async function importClip(
       visible: props.visible,
       opacity: props.opacity,
       linked: false, // v1 has no linked concept
+      ...(props.locked ? { locked: true } : {}),
+      ...(props.blend ? { blend: props.blend } : {}),
     };
   });
   clip.layers = layers;

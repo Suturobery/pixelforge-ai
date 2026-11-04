@@ -195,7 +195,7 @@ export async function submitGeneration(params: GenerationParams, opts: { webApiK
         prompt: fullPrompt,
         count: params.count,
         provider:
-          opts.webProviderKind && opts.webProviderKind !== 'zai' && opts.webApiKey
+          opts.webProviderKind && opts.webApiKey
             ? { kind: opts.webProviderKind, baseUrl: opts.webBaseUrl ?? '', apiKey: opts.webApiKey, model: params.model }
             : undefined,
       }),

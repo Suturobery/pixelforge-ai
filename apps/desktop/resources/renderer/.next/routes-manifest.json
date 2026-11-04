@@ -1,0 +1,132 @@
+{
+  "version": 3,
+  "pages404": true,
+  "appType": "app",
+  "caseSensitive": false,
+  "basePath": "",
+  "redirects": [
+    {
+      "source": "/:path+/",
+      "destination": "/:path+",
+      "internal": true,
+      "priority": true,
+      "statusCode": 308,
+      "regex": "^(?:/((?:[^/]+?)(?:/(?:[^/]+?))*))/$"
+    }
+  ],
+  "headers": [],
+  "onMatchHeaders": [],
+  "rewrites": {
+    "beforeFiles": [],
+    "afterFiles": [],
+    "fallback": []
+  },
+  "dynamicRoutes": [
+    {
+      "page": "/api/projects/[id]",
+      "regex": "^/api/projects/([^/]+?)(?:/)?$",
+      "routeKeys": {
+        "nxtPid": "nxtPid"
+      },
+      "namedRegex": "^/api/projects/(?<nxtPid>[^/]+?)(?:/)?$"
+    }
+  ],
+  "staticRoutes": [
+    {
+      "page": "/",
+      "regex": "^/(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/(?:/)?$"
+    },
+    {
+      "page": "/_global-error",
+      "regex": "^/_global\\-error(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/_global\\-error(?:/)?$"
+    },
+    {
+      "page": "/_not-found",
+      "regex": "^/_not\\-found(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/_not\\-found(?:/)?$"
+    },
+    {
+      "page": "/api",
+      "regex": "^/api(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/api(?:/)?$"
+    },
+    {
+      "page": "/api/ai/agent",
+      "regex": "^/api/ai/agent(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/api/ai/agent(?:/)?$"
+    },
+    {
+      "page": "/api/ai/sprite",
+      "regex": "^/api/ai/sprite(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/api/ai/sprite(?:/)?$"
+    },
+    {
+      "page": "/api/ai/test",
+      "regex": "^/api/ai/test(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/api/ai/test(?:/)?$"
+    },
+    {
+      "page": "/api/generate",
+      "regex": "^/api/generate(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/api/generate(?:/)?$"
+    },
+    {
+      "page": "/api/mcp/ops",
+      "regex": "^/api/mcp/ops(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/api/mcp/ops(?:/)?$"
+    },
+    {
+      "page": "/api/mcp/run",
+      "regex": "^/api/mcp/run(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/api/mcp/run(?:/)?$"
+    },
+    {
+      "page": "/api/mcp/status",
+      "regex": "^/api/mcp/status(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/api/mcp/status(?:/)?$"
+    },
+    {
+      "page": "/api/mcp/tools",
+      "regex": "^/api/mcp/tools(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/api/mcp/tools(?:/)?$"
+    },
+    {
+      "page": "/api/projects",
+      "regex": "^/api/projects(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/api/projects(?:/)?$"
+    }
+  ],
+  "dataRoutes": [],
+  "rsc": {
+    "header": "rsc",
+    "varyHeader": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch",
+    "prefetchHeader": "next-router-prefetch",
+    "didPostponeHeader": "x-nextjs-postponed",
+    "contentTypeHeader": "text/x-component",
+    "suffix": ".rsc",
+    "prefetchSegmentHeader": "next-router-segment-prefetch",
+    "prefetchSegmentSuffix": ".segment.rsc",
+    "prefetchSegmentDirSuffix": ".segments",
+    "clientParamParsing": false,
+    "dynamicRSCPrerender": false
+  },
+  "rewriteHeaders": {
+    "pathHeader": "x-nextjs-rewritten-path",
+    "queryHeader": "x-nextjs-rewritten-query"
+  }
+}

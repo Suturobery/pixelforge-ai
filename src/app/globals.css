@@ -1,6 +1,11 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+/* Tailwind v4 caches its source-file scan; files created while the dev
+   server runs can be missed. Explicit @source pins the pixelforge tree so
+   newly added components always generate their utilities. */
+@source "../components/pixelforge/**/*.{ts,tsx}";
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
@@ -37,14 +42,74 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+}
+
+/* ---------------------------------------------------------------------------
+ * APPLE theme — "pro app at night"
+ * zinc remapped to Apple's neutral dark grays, teal to system blue (#0A84FF
+ * family), frost to the Apple-Intelligence indigo family (AI surfaces),
+ * amber to system yellow. Soft continuous radii, hairline alpha borders,
+ * vibrancy blurs. Every existing utility picks this up without touching
+ * component code.
+ * ------------------------------------------------------------------------- */
+@theme {
+  /* Apple neutral dark ramp (zinc-* remap) */
+  --color-zinc-50: #fafafc;
+  --color-zinc-100: #f5f5f7;
+  --color-zinc-200: #d1d1d6;
+  --color-zinc-300: #aeaeb2;
+  --color-zinc-400: #8e8e93;
+  --color-zinc-500: #636366;
+  --color-zinc-600: #48484a;
+  --color-zinc-700: #3a3a3c;
+  --color-zinc-800: #2c2c2e;
+  --color-zinc-900: #1c1c1e;
+  --color-zinc-950: #141416;
+
+  /* system blue — interactive accent: active tool, playhead, selection (teal-* remap) */
+  --color-teal-50: #e5f0ff;
+  --color-teal-100: #cce4ff;
+  --color-teal-200: #9cc8ff;
+  --color-teal-300: #6fb1ff;
+  --color-teal-400: #409cff;
+  --color-teal-500: #0a84ff;
+  --color-teal-600: #0071e3;
+  --color-teal-700: #0060c0;
+  --color-teal-800: #004fa6;
+  --color-teal-900: #003d82;
+
+  /* intelligence indigo — AI generation, agent, MCP surfaces (frost-*) */
+  --color-frost-100: #e4e1ff;
+  --color-frost-200: #cdc8ff;
+  --color-frost-300: #aba3ff;
+  --color-frost-400: #7d74ff;
+  --color-frost-500: #5e5ce6;
+  --color-frost-600: #4b47c8;
+  --color-frost-700: #3f3c9e;
+  --color-frost-800: #34327e;
+  --color-frost-900: #29275f;
+
+  /* system yellow — warnings, unsaved, durations stay clear of the accent */
+  --color-amber-200: #ffee99;
+  --color-amber-300: #ffe45c;
+  --color-amber-400: #ffd60a;
+  --color-amber-500: #e0bc00;
+  --color-amber-600: #b89a00;
+
+  /* soft continuous-feeling radii */
+  --radius-xs: 3px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 10px;
+  --radius-2xl: 12px;
+
+  /* pixel face retired — leftover font-pixel call sites render as UI sans */
+  --font-pixel: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
 }
 
 :root {
-  --radius: 0.625rem;
+  --radius: 0.5rem;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
@@ -79,24 +144,24 @@
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
+  --background: #141416;
+  --foreground: #f5f5f7;
+  --card: #1c1c1e;
+  --card-foreground: #f5f5f7;
+  --popover: #28282a;
+  --popover-foreground: #f5f5f7;
+  --primary: #0a84ff;
+  --primary-foreground: #ffffff;
+  --secondary: #2c2c2e;
+  --secondary-foreground: #f5f5f7;
+  --muted: #242426;
+  --muted-foreground: #8e8e93;
+  --accent: #323234;
+  --accent-foreground: #f5f5f7;
+  --destructive: #ff453a;
+  --border: rgba(255, 255, 255, 0.1);
+  --input: rgba(255, 255, 255, 0.14);
+  --ring: #8e8e93;
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
   --chart-3: oklch(0.769 0.188 70.08);
@@ -128,12 +193,12 @@
 /* Transparent-pixel checkerboard behind the canvas, thumbnails and previews
    (dark slate tones so RGBA artwork reads correctly on the dark shell). */
 .pixelforge-checker {
-  background-color: #232327;
+  background-color: #1f1f21;
   background-image:
-    linear-gradient(45deg, #2c2c31 25%, transparent 25%),
-    linear-gradient(-45deg, #2c2c31 25%, transparent 25%),
-    linear-gradient(45deg, transparent 75%, #2c2c31 75%),
-    linear-gradient(-45deg, transparent 75%, #2c2c31 75%);
+    linear-gradient(45deg, #2a2a2c 25%, transparent 25%),
+    linear-gradient(-45deg, #2a2a2c 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #2a2a2c 75%),
+    linear-gradient(-45deg, transparent 75%, #2a2a2c 75%);
   background-size: 16px 16px;
   background-position:
     0 0,
@@ -142,10 +207,56 @@
     -8px 0;
 }
 
-/* Slim dark scrollbars for the studio panels/strips. */
+/* Main editor canvas only: the cool blue-grey, square checkerboard chosen
+   for the Aseprite-like workspace. Thumbnails/previews keep their existing
+   dark checkerboard, and this changes no grid, ruler, tool, or layout logic. */
+.pixelforge-canvas-checker {
+  background-color: #b8ced0;
+  background-image:
+    linear-gradient(45deg, #9db8bb 25%, transparent 25%),
+    linear-gradient(-45deg, #9db8bb 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #9db8bb 75%),
+    linear-gradient(-45deg, transparent 75%, #9db8bb 75%);
+  background-size: 32px 32px;
+  background-position:
+    0 0,
+    0 16px,
+    16px -16px,
+    -16px 0;
+}
+
+/* Bar-only scrollbars everywhere: slim dark bar, NO arrow buttons
+   (::-webkit-scrollbar-button hides the < > caps Chromium shows on Windows).
+   Firefox gets the same look via scrollbar-width/color. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #3a3a3c transparent;
+}
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #3a3a3c;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #48484a;
+}
+::-webkit-scrollbar-button {
+  display: none;
+  height: 0;
+  width: 0;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
 .pixelforge-scroll {
   scrollbar-width: thin;
-  scrollbar-color: #3f3f46 transparent;
+  scrollbar-color: #48484a transparent;
 }
 .pixelforge-scroll::-webkit-scrollbar {
   width: 8px;
@@ -155,12 +266,48 @@
   background: transparent;
 }
 .pixelforge-scroll::-webkit-scrollbar-thumb {
-  background: #3f3f46;
+  background: #48484a;
   border-radius: 9999px;
 }
 .pixelforge-scroll::-webkit-scrollbar-thumb:hover {
-  background: #52525b;
+  background: #5a5a5e;
 }
 .pixelforge-scroll::-webkit-scrollbar-corner {
   background: transparent;
+}
+
+/* Neutral grey text selection. */
+::selection {
+  background: rgba(142, 142, 147, 0.35);
+  color: #f5f5f7;
+}
+
+/* Native number-input spinners removed — ugly and unusable at this density.
+   Values still adjust by typing or the up/down arrow keys. */
+input[type='number']::-webkit-outer-spin-button,
+input[type='number']::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type='number'] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+/* ---------------------------------------------------------------------------
+ * Signature: soft focus halo — a neutral grey glow around the canvas board
+ * and the active frame thumb (was the sprite-bracket ticks).
+ * ------------------------------------------------------------------------- */
+.pf-ticks {
+  box-shadow:
+    0 0 0 1px rgba(142, 142, 147, 0.55),
+    0 0 0 4px rgba(142, 142, 147, 0.18),
+    0 0 20px rgba(142, 142, 147, 0.14);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-pulse,
+  .animate-spin {
+    animation: none;
+  }
 }

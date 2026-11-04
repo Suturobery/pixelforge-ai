@@ -53,6 +53,9 @@ export interface Frame {
   cels: Record<string, Cel>;
 }
 
+/** Pixel blend modes for layer compositing (canvas globalCompositeOperation names). */
+export type BlendMode = 'normal' | 'multiply' | 'screen' | 'overlay' | 'darken' | 'lighten';
+
 /** A layer of the clip's stack (bottom → top). Pixels live in cels, not here. */
 export interface Layer {
   id: string;
@@ -62,6 +65,10 @@ export interface Layer {
   opacity: number;
   /** Linked layer: all frames share one cel (backgrounds; C2/C19). */
   linked: boolean;
+  /** Paint-locked: pixel tools refuse to mutate this layer. */
+  locked?: boolean;
+  /** Compositing mode against the layers below; omitted = normal. */
+  blend?: BlendMode;
 }
 
 /** Region rectangle in canvas pixels. */

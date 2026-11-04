@@ -9,7 +9,9 @@ import type {
 } from "@/components/ui/toast"
 
 const TOAST_LIMIT = 1
-const TOAST_REMOVE_DELAY = 1000000
+// Radix closes a toast after the provider's five-second duration. Remove it
+// shortly after the exit animation so feedback never blocks the next action.
+const TOAST_REMOVE_DELAY = 350
 
 type ToasterToast = ToastProps & {
   id: string
@@ -182,7 +184,7 @@ function useToast() {
         listeners.splice(index, 1)
       }
     }
-  }, [state])
+  }, [])
 
   return {
     ...state,

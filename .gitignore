@@ -32,6 +32,9 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+.mcp-*.mjs
+db/mcp-clients.json
+db/mcp-ops.jsonl
 
 # vercel
 .vercel
@@ -52,3 +55,7 @@ prompt
 server.log
 # Skills directory
 /skills/
+NUL
+
+# build outputs
+apps/desktop/release/

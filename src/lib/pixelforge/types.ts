@@ -197,6 +197,10 @@ export interface SerializedLayer {
   visible: boolean
   /** 0..1 */
   opacity: number
+  /** v1.1 extension — classic v1 readers ignore it. */
+  locked?: boolean
+  /** v1.1 extension — compositing mode; omitted = normal. */
+  blend?: 'normal' | 'multiply' | 'screen' | 'overlay' | 'darken' | 'lighten'
   /** PNG data URL at the project's full canvas size. */
   png: string
 }

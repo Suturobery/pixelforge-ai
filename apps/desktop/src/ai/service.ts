@@ -16,7 +16,7 @@
 
 import { ipcMain, type WebContents } from 'electron';
 
-import { createMockAdapter, createOpenAiCompatibleAdapter, createZaiAdapter, type FetchLike } from './adapters';
+import { createMockAdapter, createOpenAiCompatibleAdapter, createZaiAdapter, safeExternalHttpsBase, type FetchLike } from './adapters';
 import { AiJobManager, AiJobError } from './job-queue';
 import type { Logger } from '../logger';
 import type { SettingsStore } from '../settings/store';
@@ -45,12 +45,20 @@ export interface AiServiceOptions {
   now?: () => number;
 }
 
+export interface AiConnectionTestResult {
+  ok: boolean;
+  latencyMs: number;
+  note?: string;
+  error?: string;
+}
+
 export class AiService {
   private readonly manager: AiJobManager;
   private readonly settings: SettingsStore;
   private readonly logger: Logger;
   private readonly usagePath: string;
   private readonly fs: AiServiceOptions['fs'];
+  private readonly fetchImpl?: FetchLike;
   private usageCache: UsageFile | null = null;
 
   constructor(opts: AiServiceOptions) {
@@ -58,6 +66,7 @@ export class AiService {
     this.logger = opts.logger;
     this.usagePath = opts.usageFile;
     this.fs = opts.fs;
+    this.fetchImpl = opts.fetch;
 
     this.manager = new AiJobManager({
       resolveAdapter: (providerId) => this.resolveAdapter(providerId, opts.fetch),
@@ -124,6 +133,15 @@ export class AiService {
       return { records: this.manager.usage().slice(-100).reverse(), monthSpendUsd: this.manager.monthSpend() };
     });
 
+    // This must run in MAIN: the renderer intentionally cannot read a vault
+    // key, so a web-route probe made saved Z.AI credentials look missing.
+    ipcMain.handle('pf:ai-test-connection', async (_event, rawProviderId: unknown): Promise<AiConnectionTestResult> => {
+      if (typeof rawProviderId !== 'string' || rawProviderId.length === 0 || rawProviderId.length > 64) {
+        return { ok: false, latencyMs: 0, error: 'Invalid provider.' };
+      }
+      return this.testConnection(rawProviderId);
+    });
+
     // push events to every live window (renderer subscribes via preload)
     this.manager.onEvent((event) => {
       let targets: WebContents[];
@@ -142,7 +160,7 @@ export class AiService {
     });
 
     this.logger.info('ai.service.registered', {
-      channels: ['pf:ai-submit', 'pf:ai-cancel', 'pf:ai-status', 'pf:ai-list', 'pf:ai-usage'],
+      channels: ['pf:ai-submit', 'pf:ai-cancel', 'pf:ai-status', 'pf:ai-list', 'pf:ai-usage', 'pf:ai-test-connection'],
       mock: process.env.PF_AI_MOCK === '1',
     });
   }
@@ -150,6 +168,48 @@ export class AiService {
   /** Direct access for the smoke harness (no IPC round-trip needed). */
   getManager(): AiJobManager {
     return this.manager;
+  }
+
+  /** Read-only authenticated probe; the API key never leaves MAIN. */
+  private async testConnection(providerId: string): Promise<AiConnectionTestResult> {
+    const startedAt = Date.now();
+    const finish = (result: Omit<AiConnectionTestResult, 'latencyMs'>): AiConnectionTestResult => ({
+      ...result,
+      latencyMs: Date.now() - startedAt,
+    });
+    const profile = this.settings.getInternal().aiProviders.find((p) => p.id === providerId);
+    if (!profile || !profile.enabled) return finish({ ok: false, error: 'Enable this provider first.' });
+    const key = this.settings.revealApiKey(providerId);
+    if (!key) return finish({ ok: false, error: 'Save an API key in Settings → AI first.' });
+
+    const configuredBase = profile.kind === 'zai' ? profile.baseUrl || 'https://api.z.ai/api/paas/v4' : profile.baseUrl;
+    let parsedUrl: URL;
+    try {
+      const baseUrl = safeExternalHttpsBase(configuredBase);
+      parsedUrl = new URL(baseUrl);
+    } catch {
+      return finish({ ok: false, error: 'Base URL must be a public HTTPS URL.' });
+    }
+
+    try {
+      // Google's OpenAI-compat image endpoint is correct for generation, but
+      // its no-cost model discovery lives at the native /v1beta/models route.
+      const google = profile.id === 'gemini' || parsedUrl.hostname === 'generativelanguage.googleapis.com';
+      const endpoint = google ? `${parsedUrl.origin}/v1beta/models` : `${parsedUrl.toString().replace(/\/+$/, '')}/models`;
+      const headers: Record<string, string> = google ? { 'x-goog-api-key': key } : { authorization: `Bearer ${key}` };
+      const response = await fetch(endpoint, {
+        headers,
+        signal: AbortSignal.timeout(10_000),
+        redirect: 'error',
+      });
+      if (!response.ok) return finish({ ok: false, error: `HTTP ${response.status}` });
+      this.logger.info('ai.connection_test', { providerId, ok: true });
+      return finish({ ok: true, note: `${profile.model || profile.label} reachable` });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Connection failed.';
+      this.logger.warn('ai.connection_test', { providerId, ok: false, error: message.slice(0, 160) });
+      return finish({ ok: false, error: /timeout|aborted/i.test(message) ? 'Timed out after 10 seconds.' : message });
+    }
   }
 
   // ------------------------------------------------------------- adapters
@@ -170,7 +230,23 @@ export class AiService {
     if (profile.kind === 'anthropic') return null; // verified: no image API
 
     if (profile.kind === 'zai') {
-      // built-in service needs no user key
+      // Prefer the credential explicitly stored in the desktop vault. The
+      // bundled Z.AI SDK only discovers environment credentials, which are
+      // absent from a normal installed app even when Settings has a key.
+      const key = this.settings.revealApiKey(providerId);
+      if (key) {
+        return createOpenAiCompatibleAdapter({
+          providerId: profile.id,
+          providerLabel: profile.label,
+          model: profile.model,
+          baseUrl: profile.baseUrl || 'https://api.z.ai/api/paas/v4',
+          apiKey: key,
+          supportsN: false,
+          fetch: fetchImpl,
+        });
+      }
+      // Keep the SDK fallback for developer environments that intentionally
+      // provide its own machine-level Z.AI configuration.
       return createZaiAdapter();
     }
 

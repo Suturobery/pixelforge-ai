@@ -52,7 +52,12 @@ interface PfExportDirResult {
 interface PfProjectBridge {
   pickOpen(options?: PfDialogOpenOptions): Promise<PfDialogOpenResult>;
   pickSave(options?: PfDialogSaveOptions): Promise<PfDialogSaveResult>;
-  registerPath(path: string): Promise<PfRegisterResult>;
+  openRecent(path: string): Promise<PfRegisterResult>;
+  forgetRecent(path: string): Promise<void>;
+  trashRecent(path: string): Promise<{ trashed: boolean }>;
+  rememberCurrentPath(path: string): Promise<PfRegisterResult>;
+  /** Native warning confirm (Electron has no window.confirm). True = OK. */
+  confirm(message: string, detail?: string): Promise<boolean>;
   fs: {
     readFile(path: string): Promise<Uint8Array>;
     writeFile(path: string, data: Uint8Array): Promise<void>;
@@ -81,7 +86,7 @@ interface PfAppInfo {
 interface PfProviderView {
   id: string;
   label: string;
-  kind: 'zai' | 'openai' | 'anthropic' | 'custom';
+  kind: 'zai' | 'openai' | 'custom';
   baseUrl: string;
   model: string;
   enabled: boolean;
@@ -168,6 +173,13 @@ interface PfAiUsageRecord {
   finishedAt: string;
 }
 
+interface PfAiConnectionTest {
+  ok: boolean;
+  latencyMs: number;
+  note?: string;
+  error?: string;
+}
+
 type PfAiEvent =
   | { type: 'job'; job: PfAiJobView }
   | { type: 'spend_warning'; spentUsd: number; warnUsd: number; limitUsd: number };
@@ -177,6 +189,16 @@ interface PixelForgeBridge {
   ping(): Promise<'pong'>;
   app: {
     getInfo(): Promise<PfAppInfo>;
+    /** OS notification (background events while minimized); click focuses. */
+    notify(title: string, body?: string): Promise<{ ok: boolean; reason?: string }>;
+    /** Read-only tail (last 200 lines / 48 KB) of today's main log. */
+    logsTail(): Promise<{ ok: boolean; text?: string; file?: string; error?: string }>;
+  };
+  clipboard: {
+    writeText(text: string): Promise<void>;
+  };
+  mcp: {
+    status(): Promise<{ ready: boolean; endpoint: string | null }>;
   };
   dialog: {
     openFile(options?: PfDialogOpenOptions): Promise<PfDialogOpenResult>;
@@ -200,7 +222,7 @@ interface PixelForgeBridge {
       aiProviders?: Array<{
         id: string;
         label?: string;
-        kind?: 'zai' | 'openai' | 'anthropic' | 'custom';
+        kind?: 'zai' | 'openai' | 'custom';
         baseUrl?: string;
         model?: string;
         enabled?: boolean;
@@ -219,8 +241,23 @@ interface PixelForgeBridge {
     status(jobId: string): Promise<PfAiJobView | null>;
     list(): Promise<PfAiJobView[]>;
     usage(): Promise<{ records: PfAiUsageRecord[]; monthSpendUsd: number }>;
+    testConnection(providerId: string): Promise<PfAiConnectionTest>;
     onEvent(listener: (event: PfAiEvent) => void): () => void;
   };
+  /** Packaging milestone: guarded software updates (no-op without a feed). */
+  updates: {
+    status(): Promise<PfUpdateStatus>;
+    check(): Promise<PfUpdateStatus>;
+    install(): Promise<{ ok: boolean }>;
+    onStatus(listener: (status: PfUpdateStatus) => void): () => void;
+  };
+}
+
+interface PfUpdateStatus {
+  state: 'no-feed' | 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error';
+  info?: string;
+  version?: string;
+  progress?: number;
 }
 
 interface Window {

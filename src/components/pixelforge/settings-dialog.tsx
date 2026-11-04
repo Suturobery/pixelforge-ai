@@ -22,6 +22,7 @@ import {
   type AIProviderConfig,
 } from '@/lib/pixelforge/settings'
 import { isDesktop } from '@/lib/pixelforge/desktop-bridge'
+import { useEditor } from '@/lib/pixelforge/store'
 import { AGENT_FETCH_HEADERS } from '@/lib/pixelforge/agent-headers'
 import { describeApiErrorInline } from '@/lib/pixelforge/api-error'
 import { PALETTES } from '@/lib/pixelforge/palettes'
@@ -42,6 +43,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
+import { SoftwareUpdatesCard } from '@/components/pixelforge/software-updates-card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -242,7 +244,7 @@ function SecureKeyEditor({
           <Button
             variant="ghost"
             size="sm"
-            className="h-5 px-1.5 font-mono text-[10px] text-zinc-300 hover:text-teal-300"
+            className="h-5 px-1.5 font-mono text-[10px] text-zinc-300 hover:text-zinc-100"
             onClick={() => {
               setEditing((v) => !v)
               setDraft('')
@@ -324,20 +326,34 @@ function ProviderCard({
   const [test, setTest] = useState<TestResult | null>(null)
 
   const isBuiltin = provider.kind === 'zai'
-  const isAnthropic = provider.kind === 'anthropic'
-  const canGenerate = !isAnthropic // Claude has no image API
-  // "Use" is one-click: it enables the provider and makes it the engine.
-  // Desktop: a session key (entered this session) is required — a stored-
-  // but-locked key cannot drive the interim generation path (Task 9 moves
-  // generation in-process and retires that limitation).
+  // Desktop credentials are write-only in the renderer. MAIN owns and uses
+  // the stored vault key, so `hasKey` is the only signal this card needs.
   const keyStatus = useAppSettings((s) => s.keyStatus[provider.id])
-  const hasSessionKey = isBuiltin || provider.apiKey.trim() !== ''
-  const canBeEngine = canGenerate && hasSessionKey
+  const hasUsableKey = secureMode ? Boolean(keyStatus?.hasKey) : provider.apiKey.trim() !== ''
+  const canBeEngine = hasUsableKey
 
   const runTest = async () => {
     setTesting(true)
     setTest(null)
     try {
+      const desktopAi = isDesktop() ? window.pixelforge?.ai : undefined
+      if (desktopAi) {
+        if (typeof desktopAi.testConnection !== 'function') {
+          setTest({
+            ok: false,
+            text: 'This desktop runtime is older than the Settings screen. Restart after updating PixelForge AI.',
+          })
+          return
+        }
+        const result = await desktopAi.testConnection(provider.id)
+        setTest({
+          ok: result.ok,
+          text: result.ok
+            ? `${result.note ?? 'Connection OK'} · ${result.latencyMs} ms`
+            : result.error ?? 'Connection failed',
+        })
+        return
+      }
       const res = await fetch('/api/ai/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...AGENT_FETCH_HEADERS },
@@ -387,15 +403,13 @@ function ProviderCard({
             <Button
               variant="ghost"
               size="sm"
-              className="h-5 px-1.5 font-mono text-[10px] text-zinc-400 hover:text-teal-300"
+              className="h-5 px-1.5 font-mono text-[10px] text-zinc-400 hover:text-zinc-100"
               disabled={!canBeEngine}
               onClick={onSetActive}
               title={
-                isAnthropic
-                  ? 'Claude has no image API — Generate uses the built-in engine'
-                  : secureMode && !hasSessionKey
-                    ? 'Enter the key for this session to use this provider'
-                    : undefined
+                secureMode && !hasUsableKey
+                  ? 'Save an API key to use this provider'
+                  : undefined
               }
             >
               Use
@@ -409,24 +423,25 @@ function ProviderCard({
         </div>
       </div>
 
-      {isBuiltin ? (
+      {isBuiltin && (
         <p className="mt-1 font-mono text-[10px] leading-tight text-zinc-400">
-          Built into this app — no API key needed. Handles sprite generation out of the box.
+          {secureMode
+            ? <>Save your Z.AI Base URL and API key here (e.g. <span className="text-zinc-300">https://api.z.ai/api/paas/v4</span>). The desktop app uses the encrypted key directly.</>
+            : <>Works out of the box where a <span className="text-zinc-300">.z-ai-config</span> exists — otherwise paste your Z.AI Base URL + key below.</>}
         </p>
-      ) : (
-        <>
-          <div className="mt-1.5 space-y-1">
-            <label className="flex items-center gap-1.5">
-              <span className="w-16 shrink-0 font-mono text-[10px] text-zinc-400">BASE URL</span>
-              <Input
-                value={provider.baseUrl}
-                onChange={(e) => onUpdate({ baseUrl: e.target.value })}
-                placeholder="https://api.example.com/v1"
-                className="h-6 border-zinc-800 bg-zinc-950 px-2 font-mono text-[11px]"
-                aria-label={`${provider.label} base URL`}
-                spellCheck={false}
-              />
-            </label>
+      )}
+      <div className="mt-1.5 space-y-1">
+        <label className="flex items-center gap-1.5">
+          <span className="w-16 shrink-0 font-mono text-[10px] text-zinc-400">BASE URL</span>
+          <Input
+            value={provider.baseUrl}
+            onChange={(e) => onUpdate({ baseUrl: e.target.value })}
+            placeholder={isBuiltin ? 'https://api.z.ai/api/paas/v4' : 'https://api.example.com/v1'}
+            className="h-6 border-zinc-800 bg-zinc-950 px-2 font-mono text-[11px]"
+            aria-label={`${provider.label} base URL`}
+            spellCheck={false}
+          />
+        </label>
             {secureMode ? (
               <div className="pl-[4.5rem]">
                 <SecureKeyEditor
@@ -467,27 +482,14 @@ function ProviderCard({
               <ModelPicker provider={provider} onUpdate={onUpdate} />
             </label>
           </div>
-          {isAnthropic && (
-            <p className="mt-1 font-mono text-[10px] leading-tight text-amber-400/90">
-              Claude is chat/agent-only (no image API) — Generate keeps using the built-in engine.
-            </p>
-          )}
-          {secureMode && !hasSessionKey && keyStatus?.hasKey && (
-            <p className="mt-1 font-mono text-[10px] leading-tight text-zinc-400">
-              Key stored securely — re-enter it once to unlock this session. (The AI engine moves
-              in-process in Task 9, removing this step.)
-            </p>
-          )}
-        </>
-      )}
       <div className="mt-1.5 flex items-center gap-2">
         <Button
           variant="outline"
           size="sm"
-          className="h-6 border-zinc-800 px-2 font-mono text-[10px] text-zinc-200 hover:text-teal-300"
+          className="h-6 border-zinc-800 px-2 font-mono text-[10px] text-zinc-200 hover:text-zinc-100"
           onClick={runTest}
-          disabled={testing || (!isBuiltin && !provider.apiKey.trim())}
-          title={!isBuiltin && !provider.apiKey.trim() ? 'Enter the key for this session to test the connection' : undefined}
+          disabled={testing || !hasUsableKey}
+          title={!hasUsableKey ? 'Save an API key before testing the connection' : undefined}
         >
           {testing ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <PlugZap className="mr-1 h-3 w-3" />}
           Test connection
@@ -516,7 +518,27 @@ export function SettingsDialog({
   const s = useAppSettings()
   const setSetting = useAppSettings((st) => st.setSetting)
   const resetSettings = useAppSettings((st) => st.resetSettings)
+  const autosave = useEditor((st) => st.autosave)
+  const setAutosave = useEditor((st) => st.setAutosave)
   const secureMode = isDesktop() && s.secureMode
+  const [appVersion, setAppVersion] = useState<string | null>(null)
+  // Claude can analyze images but is not an image-generation endpoint in this
+  // workflow. Never show a card that suggests it can power sprite creation.
+  const imageProviders = s.aiProviders.filter((provider) => (provider.kind as string) !== 'anthropic')
+  const hasUnsupportedAnthropic = s.aiProviders.some((provider) => (provider.kind as string) === 'anthropic')
+
+  useEffect(() => {
+    if (!open || !isDesktop()) return
+    let alive = true
+    void window.pixelforge?.app.getInfo()
+      .then((info) => {
+        if (alive) setAppVersion(info.version)
+      })
+      .catch(() => {
+        if (alive) setAppVersion(null)
+      })
+    return () => { alive = false }
+  }, [open])
 
   const updateProvider = (id: string, patch: Partial<AIProviderConfig>) => {
     setSetting(
@@ -538,7 +560,10 @@ export function SettingsDialog({
       <DialogContent className="max-h-[85dvh] overflow-y-auto border-zinc-800 bg-zinc-950 p-4 text-zinc-100 sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle className="flex items-center justify-between font-mono">
-            Settings
+            <span className="flex items-center gap-2">
+              Settings
+              {appVersion && <span className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-[10px] font-normal text-zinc-300">v{appVersion}</span>}
+            </span>
             <Button
               variant="ghost"
               size="sm"
@@ -552,7 +577,7 @@ export function SettingsDialog({
             </Button>
           </DialogTitle>
           <DialogDescription className="font-mono text-xs text-zinc-400">
-            Preferences are saved automatically in this browser.
+            {isDesktop() ? 'Preferences and API keys are saved locally on this device.' : 'Preferences are saved automatically in this browser.'}
           </DialogDescription>
         </DialogHeader>
 
@@ -567,10 +592,15 @@ export function SettingsDialog({
 
           {/* ---------------------------------------------------- general */}
           <TabsContent value="general" className="space-y-4 pt-3">
+            <SoftwareUpdatesCard />
+            <Row label="Autosave" hint="Save the open project automatically after changes">
+              <Switch checked={autosave} onCheckedChange={setAutosave} aria-label="Autosave" />
+            </Row>
             <Row label="Autosave delay" hint="How long to wait after a change before auto-saving">
               <Select
                 value={String(s.autosaveDelay)}
                 onValueChange={(v) => setSetting('autosaveDelay', parseInt(v, 10))}
+                disabled={!autosave}
               >
                 <SelectTrigger className="h-8 w-24 border-zinc-800 bg-zinc-900 font-mono text-xs">
                   <SelectValue />
@@ -699,6 +729,11 @@ export function SettingsDialog({
                 ? 'Keys are stored encrypted by the desktop app (OS keyring) and never written in plain text. The app can only store them — never read them back.'
                 : 'Keys are stored only in this browser and sent only to the endpoints you configure.'}
             </p>
+            {hasUnsupportedAnthropic && (
+              <p className="mb-1.5 font-mono text-[10px] leading-tight text-amber-300">
+                Claude is not listed as an image engine because this app requires an image-generation API. Use Z.AI, OpenAI, Gemini, or an OpenAI-compatible endpoint.
+              </p>
+            )}
             {s.encryptionWarning && (
               <div
                 className="mb-1.5 flex items-start gap-1.5 rounded-lg border border-amber-800/60 bg-amber-950/30 p-2"
@@ -709,7 +744,7 @@ export function SettingsDialog({
               </div>
             )}
             <div className="grid gap-1.5 sm:grid-cols-2">
-              {s.aiProviders.map((p) => (
+              {imageProviders.map((p) => (
                 <ProviderCard
                   key={p.id}
                   provider={p}
@@ -721,8 +756,10 @@ export function SettingsDialog({
                 />
               ))}
 
-              {/* MCP pointer — the real MCP lives in the dedicated tab (Task 8) */}
-              <div className="rounded-lg border border-teal-900/60 bg-teal-950/20 p-2 sm:col-span-2">
+              {/* MCP pointer — the real MCP lives in the dedicated tab (Task 8);
+                  pinned to the RIGHT column — it sits beside Custom instead of
+                  stretching full-width under the provider grid */}
+              <div className="rounded-lg border border-teal-900/60 bg-teal-950/20 p-2 sm:col-start-2">
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex min-w-0 items-center gap-1.5">
                     <Bot className="h-3.5 w-3.5 shrink-0 text-teal-400" />
@@ -743,41 +780,6 @@ export function SettingsDialog({
                   />
                 </div>
               </div>
-
-              {/* Task 9: spending limits (ESTIMATE-based hard stop + warning) */}
-              <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-2 sm:col-span-2">
-                <p className="mb-1 font-mono text-xs text-zinc-100">Spending limits</p>
-                <p className="mb-2 font-mono text-[10px] leading-tight text-zinc-400">
-                  Cost figures are ESTIMATES from the provider price table — never exact charges.
-                  The monthly cap hard-stops new paid generations; cache hits are always free.
-                </p>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <Row label="Monthly cap (USD)" hint="0 = unlimited">
-                    <input
-                      value={String(s.aiMonthlyLimitUsd)}
-                      onChange={(e) => {
-                        const v = parseFloat(e.target.value)
-                        setSetting('aiMonthlyLimitUsd', Number.isFinite(v) ? Math.max(0, Math.min(10000, v)) : 0)
-                      }}
-                      inputMode="decimal"
-                      aria-label="Monthly spending cap in US dollars"
-                      className="h-7 w-20 rounded border border-zinc-700 bg-zinc-900 px-2 font-mono text-xs text-zinc-200"
-                    />
-                  </Row>
-                  <Row label="Warn at (USD)" hint="one warning per month">
-                    <input
-                      value={String(s.aiWarnUsd)}
-                      onChange={(e) => {
-                        const v = parseFloat(e.target.value)
-                        setSetting('aiWarnUsd', Number.isFinite(v) ? Math.max(0, Math.min(10000, v)) : 0)
-                      }}
-                      inputMode="decimal"
-                      aria-label="Spending warning threshold in US dollars"
-                      className="h-7 w-20 rounded border border-zinc-700 bg-zinc-900 px-2 font-mono text-xs text-zinc-200"
-                    />
-                  </Row>
-                </div>
-              </div>
             </div>
           </TabsContent>
 
@@ -792,20 +794,42 @@ export function SettingsDialog({
               <div className="space-y-2">
                 <p className="font-mono text-[10px] uppercase tracking-wider text-zinc-400">Tools</p>
                 <ShortcutItem action="Pencil / Eraser / Fill" keys={['B', 'E', 'F']} />
-                <ShortcutItem action="Line / Rect / Eyedropper" keys={['L', 'R', 'I']} />
+                <ShortcutItem action="Line / Rect / Ellipse" keys={['L', 'R', 'C']} />
+                <ShortcutItem action="Select / Eyedropper" keys={['S', 'I']} />
                 <ShortcutItem action="Move layer" keys={['M']} />
-                <ShortcutItem action="Brush size" keys={['1', '–', '8']} />
+                <p className="pt-1 font-mono text-[10px] uppercase tracking-wider text-zinc-400">Brush</p>
+                <ShortcutItem action="Brush size (direct)" keys={['1', '–', '8']} />
+                <ShortcutItem action="Brush size − / + (Aseprite-style)" keys={['[', ']']} />
+                <ShortcutItem action="Scroll on brush button" keys={['wheel']} />
+                <p className="pt-1 font-mono text-[10px] uppercase tracking-wider text-zinc-400">Colors</p>
+                <ShortcutItem action="Swap colors" keys={['X']} />
+                <ShortcutItem action="Symmetry (mirror X)" keys={['Y']} />
+                <ShortcutItem action="Dither fill" keys={['D']} />
+                <ShortcutItem action="Swatch → secondary color" keys={['right-click']} />
+                <p className="pt-1 font-mono text-[10px] uppercase tracking-wider text-zinc-400">Tilemap</p>
+                <ShortcutItem action="Tile snap on / off" keys={['K']} />
+                <ShortcutItem action="Tile stamp on / off (snap on)" keys={['Shift+K']} />
+                <p className="pt-1 font-mono text-[10px] uppercase tracking-wider text-zinc-400">Animation</p>
+                <ShortcutItem action="Play / pause" keys={['Space']} />
+                <ShortcutItem action="Prev / next frame" keys={[',', '.']} />
+                <ShortcutItem action="New frame" keys={['Alt+N']} />
               </div>
               <div className="space-y-2">
                 <p className="font-mono text-[10px] uppercase tracking-wider text-zinc-400">View</p>
                 <ShortcutItem action="Toggle grid / onion skin" keys={['G', 'O']} />
+                <ShortcutItem action="Toggle palette panel" keys={['P']} />
+                <ShortcutItem action="Collapse frames strip" keys={['T']} />
                 <ShortcutItem action="Zoom in / out" keys={['+', '–']} />
-                <ShortcutItem action="Pan canvas" keys={['Space', 'drag']} />
+                <ShortcutItem action="Pan canvas" keys={['middle', 'or right drag']} />
                 <p className="pt-1 font-mono text-[10px] uppercase tracking-wider text-zinc-400">Project</p>
-                <ShortcutItem action="Undo / Redo" keys={['Ctrl+Z', 'Ctrl+Shift+Z']} />
+                <ShortcutItem action="Undo / Redo" keys={['Ctrl+Z', 'Ctrl+Shift+Z / Ctrl+Y']} />
                 <ShortcutItem action="Save" keys={['Ctrl+S']} />
-                <ShortcutItem action="Swap colors" keys={['tool', 'button']} />
-                <ShortcutItem action="Swatch → secondary color" keys={['right-click']} />
+                <ShortcutItem action="Deselect" keys={['Esc']} />
+                <ShortcutItem action="Delete selection" keys={['Del', 'Backspace']} />
+                <ShortcutItem action="Nudge selection" keys={['arrow keys']} />
+                <ShortcutItem action="Copy / Cut / Paste" keys={['Ctrl+C', 'Ctrl+X', 'Ctrl+V']} />
+                <p className="pt-1 font-mono text-[10px] uppercase tracking-wider text-zinc-400">Selection scale</p>
+                <ShortcutItem action="Scale ×2 / ×3 / ÷2" keys={['toolbar', 'buttons']} />
               </div>
             </div>
           </TabsContent>

@@ -16,6 +16,17 @@
 const URL_ = process.env.PF_MCP_URL ?? 'http://127.0.0.1:3030/mcp';
 const TOKEN = process.env.PF_MCP_TOKEN;
 
+// the proxy exists to reach the loopback editor server — refuse anything else
+// so a tampered PF_MCP_URL cannot turn this into an SSRF launchpad
+{
+  const u = new URL(URL_);
+  const loopback = u.hostname === '127.0.0.1' || u.hostname === 'localhost' || u.hostname === '[::1]' || u.hostname === '::1';
+  if ((u.protocol !== 'http:' && u.protocol !== 'https:') || !loopback) {
+    console.error(`[pf-mcp-proxy] PF_MCP_URL must be a loopback http(s) URL, got: ${URL_}`);
+    process.exit(2);
+  }
+}
+
 if (!TOKEN) {
   console.error('[pf-mcp-proxy] PF_MCP_TOKEN is required (the paired client token)');
   process.exit(2);

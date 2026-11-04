@@ -27,6 +27,48 @@ export type PanelId = (typeof PANEL_IDS)[PanelStorageKey]
 
 const HYDRATED_EVENT = 'pf-panels-hydrated'
 
+/** One-time discard of stale pill positions (v2 layout reset): old dragged
+ *  spots could strand pills mid-canvas after window/layout changes. Runs
+ *  once per browser; after this, pills sit at their home anchors until the
+ *  user drags them again. Desktop: the settings-file panel layouts are
+ *  cleared too (after hydration, since that re-applies the file state). */
+const RESET_FLAG = 'pixelforge:panels-reset-v2'
+let resetStarted = false
+export function resetPanelLayoutsOnce(): void {
+  if (typeof window === 'undefined' || resetStarted) return
+  resetStarted = true
+  try {
+    if (localStorage.getItem(RESET_FLAG) === '1') return
+    localStorage.setItem(RESET_FLAG, '1')
+  } catch {
+    return
+  }
+  const clearLocal = () => {
+    for (const key of Object.keys(PANEL_IDS)) {
+      try {
+        localStorage.removeItem(key)
+      } catch {
+        /* storage unavailable */
+      }
+    }
+  }
+  const clearDesktopFile = () => {
+    if (!isDesktop()) return
+    const bridge = window.pixelforge
+    if (!bridge?.settings) return
+    const empty: Record<string, Record<string, never>> = {}
+    for (const panelId of Object.values(PANEL_IDS)) empty[panelId] = {}
+    void bridge.settings.update({ panels: empty }).catch(() => undefined)
+  }
+  // web: clear immediately. Desktop: wait for hydration (it re-applies the
+  // settings file), clear both stores, then re-emit so panels re-read.
+  void panelsReady.then(() => {
+    clearLocal()
+    clearDesktopFile()
+    window.dispatchEvent(new CustomEvent(HYDRATED_EVENT))
+  })
+}
+
 /** Resolves once the desktop hydration pass has written localStorage (web: resolves immediately). */
 let hydrationDone = false
 export const panelsReady: Promise<void> = (() => {

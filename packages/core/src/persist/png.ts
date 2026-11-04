@@ -18,7 +18,7 @@ import { PersistError } from './errors';
 const SIGNATURE = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 /** Copy into a fresh ArrayBuffer-backed Uint8Array for stream/WebCrypto APIs. */
-function copyForStream(data: Uint8Array | Uint8ClampedArray): Uint8Array<ArrayBuffer> {
+function copyForStream(data: Uint8Array | Uint8ClampedArray) {
   const copy = new Uint8Array(new ArrayBuffer(data.length));
   copy.set(data);
   return copy;

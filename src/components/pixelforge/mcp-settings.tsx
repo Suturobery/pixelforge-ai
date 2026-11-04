@@ -6,12 +6,14 @@
 
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import {
+  forceBridgeTakeover,
   getBridgeState,
   subscribeBridge,
   mcpCtrl,
   type BridgeState,
 } from '@/lib/pixelforge/mcp-bridge'
 import { useAppSettings } from '@/lib/pixelforge/settings'
+import { copyText } from '@/lib/pixelforge/desktop-bridge'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import {
@@ -54,6 +56,15 @@ interface OpRow {
   summary: string | null
 }
 
+interface ApprovalRow {
+  id: string
+  tool: string
+  clientName: string
+  decision: 'approved' | 'denied' | 'timeout'
+  at: string
+  summary: string
+}
+
 function useBridge(): BridgeState {
   return useSyncExternalStore(subscribeBridge, getBridgeState, getBridgeState)
 }
@@ -61,7 +72,7 @@ function useBridge(): BridgeState {
 function StatusDot({ ok, warn }: { ok: boolean; warn?: boolean }) {
   return (
     <span
-      className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${ok ? 'bg-teal-400' : warn ? 'bg-amber-400' : 'bg-zinc-600'}`}
+      className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${ok ? 'bg-frost-400' : warn ? 'bg-amber-400' : 'bg-zinc-600'}`}
       aria-hidden
     />
   )
@@ -85,18 +96,21 @@ export function McpConnections() {
 
   const [clients, setClients] = useState<PairingClient[]>([])
   const [ops, setOps] = useState<OpRow[]>([])
-  const [pairing, setPairing] = useState<{ token: string; tier: 'L0' | 'L1'; expiresAt: string } | null>(null)
-  const [pairTier, setPairTier] = useState<'L0' | 'L1'>('L1')
+  const [approvals, setApprovals] = useState<{ pending: ApprovalRow[]; recent: ApprovalRow[] } | null>(null)
+  const [pairing, setPairing] = useState<{ token: string; tier: 'L0' | 'L1' | 'L2' | 'L3'; expiresAt: string } | null>(null)
+  const [pairTier, setPairTier] = useState<'L0' | 'L1' | 'L2' | 'L3'>('L1')
   const [pairingBusy, setPairingBusy] = useState(false)
   const [copied, setCopied] = useState<'code' | 'endpoint' | null>(null)
 
   const refresh = useCallback(async () => {
-    const [c, o] = await Promise.all([
+    const [c, o, a] = await Promise.all([
       mcpCtrl<{ clients: PairingClient[] }>({ kind: 'clients-list' }),
       mcpCtrl<{ ops: OpRow[] }>({ kind: 'ops-recent', limit: 12 }),
+      mcpCtrl<{ approvals: { pending: ApprovalRow[]; recent: ApprovalRow[] } }>({ kind: 'approvals-list' }),
     ])
     if (c.ok && c.data) setClients(c.data.clients)
     if (o.ok && o.data) setOps(o.data.ops)
+    if (a.ok && a.data) setApprovals(a.data.approvals)
   }, [])
 
   useEffect(() => {
@@ -116,7 +130,7 @@ export function McpConnections() {
   const generate = async () => {
     setPairingBusy(true)
     try {
-      const res = await mcpCtrl<{ token: string; tier: 'L0' | 'L1'; expiresAt: string }>({ kind: 'pair-generate', tier: pairTier })
+      const res = await mcpCtrl<{ token: string; tier: 'L0' | 'L1' | 'L2' | 'L3'; expiresAt: string }>({ kind: 'pair-generate', tier: pairTier })
       if (res.ok && res.data) {
         setPairing(res.data)
         await refresh()
@@ -146,16 +160,17 @@ export function McpConnections() {
 
   const copy = async (text: string, what: 'code' | 'endpoint') => {
     try {
-      await navigator.clipboard.writeText(text)
+      await copyText(text)
       setCopied(what)
       setTimeout(() => setCopied(null), 1500)
     } catch {
-      /* clipboard unavailable */
+      toast({ title: 'Copy failed', description: 'Clipboard is unavailable.', variant: 'destructive' })
     }
   }
 
   const secsLeft = pairing ? Math.max(0, Math.floor((new Date(pairing.expiresAt).getTime() - Date.now()) / 1000)) : 0
   const activeClients = clients.filter((c) => !c.revoked)
+  const serverReady = bridge.status === 'connected' && bridge.server?.mcpEnabled === true
 
   return (
     <div className="space-y-3 pt-3">
@@ -163,7 +178,7 @@ export function McpConnections() {
       <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-2.5">
         <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-1.5">
-            <Bot className="h-3.5 w-3.5 shrink-0 text-teal-400" />
+            <Bot className="h-3.5 w-3.5 shrink-0 text-frost-400" />
             <div className="min-w-0">
               <p className="font-mono text-xs text-zinc-100">MCP server</p>
               <p className="font-mono text-[10px] leading-tight text-zinc-400">
@@ -183,8 +198,8 @@ export function McpConnections() {
             editor link: {bridge.status}
           </span>
           <span className="flex items-center gap-1.5">
-            <StatusDot ok={agentApiEnabled} warn={!agentApiEnabled} />
-            server: {agentApiEnabled ? 'accepting tools' : 'disabled'}
+            <StatusDot ok={serverReady} warn={agentApiEnabled && !serverReady} />
+            server: {!agentApiEnabled ? 'disabled' : serverReady ? 'accepting tools' : 'starting / reconnecting'}
           </span>
           <span className="flex items-center gap-1.5">
             <StatusDot ok={!!bridge.server?.clientsPaired} />
@@ -197,16 +212,17 @@ export function McpConnections() {
         </div>
         <div className="mt-2 flex items-center gap-1.5">
           <code className="min-w-0 flex-1 truncate rounded border border-zinc-800 bg-zinc-950 px-2 py-1 font-mono text-[10px] text-zinc-300">
-            {bridge.server?.endpoint ?? 'http://127.0.0.1:3030/mcp'}
+            {bridge.server?.endpoint ?? 'Waiting for local MCP endpoint…'}
           </code>
           <Button
             variant="ghost"
             size="icon"
             className="h-6 w-6 shrink-0 text-zinc-400 hover:text-zinc-200"
-            onClick={() => copy(bridge.server?.endpoint ?? 'http://127.0.0.1:3030/mcp', 'endpoint')}
+            onClick={() => bridge.server?.endpoint && void copy(bridge.server.endpoint, 'endpoint')}
+            disabled={!bridge.server?.endpoint}
             aria-label="Copy MCP endpoint"
           >
-            {copied === 'endpoint' ? <Check className="h-3 w-3 text-teal-400" /> : <Copy className="h-3 w-3" />}
+            {copied === 'endpoint' ? <Check className="h-3 w-3 text-frost-400" /> : <Copy className="h-3 w-3" />}
           </Button>
           <Button
             variant="ghost"
@@ -224,12 +240,23 @@ export function McpConnections() {
             (<code className="text-zinc-300">bun run dev</code> in mini-services/mcp-server) and keep this app open.
           </p>
         )}
+        {bridge.status !== 'connected' && bridge.lastError?.includes('another editor') && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="mt-1.5 h-6 border-amber-600/60 px-2 font-mono text-[10px] text-amber-300 hover:bg-amber-900/20"
+            onClick={() => forceBridgeTakeover()}
+            title="Claim the editor slot from the other PixelForge tab/window that currently holds it"
+          >
+            Take over the bridge
+          </Button>
+        )}
       </div>
 
       {/* ------------------------------------------------ connect assistant */}
-      <div className="rounded-lg border border-teal-900/60 bg-teal-950/20 p-2.5">
+      <div className="rounded-lg border border-frost-900/60 bg-frost-950/20 p-2.5">
         <div className="flex items-center gap-1.5">
-          <KeyRound className="h-3.5 w-3.5 shrink-0 text-teal-400" />
+          <KeyRound className="h-3.5 w-3.5 shrink-0 text-frost-400" />
           <p className="font-mono text-xs text-zinc-100">Connect AI Assistant</p>
         </div>
         <p className="mt-1 font-mono text-[10px] leading-tight text-zinc-400">
@@ -239,7 +266,7 @@ export function McpConnections() {
         </p>
         {!pairing ? (
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            <Select value={pairTier} onValueChange={(v) => setPairTier(v as 'L0' | 'L1')}>
+            <Select value={pairTier} onValueChange={(v) => setPairTier(v as 'L0' | 'L1' | 'L2' | 'L3')}>
               <SelectTrigger
                 className="data-[size=default]:h-7 w-[170px] gap-1 border-zinc-800 bg-zinc-900 px-2 font-mono text-[10px] text-zinc-300"
                 aria-label="Pairing permission tier"
@@ -253,12 +280,18 @@ export function McpConnections() {
                 <SelectItem value="L1" className="font-mono text-[11px] text-zinc-200">
                   L1 — read + undoable edits
                 </SelectItem>
+                <SelectItem value="L2" className="font-mono text-[11px] text-zinc-200">
+                  L2 — edits + destructive ops
+                </SelectItem>
+                <SelectItem value="L3" className="font-mono text-[11px] text-zinc-200">
+                  L3 — everything incl. paid generation
+                </SelectItem>
               </SelectContent>
             </Select>
             <Button
               variant="outline"
               size="sm"
-              className="h-7 border-zinc-800 px-2.5 font-mono text-[10px] text-zinc-200 hover:text-teal-300"
+              className="h-7 border-zinc-800 px-2.5 font-mono text-[10px] text-zinc-200 hover:text-frost-300"
               onClick={generate}
               disabled={pairingBusy || bridge.status !== 'connected'}
             >
@@ -270,7 +303,7 @@ export function McpConnections() {
           <div className="mt-2 space-y-1.5">
             <div className="flex items-center gap-1.5">
               <code
-                className="min-w-0 flex-1 truncate rounded border border-teal-800/60 bg-zinc-950 px-2 py-1.5 font-mono text-xs tracking-wide text-teal-200"
+                className="min-w-0 flex-1 truncate rounded border border-frost-800/60 bg-zinc-950 px-2 py-1.5 font-mono text-xs tracking-wide text-frost-200"
                 aria-label="Pairing code"
               >
                 {pairing.token}
@@ -282,7 +315,7 @@ export function McpConnections() {
                 onClick={() => copy(pairing.token, 'code')}
                 aria-label="Copy pairing code"
               >
-                {copied === 'code' ? <Check className="h-3 w-3 text-teal-400" /> : <Copy className="h-3 w-3" />}
+                {copied === 'code' ? <Check className="h-3 w-3 text-frost-400" /> : <Copy className="h-3 w-3" />}
               </Button>
               <Button
                 variant="ghost"
@@ -347,6 +380,54 @@ export function McpConnections() {
         )}
       </div>
 
+      {/* -------------------------------------------- approval center feed */}
+      <div className="rounded-lg border border-amber-900/40 bg-amber-950/10 p-2.5">
+        <div className="flex items-center justify-between">
+          <p className="font-mono text-xs text-zinc-100">Approval center (paid ops)</p>
+          <span className="font-mono text-[10px] text-zinc-400">
+            {approvals?.pending.length ? `${approvals.pending.length} pending` : 'none waiting'}
+          </span>
+        </div>
+        {approvals?.pending.length ? (
+          <ul className="mt-1.5 space-y-1">
+            {approvals.pending.map((p) => (
+              <li key={p.id} className="rounded border border-amber-600/40 bg-amber-950/30 px-2 py-1">
+                <p className="truncate font-mono text-[10px] text-amber-300">
+                  ⏳ {p.tool} — {p.clientName}
+                </p>
+                <p className="truncate font-mono text-[10px] text-zinc-400" title={p.summary}>{p.summary}</p>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {approvals && approvals.recent.length > 0 && (
+          <ul className="pixelforge-scroll mt-1.5 max-h-28 space-y-1 overflow-y-auto pr-1">
+            {approvals.recent.map((r, i) => (
+              <li key={`${r.id}-${i}`} className="rounded border border-zinc-800/70 bg-zinc-900/40 px-2 py-1">
+                <div className="flex items-center justify-between gap-2">
+                  <span
+                    className={`font-mono text-[10px] ${
+                      r.decision === 'approved' ? 'text-teal-300' : r.decision === 'denied' ? 'text-red-300' : 'text-amber-300'
+                    }`}
+                  >
+                    {r.decision === 'approved' ? '✓' : r.decision === 'denied' ? '✗' : '⏱'} {r.decision} · {r.tool}
+                  </span>
+                  <span className="font-mono text-[9px] text-zinc-500">
+                    {r.clientName} · {new Date(r.at).toLocaleTimeString()}
+                  </span>
+                </div>
+                <p className="truncate font-mono text-[9px] text-zinc-500" title={r.summary}>{r.summary}</p>
+              </li>
+            ))}
+          </ul>
+        )}
+        {approvals && approvals.pending.length === 0 && approvals.recent.length === 0 && (
+          <p className="mt-1.5 font-mono text-[10px] text-zinc-400">
+            No paid-op requests yet — generate_sprite calls will ask here before anything is spent.
+          </p>
+        )}
+      </div>
+
       {/* ------------------------------------------------- op history */}
       <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-2.5">
         <p className="font-mono text-xs text-zinc-100">Recent MCP operations</p>
@@ -357,7 +438,7 @@ export function McpConnections() {
             {ops.map((op, i) => (
               <li key={`${op.ts}-${i}`} className="rounded border border-zinc-800/70 bg-zinc-900/40 px-2 py-1">
                 <div className="flex items-center justify-between gap-2">
-                  <span className={`font-mono text-[10px] ${op.ok ? 'text-teal-300' : 'text-red-300'}`}>
+                  <span className={`font-mono text-[10px] ${op.ok ? 'text-frost-300' : 'text-red-300'}`}>
                     {op.ok ? '✓' : '✗'} {op.tool}
                   </span>
                   <span className="font-mono text-[9px] text-zinc-400">
@@ -389,8 +470,11 @@ export function McpConnections() {
           <li>• Tool calls need <span className="text-zinc-300">Authorization: Bearer &lt;token&gt;</span> — the old static header is no longer accepted on MCP.</li>
           <li>• <span className="text-zinc-300">editor_not_connected</span> → keep the PixelForge app open (it is the tool executor).</li>
           <li>• <span className="text-zinc-300">dirty_project</span> → save the project, then retry the agent action.</li>
-          <li>• <span className="text-zinc-300">rate_limited</span> → L0 60/min, L1 30/min per client (§5.5).</li>
-          <li>• Spawn-based clients: run <span className="text-zinc-300">mini-services/mcp-server/src/stdio-proxy.ts</span> with <span className="text-zinc-300">PF_MCP_TOKEN</span>.</li>
+          <li>• <span className="text-zinc-300">rate_limited</span> → per tool tier: L0 60/min, L1 120/min, L2 60/min, L3 20/min (§5.5). Rejected calls still count — pace with <span className="text-zinc-300">get_quota</span>.</li>
+          <li>• <span className="text-zinc-300">generate_sprite</span> (paid) parks until you click Approve/Deny on the approval card — denied or timed out means nothing was spent. Queue status: <span className="text-zinc-300">get_approvals</span>.</li>
+          <li>• Desktop app: it supervises the MCP service itself (starts, adopts or stops it) — no terminal needed.</li>
+          <li>• Browser tab shows <span className="text-zinc-300">ERR_CONNECTION_REFUSED</span> on ws://127.0.0.1:3030 → no MCP service is running: open the desktop app, or start one with <span className="text-zinc-300">bun run dev</span> / <span className="text-zinc-300">npm run mcp:dev</span>.</li>
+          <li>• Spawn-based clients: run <span className="text-zinc-300">mini-services/mcp-server/src/stdio-proxy.ts</span> with <span className="text-zinc-300">PF_MCP_TOKEN</span> = the <span className="text-zinc-300">paired client token</span> (not the one-time pairing code).</li>
         </ul>
       </div>
     </div>

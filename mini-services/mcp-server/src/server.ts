@@ -19,8 +19,10 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { sha256Hex, generateClientId, generateClientToken, hashesMatch, RateLimiter } from './auth';
 import { PAIRING_ALLOWED_TOOLS, TOOL_CATALOG, type ToolDef } from './tools-catalog';
-import { tierGrants, type AuditEntry, type EditorEvent, type PairedClient, type Tier, type ToolEnvelope } from './types';
+import { TIER_RATE_LIMITS, tierGrants, type AuditEntry, type EditorEvent, type PairedClient, type Tier, type ToolEnvelope } from './types';
 import type { EditorLink } from './editor-link';
+import { getKnowledge, studyReference } from './knowledge';
+import { ApprovalCenter } from './approvals';
 import type { McpStore } from './store';
 
 export interface HostDeps {
@@ -61,7 +63,18 @@ export const ERROR_CODES = {
   BAD_REQUEST: 'bad_request',
   INTERNAL: 'internal_error',
   STALE: 'stale_document',
+  APPROVAL_DENIED: 'approval_denied',
 } as const;
+
+/** Short human-readable line of WHAT would be spent (shown on the card). */
+function describePaidArgs(tool: string, args: Record<string, unknown> | undefined): string {
+  if (tool === 'generate_sprite') {
+    const prompt = typeof args?.prompt === 'string' ? args.prompt.slice(0, 120) : '';
+    const count = typeof args?.count === 'number' ? args.count : 1;
+    return `generate ${count} sprite candidate${count === 1 ? '' : 's'}${prompt ? ` — "${prompt}"` : ''}`;
+  }
+  return JSON.stringify(args ?? {}).slice(0, 160);
+}
 
 export class McpHost {
   readonly link: EditorLink;
@@ -72,12 +85,15 @@ export class McpHost {
   private initializing: RequestIdentity | null = null;
   private unsubEvents: (() => void) | null = null;
   private readonly rate = new RateLimiter();
+  /** Task 11 §5.2: paid tools park here until the human decides. */
+  readonly approvals = new ApprovalCenter();
 
   constructor(deps: HostDeps) {
     this.deps = deps;
     this.link = deps.link;
     this.store = deps.store;
     this.unsubEvents = this.link.onEvent((evt) => this.broadcastEvent(evt));
+    this.approvals.attach(this.link);
   }
 
   get sessionCount(): number {
@@ -290,9 +306,49 @@ export class McpHost {
         'Ask the user to pair you with a higher tier in Settings → MCP.'
       );
     }
-    if (!this.rate.allow(identity.clientId, identity.tier)) {
+    // Per-tool-tier budget: free reads/writes get full speed at any client
+    // tier; paid L3 stays hard-capped regardless of client tier (§5.5).
+    const rateKey = `${identity.clientId}:${def.tier}`;
+    if (!this.rate.allow(rateKey, def.tier)) {
       this.auditSecurity('rate_limited', identity, def.name);
-      return fail(ERROR_CODES.RATE_LIMITED, 'Rate limit exceeded for your tier (60/min L0, 30/min L1).', 'Slow down and retry.');
+      const resetInSec = this.rate.usage(rateKey)?.resetInSec ?? 60;
+      return fail(
+        ERROR_CODES.RATE_LIMITED,
+        `Rate limit exceeded for ${def.tier} tools (${TIER_RATE_LIMITS[def.tier]}/min).`,
+        `Slow down and retry in ${resetInSec}s (Retry-After).`
+      );
+    }
+
+    // Task 11 §5.2: PAID tools require an explicit human approval — the call
+    // parks until the user clicks Approve/Deny in the editor. The agent has
+    // no tool to approve its own spend (respond_approval is not on the MCP
+    // surface); only the editor bridge can answer.
+    if (def.paid) {
+      const summary = describePaidArgs(def.name, args);
+      this.auditSecurity('approval_requested', identity, `${def.name}: ${summary}`);
+      const decision = await this.approvals.request({
+        tool: def.name,
+        clientId: identity.clientId,
+        clientName: identity.name,
+        summary,
+      });
+      if (decision === 'denied') {
+        this.auditSecurity('approval_denied', identity, def.name);
+        return fail(
+          ERROR_CODES.APPROVAL_DENIED,
+          `The user DENIED the paid "${def.name}" request — nothing was spent.`,
+          'Ask the user what to change before requesting paid generation again.'
+        );
+      }
+      if (decision === 'timeout') {
+        this.auditSecurity('approval_timeout', identity, def.name);
+        return fail(
+          ERROR_CODES.INTERNAL,
+          `The approval request timed out after 5 minutes — nothing was spent.`,
+          'Re-request only when the user is ready to approve.'
+        );
+      }
+      this.auditSecurity('approval_granted', identity, def.name);
     }
     this.store.touchClient(identity.clientId);
 
@@ -313,6 +369,22 @@ export class McpHost {
         }));
         return { ok: true, data: { count: ops.length, ops } };
       }
+      if (def.name === 'get_quota') {
+        return this.quotaSnapshot(identity.clientId);
+      }
+      if (def.name === 'get_approvals') {
+        const { pending, recent } = this.approvals.list();
+        return { ok: true, data: { pending, recent, note: 'Only the human in the editor can approve/deny — there is no MCP tool for it.' } };
+      }
+      if (def.name === 'get_knowledge') {
+        return getKnowledge(String(args?.topic ?? ''), typeof args?.style === 'string' ? args.style : undefined);
+      }      if (def.name === 'study_reference') {
+        return studyReference({
+          pngBase64: String(args?.pngBase64 ?? ''),
+          styleName: typeof args?.styleName === 'string' ? args.styleName : undefined,
+          notes: typeof args?.notes === 'string' ? args.notes : undefined,
+        });
+      }
       return fail(ERROR_CODES.INTERNAL, `Tool "${def.name}" has no local handler.`);
     }
 
@@ -328,6 +400,21 @@ export class McpHost {
   }
 
   // ------------------------------------------------------------------ audit
+
+  /** Per-tier rate budget for one client (keyed clientId:tier, §5.5). */
+  private quotaSnapshot(clientId: string): { ok: true; data: unknown } {
+    const tiers = Object.entries(TIER_RATE_LIMITS).map(([tier, limit]) => {
+      const usage = this.rate.usage(`${clientId}:${tier}`);
+      return {
+        tier,
+        limitPerMin: limit,
+        used: usage?.used ?? 0,
+        remaining: usage ? Math.max(0, limit - usage.used) : limit,
+        resetInSec: usage?.resetInSec ?? 0,
+      };
+    });
+    return { ok: true, data: { clientId, tiers } };
+  }
 
   private auditTool(def: ToolDef, args: unknown, identity: RequestIdentity | null, envelope: ToolEnvelope, durationMs: number): void {
     this.store.audit({

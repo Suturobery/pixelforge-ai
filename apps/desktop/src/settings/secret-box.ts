@@ -12,30 +12,35 @@
  * schema stay pure so tests can drive them with a fake SecretBox.
  */
 
-import { safeStorage } from 'electron';
+import { app, safeStorage } from 'electron';
 
 import type { SecretBox } from './store';
 
 export function createSafeStorageBox(): SecretBox {
   // Electron 45 deprecates the sync isEncryptionAvailable() in favor of the
-  // async probe; cache ONE probe result at construction (IPC key flows happen
-  // long after startup) and fall back to the sync call only if the async API
-  // is missing or hasn't resolved yet.
+  // async probe. The box is constructed BEFORE app.ready (settings load
+  // first), and the async probe answers false that early on Windows — so a
+  // false pre-ready result is discarded and re-probed once ready. IPC key
+  // flows happen long after startup and see the corrected value.
   let cachedAvailability: boolean | null = null;
   const probe = async (): Promise<boolean> => {
     try {
       const anySafe = safeStorage as unknown as { isAsyncEncryptionAvailable?: () => Promise<boolean> };
+      let result: boolean;
       if (typeof anySafe.isAsyncEncryptionAvailable === 'function') {
-        cachedAvailability = await anySafe.isAsyncEncryptionAvailable();
+        result = await anySafe.isAsyncEncryptionAvailable();
       } else {
-        cachedAvailability = safeStorage.isEncryptionAvailable();
+        result = safeStorage.isEncryptionAvailable();
       }
+      if (result || app.isReady()) cachedAvailability = result;
+      return result;
     } catch {
-      cachedAvailability = false;
+      if (app.isReady()) cachedAvailability = false;
+      return false;
     }
-    return cachedAvailability;
   };
   void probe();
+  if (!app.isReady()) app.once('ready', () => void probe());
 
   return {
     isAvailable(): boolean {

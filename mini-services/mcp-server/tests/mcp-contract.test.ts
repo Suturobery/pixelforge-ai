@@ -13,6 +13,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { z } from 'zod';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { encodePng } from '../../../packages/core/src/persist/png';
 
 const PORT = 3030 + (Number(Bun.hash(process.env.HF_WORKER_ID ?? String(process.pid))) % 400);
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -28,6 +29,9 @@ let mockWs: WebSocket | null = null;
 
 /** Programmatic mock of the PixelForge renderer bridge (the bus plane). */
 const toolResponders = new Map<string, (args: Record<string, unknown>, meta: { tier: string; clientName: string }) => unknown>();
+/** approval center: what the mock "human" does with approval-request cards. */
+let approvalAuto: 'approve' | 'deny' | 'none' = 'none';
+const approvalRequests: Array<Record<string, unknown>> = [];
 let wsReady: Promise<void>;
 let wsSend: (msg: unknown) => void = () => {};
 
@@ -42,6 +46,13 @@ function connectMockEditor(): Promise<void> {
       const msg = JSON.parse(String(ev.data)) as Record<string, unknown>;
       if (msg.type === 'hello-ok') {
         resolve();
+        return;
+      }
+      if (msg.type === 'approval-request') {
+        approvalRequests.push(msg);
+        if (approvalAuto !== 'none') {
+          ws.send(JSON.stringify({ type: 'approval-response', id: String(msg.id), approve: approvalAuto === 'approve' }));
+        }
         return;
       }
       if (msg.type === 'tool-request') {
@@ -79,7 +90,7 @@ function ctrl<T = Record<string, unknown>>(payload: unknown): Promise<T> {
   });
 }
 
-async function generatePairing(tier: 'L0' | 'L1'): Promise<{ token: string; tier: string; expiresAt: string }> {
+async function generatePairing(tier: 'L0' | 'L1' | 'L2' | 'L3'): Promise<{ token: string; tier: string; expiresAt: string }> {
   const res = await ctrl<Record<string, unknown>>({ kind: 'pair-generate', tier });
   const data = res.data as { token: string; tier: string; expiresAt: string };
   return data;
@@ -251,11 +262,18 @@ describe('pairing + tool workflow (real MCP protocol)', () => {
     const names = tools.tools.map((t) => t.name);
     expect(names).toContain('get_project_state');
     expect(names).toContain('set_pixels');
-    // L2/L3 are structurally absent
-    expect(names).not.toContain('generate_sprite');
+    // L3 generate_sprite is registered (tier-gated); macros registered
+    expect(names).toContain('generate_sprite');
+    expect(names).toContain('import_frame_strip');
+    expect(names).toContain('macro_run');
     expect(names).not.toContain('save_project');
-    expect(names).not.toContain('resize_canvas');
-    expect(names).not.toContain('purge_trash');
+    // L2 export/purge/resize suite + batch/quota (agent tooling) are registered
+    expect(names).toContain('purge_trash');
+    expect(names).toContain('resize_canvas');
+    expect(names).toContain('export_sheet');
+    expect(names).toContain('export_gif');
+    expect(names).toContain('batch');
+    expect(names).toContain('get_quota');
     // Task 10 motion set (L0 helper + L1 writes) is registered
     expect(names).toContain('suggest_motion_preset');
     expect(names).toContain('set_parts');
@@ -635,7 +653,8 @@ describe('Task 9: AI candidate tools over the real protocol', () => {
     await client.close();
   });
 
-  test('generate_sprite stays UNREGISTERED (paid ops wait for the Task 11 approval center)', async () => {
+  test('generate_sprite is REGISTERED but L3-tier gated (paid op — approval via caller identity)', async () => {
+    // an L1 client sees the tool advertised but is denied at relay time
     const { token } = await generatePairing('L1');
     const pc = await sdkClient(token);
     const paired = textEnvelope(await pc.callTool({ name: 'pair_client', arguments: { name: 'l3-probe' } }));
@@ -643,23 +662,80 @@ describe('Task 9: AI candidate tools over the real protocol', () => {
     await pc.close();
     const client = await sdkClient(clientToken);
     const tools = await client.listTools();
-    const names = tools.tools.map((t) => t.name);
-    expect(names).toContain('get_candidates');
-    expect(names).toContain('accept_candidate');
-    expect(names).toContain('reject_candidate');
-    expect(names).toContain('apply_normalize');
-    // Task 10 motion set is registered (L0 helper + L1 writes)
-    expect(names).toContain('suggest_motion_preset');
-    expect(names).toContain('set_parts');
-    expect(names).toContain('apply_motion_preset');
-    expect(names).not.toContain('generate_sprite');
-    // an unregistered tool surfaces as a protocol error result (isError + text)
-    const res = await client.callTool({ name: 'generate_sprite', arguments: { prompt: 'x' } });
-    const r = res as { isError?: boolean; content?: Array<{ type: string; text?: string }> };
-    expect(r.isError).toBe(true);
-    const text = r.content?.find((c) => c.type === 'text')?.text ?? '';
-    expect(text).toContain('generate_sprite');
+    expect(tools.tools.map((t) => t.name)).toContain('generate_sprite');
+    const denied = await client.callTool({ name: 'generate_sprite', arguments: { prompt: 'x' } });
+    const env = JSON.parse((denied as { content?: Array<{ type: string; text?: string }> }).content?.[0]?.text ?? '{}');
+    expect(env.ok).toBe(false);
+    expect(env.error?.code).toBe('permission_denied');
     await client.close();
+    // an L3 client passes the tier gate — but the op now PARKS at the
+    // approval center until the mock human approves (Task 11 §5.2)
+    toolResponders.set('generate_sprite', () => ({ ok: true, candidateIds: ['c1'] }));
+    approvalAuto = 'approve';
+    const { token: t3 } = await generatePairing('L3');
+    const pc3 = await sdkClient(t3);
+    const paired3 = textEnvelope(await pc3.callTool({ name: 'pair_client', arguments: { name: 'l3-real' } }));
+    const client3 = await sdkClient((paired3.data as { token: string }).token);
+    const ok = textEnvelope(await client3.callTool({ name: 'generate_sprite', arguments: { prompt: 'x' } }));
+    expect(ok.ok).toBe(true);
+    expect(approvalRequests.length).toBe(1);
+    await client3.close();
+    approvalAuto = 'none';
+  });
+});
+
+// --------------------------------------------- Task 11: approval center
+
+describe('Task 11: paid-op approval center', () => {
+  test('generate_sprite parks until approve — pending visible via get_approvals', async () => {
+    approvalAuto = 'none';
+    approvalRequests.length = 0;
+    toolResponders.set('generate_sprite', () => ({ ok: true, candidateIds: ['c1'] }));
+    const { token } = await generatePairing('L3');
+    const pc = await sdkClient(token);
+    const paired = textEnvelope(await pc.callTool({ name: 'pair_client', arguments: { name: 'l3-approval' } }));
+    const client = await sdkClient((paired.data as { token: string }).token);
+
+    // fire WITHOUT awaiting — the call must park
+    const inFlight = client.callTool({ name: 'generate_sprite', arguments: { prompt: 'a donut citadel', count: 2 } });
+    await new Promise((r) => setTimeout(r, 150));
+
+    // the editor got exactly one approval-request card
+    expect(approvalRequests.length).toBe(1);
+    const card = approvalRequests[0] as { tool: string; clientName: string; args: { summary: string } };
+    expect(card.tool).toBe('generate_sprite');
+    expect(card.clientName).toBe('l3-approval');
+    expect(card.args.summary).toContain('a donut citadel');
+
+    // get_approvals (L0, server-local) sees it pending
+    const approvals = textEnvelope(await client.callTool({ name: 'get_approvals', arguments: {} }));
+    expect(approvals.ok).toBe(true);
+    expect((approvals.data as { pending: Array<{ tool: string }> }).pending).toHaveLength(1);
+    expect((approvals.data as { pending: Array<{ tool: string }> }).pending[0].tool).toBe('generate_sprite');
+
+    // the human approves over the bridge → the parked call resumes and relays
+    const firstCard = approvalRequests[0] as { id: string };
+    wsSend({ type: 'approval-response', id: firstCard.id, approve: true });
+    const ok = textEnvelope(await inFlight);
+    expect(ok.ok).toBe(true);
+    await client.close();
+  });
+
+  test('deny returns approval_denied and spends nothing', async () => {
+    approvalAuto = 'deny';
+    approvalRequests.length = 0;
+    const { token } = await generatePairing('L3');
+    const pc = await sdkClient(token);
+    const paired = textEnvelope(await pc.callTool({ name: 'pair_client', arguments: { name: 'l3-deny' } }));
+    const client = await sdkClient((paired.data as { token: string }).token);
+    const denied = textEnvelope(await client.callTool({ name: 'generate_sprite', arguments: { prompt: 'x' } }));
+    expect(denied.ok).toBe(false);
+    expect(denied.error?.code).toBe('approval_denied');
+    const approvals = textEnvelope(await client.callTool({ name: 'get_approvals', arguments: {} }));
+    const recent = (approvals.data as { recent: Array<{ decision: string }> }).recent;
+    expect(recent[0].decision).toBe('denied');
+    await client.close();
+    approvalAuto = 'none';
   });
 });
 
@@ -810,6 +886,139 @@ describe('Task 10: motion preset tools over the real protocol', () => {
     const res = await client.callTool({ name: 'apply_motion_preset', arguments: { preset: 'fly' } });
     const r = res as { isError?: boolean; content?: Array<{ type: string; text?: string }> };
     expect(r.isError).toBe(true);
+    await client.close();
+  });
+});
+
+describe('skill knowledge (get_knowledge / study_reference)', () => {
+  /** Exchange a pairing code for a real paired client (house pattern). */
+  async function pairedClient(tier: 'L0' | 'L1' | 'L2' | 'L3', name: string): Promise<Client> {
+    const { token } = await generatePairing(tier);
+    const pc = await sdkClient(token);
+    const paired = textEnvelope(await pc.callTool({ name: 'pair_client', arguments: { name } }));
+    const clientToken = (paired.data as { token: string }).token;
+    await pc.close();
+    return sdkClient(clientToken);
+  }
+
+  test('both tools are advertised', async () => {
+    const { token } = await generatePairing('L0');
+    const pc = await sdkClient(token);
+    const listed = await pc.listTools();
+    const names = listed.tools.map((t) => t.name);
+    expect(names).toContain('get_knowledge');
+    expect(names).toContain('study_reference');
+    await pc.close();
+  });
+
+  test('L0 get_knowledge serves shipped palettes', async () => {
+    const client = await pairedClient('L0', 'knowledge-reader');
+    const env = textEnvelope(await client.callTool({ name: 'get_knowledge', arguments: { topic: 'palettes' } }));
+    expect(env.ok).toBe(true);
+    const data = env.data as { topic: string; markdown: string };
+    expect(data.topic).toBe('palettes');
+    expect(data.markdown.length).toBeGreaterThan(200);
+    await client.close();
+  });
+
+  test('L0 get_knowledge serves the aseprite-derived topics', async () => {
+    const client = await pairedClient('L0', 'knowledge-reader-aseprite');
+    for (const topic of ['shade', 'rig', 'tileset', 'concept', 'fix'] as const) {
+      const env = textEnvelope(await client.callTool({ name: 'get_knowledge', arguments: { topic } }));
+      expect(env.ok).toBe(true);
+      const data = env.data as { markdown: string };
+      expect(data.markdown.length).toBeGreaterThan(300);
+    }
+    await client.close();
+  });
+
+  test('palette library: index, exact id and keyword search', async () => {
+    const client = await pairedClient('L0', 'palette-browser');
+    const idx = textEnvelope(await client.callTool({ name: 'get_knowledge', arguments: { topic: 'palette_library' } }));
+    expect(idx.ok).toBe(true);
+    expect((idx.data as { count: number }).count).toBeGreaterThan(1000);
+
+    const exact = textEnvelope(await client.callTool({ name: 'get_knowledge', arguments: { topic: 'palette_library', style: 'pico8' } }));
+    expect(exact.ok).toBe(true);
+    const p = exact.data as { name: string; colors: string[] };
+    expect(p.colors.length).toBe(16);
+    expect(p.colors[0]).toBe('#000000');
+
+    const search = textEnvelope(await client.callTool({ name: 'get_knowledge', arguments: { topic: 'palette_library', style: 'gameboy' } }));
+    expect(search.ok).toBe(true);
+    expect((search.data as { markdown: string }).markdown.toLowerCase()).toContain('gameboy');
+    await client.close();
+  });
+
+  test('chain: library palette colors apply via set_palette', async () => {
+    // the documented flow: get_knowledge returns the exact hex list, the
+    // agent feeds it to the existing L1 set_palette relay — no new tool.
+    let applied: unknown = null;
+    toolResponders.set('set_palette', (args) => {
+      applied = args;
+      return { applied: (args.colors as string[]).length };
+    });
+    const client = await pairedClient('L2', 'palette-applier');
+    const lib = textEnvelope(await client.callTool({ name: 'get_knowledge', arguments: { topic: 'palette_library', style: 'pico8' } }));
+    const colors = (lib.data as { colors: string[] }).colors;
+    const env = textEnvelope(await client.callTool({ name: 'set_palette', arguments: { colors } }));
+    expect(env.ok).toBe(true);
+    expect(applied).toEqual({ colors });
+    await client.close();
+  });
+
+  test('unknown topic is rejected (zod catalog gate)', async () => {
+    // validation happens in the zod catalog BEFORE the handler, same as
+    // apply_motion_preset's enum: an unknown topic surfaces as isError.
+    const client = await pairedClient('L0', 'knowledge-reader-2');
+    const res = await client.callTool({ name: 'get_knowledge', arguments: { topic: 'sorcery' } });
+    const r = res as { isError?: boolean; content?: Array<{ type: string; text?: string }> };
+    expect(r.isError).toBe(true);
+    const text = r.content?.find((c) => c.type === 'text')?.text ?? '';
+    expect(text.toLowerCase()).toContain('topic');
+    await client.close();
+  });
+
+  test('L0 client cannot study (L1)', async () => {
+    const client = await pairedClient('L0', 'knowledge-reader-3');
+    const env = textEnvelope(await client.callTool({ name: 'study_reference', arguments: { pngBase64: 'aGVsbG8=' } }));
+    expect(env.ok).toBe(false);
+    expect(env.error?.code).toBe('permission_denied');
+    await client.close();
+  });
+
+  test('L1 study_reference round-trips into the learned index', async () => {
+    // 4x4 mirrored two-color sprite: cols 0/3 red, cols 1/2 blue
+    const w = 4;
+    const h = 4;
+    const rgba = new Uint8ClampedArray(w * h * 4);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4;
+        const red = x === 0 || x === 3;
+        rgba[i] = red ? 255 : 0;
+        rgba[i + 1] = 0;
+        rgba[i + 2] = red ? 0 : 255;
+        rgba[i + 3] = 255;
+      }
+    }
+    const png = await encodePng(w, h, rgba);
+    const pngBase64 = Buffer.from(png).toString('base64');
+
+    const client = await pairedClient('L1', 'style-student');
+    const env = textEnvelope(
+      await client.callTool({ name: 'study_reference', arguments: { pngBase64, styleName: 'test mirror style', notes: 'two-color mirror test' } })
+    );
+    expect(env.ok).toBe(true);
+    const data = env.data as { learnedId: string; palette: string[]; width: number; height: number; symmetry: number };
+    expect(data.width).toBe(4);
+    expect(data.height).toBe(4);
+    expect(data.palette.length).toBe(2);
+    expect(data.symmetry).toBe(100);
+
+    const idx = textEnvelope(await client.callTool({ name: 'get_knowledge', arguments: { topic: 'learned' } }));
+    expect(idx.ok).toBe(true);
+    expect((idx.data as { markdown: string }).markdown).toContain(data.learnedId);
     await client.close();
   });
 });

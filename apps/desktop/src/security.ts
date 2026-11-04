@@ -1,4 +1,4 @@
-import type { BrowserWindow, Session } from 'electron';
+import { app, type BrowserWindow, type Session } from 'electron';
 
 import type { Logger } from './logger';
 
@@ -24,6 +24,19 @@ const DEV_CSP_REPORT_ONLY = [
   "object-src 'none'",
 ].join('; ');
 
+const PACKAGED_CSP = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "font-src 'self' data:",
+  "connect-src 'self' ws://127.0.0.1:* http://127.0.0.1:* ws://localhost:* http://localhost:*",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+  "object-src 'none'",
+].join('; ');
+
 const LOCAL_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//i;
 
 export function installSessionHardening(win: BrowserWindow, logger: Logger): void {
@@ -40,7 +53,9 @@ export function installSessionHardening(win: BrowserWindow, logger: Logger): voi
   ses.webRequest.onHeadersReceived((details, callback) => {
     if (LOCAL_ORIGIN.test(details.url + '/')) {
       const headers = { ...(details.responseHeaders ?? {}) };
-      headers['Content-Security-Policy-Report-Only'] = [DEV_CSP_REPORT_ONLY];
+      headers[app.isPackaged ? 'Content-Security-Policy' : 'Content-Security-Policy-Report-Only'] = [
+        app.isPackaged ? PACKAGED_CSP : DEV_CSP_REPORT_ONLY,
+      ];
       callback({ responseHeaders: headers });
       return;
     }

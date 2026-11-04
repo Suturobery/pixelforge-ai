@@ -11,6 +11,15 @@ const W = 32
 const H = 32
 const API = process.env.PF_API ?? 'http://localhost:3000'
 
+{
+  const u = new URL(API)
+  const loopback = u.hostname === '127.0.0.1' || u.hostname === 'localhost' || u.hostname === '[::1]' || u.hostname === '::1'
+  if ((u.protocol !== 'http:' && u.protocol !== 'https:') || !loopback) {
+    console.error(`PF_API must be a loopback http(s) URL, got: ${API}`)
+    process.exit(2)
+  }
+}
+
 // colors from the project's default 16-swatch palette
 const C = {
   hat: '#ffcd75',

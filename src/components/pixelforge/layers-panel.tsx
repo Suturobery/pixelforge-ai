@@ -4,12 +4,30 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useEditor, getActiveFrame, getActiveClip } from '@/lib/pixelforge/store'
+import { useToast } from '@/hooks/use-toast'
 import type { Cel, Clip, Frame, Layer } from '@/lib/pixelforge/types'
 import { drawCelBuffer, renderFrameScaled } from '@/lib/pixelforge/render'
 import { Button } from '@/components/ui/button'
 import { Slider } from '@/components/ui/slider'
 import { Input } from '@/components/ui/input'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+
+const BLEND_MODES: Array<{ value: string; label: string }> = [
+  { value: 'normal', label: 'Normal' },
+  { value: 'multiply', label: 'Multiply' },
+  { value: 'screen', label: 'Screen' },
+  { value: 'overlay', label: 'Overlay' },
+  { value: 'darken', label: 'Darken' },
+  { value: 'lighten', label: 'Lighten' },
+]
 import {
   Eye,
   EyeOff,
@@ -19,6 +37,9 @@ import {
   Merge,
   ArrowUp,
   ArrowDown,
+  Lock,
+  LockOpen,
+  GripVertical,
 } from 'lucide-react'
 
 function LayerThumb({
@@ -48,7 +69,11 @@ function LayerThumb({
     const sctx = scratch.getContext('2d')
     if (!sctx) return
     drawCelBuffer(sctx, layer, cel, w, h, 1)
-    ctx.drawImage(scratch, 0, 0, 28, 28)
+    // aspect-fit — non-square canvases were being stretched to 28×28
+    const s = Math.min(28 / w, 28 / h)
+    const dw = Math.max(1, Math.round(w * s))
+    const dh = Math.max(1, Math.round(h * s))
+    ctx.drawImage(scratch, (28 - dw) / 2, (28 - dh) / 2, dw, dh)
   }, [layer, cel, w, h, tick])
   return (
     <canvas
@@ -70,6 +95,9 @@ function FrameChip({
   h,
   tick,
   onClick,
+  onDragStartFrame,
+  onDropFrame,
+  dropBefore,
 }: {
   clip: Clip
   frame: Frame
@@ -79,6 +107,12 @@ function FrameChip({
   h: number
   tick: number
   onClick: () => void
+  /** drag source: registers which frame (clipId + index) started the drag */
+  onDragStartFrame: (clipId: string, index: number) => void
+  /** drop target: reorder within a clip, or copy across clips */
+  onDropFrame: (targetClipId: string, targetIndex: number) => void
+  /** visual: this chip is the current drop insertion point */
+  dropBefore: boolean
 }) {
   const ref = useRef<HTMLCanvasElement>(null)
   useEffect(() => {
@@ -92,12 +126,26 @@ function FrameChip({
         <button
           type="button"
           onClick={onClick}
+          draggable
+          onDragStart={(e) => {
+            e.dataTransfer.effectAllowed = 'move'
+            e.dataTransfer.setData('text/pixelforge-frame', `${clip.id}:${index}`)
+            onDragStartFrame(clip.id, index)
+          }}
+          onDragOver={(e) => {
+            e.preventDefault()
+            e.dataTransfer.dropEffect = 'move'
+          }}
+          onDrop={(e) => {
+            e.preventDefault()
+            onDropFrame(clip.id, index)
+          }}
           className={`relative shrink-0 rounded border p-0.5 transition-colors ${
             active
               ? 'border-teal-400 bg-teal-500/10 ring-1 ring-teal-400/50'
               : 'border-zinc-700 bg-zinc-900 hover:border-zinc-500'
-          }`}
-          aria-label={`Frame ${index + 1}`}
+          } ${dropBefore ? 'ring-2 ring-teal-400/70' : ''}`}
+          aria-label={`Frame ${index + 1}${dropBefore ? ' (drop target)' : ''}`}
           aria-pressed={active}
         >
           <canvas
@@ -110,7 +158,7 @@ function FrameChip({
           <span className="absolute bottom-0 right-0.5 font-mono text-[9px] text-zinc-200">{index + 1}</span>
         </button>
       </TooltipTrigger>
-      <TooltipContent side="bottom">Frame {index + 1}</TooltipContent>
+      <TooltipContent side="bottom">Frame {index + 1} — drag to reorder or copy to another clip</TooltipContent>
     </Tooltip>
   )
 }
@@ -129,8 +177,16 @@ export function LayersPanel() {
   const duplicateLayer = useEditor((s) => s.duplicateLayer)
   const mergeDown = useEditor((s) => s.mergeDown)
   const moveLayer = useEditor((s) => s.moveLayer)
+  const reorderLayer = useEditor((s) => s.reorderLayer)
   const setLayerProp = useEditor((s) => s.setLayerProp)
+  const dragFrame = useEditor((s) => s.dragFrame)
+  const { toast } = useToast()
   const [renaming, setRenaming] = useState<string | null>(null)
+  // frame drag-and-drop: source (clipId+index) + current drop insertion point
+  const [dragSrc, setDragSrc] = useState<{ clipId: string; index: number } | null>(null)
+  const [dropIdx, setDropIdx] = useState<number | null>(null)
+  const [dragId, setDragId] = useState<string | null>(null)
+  const [overRow, setOverRow] = useState<number | null>(null)
 
   const frame = getActiveFrame(useEditor.getState())
   const clip = getActiveClip(useEditor.getState())
@@ -146,7 +202,7 @@ export function LayersPanel() {
           <span className="font-mono text-xs uppercase tracking-wider text-zinc-300">
             Layers · {clip.layers.length} layer{clip.layers.length === 1 ? '' : 's'}
           </span>
-          <Button variant="ghost" size="icon" className="h-7 w-7 text-zinc-300 hover:text-teal-300" onClick={addLayer} aria-label="Add layer">
+          <Button variant="ghost" size="icon" className="h-7 w-7 text-zinc-300 hover:text-zinc-100" onClick={addLayer} aria-label="Add layer">
             <Plus className="h-4 w-4" />
           </Button>
         </div>
@@ -160,7 +216,7 @@ export function LayersPanel() {
             <Button
               variant="ghost"
               size="icon"
-              className="h-6 w-6 text-zinc-300 hover:text-teal-300"
+              className="h-6 w-6 text-zinc-300 hover:text-zinc-100"
               onClick={() => addFrame(false)}
               aria-label="Add empty frame after current"
             >
@@ -179,6 +235,19 @@ export function LayersPanel() {
                 h={project.height}
                 tick={renderTick}
                 onClick={() => selectFrame(i)}
+                onDragStartFrame={(clipId, idx) => setDragSrc({ clipId, index: idx })}
+                onDropFrame={(targetClipId, targetIndex) => {
+                  if (dragSrc) {
+                    dragFrame(dragSrc.clipId, dragSrc.index, targetClipId, targetIndex)
+                    toast({
+                      title: dragSrc.clipId === targetClipId ? 'Frame moved' : 'Frame copied to clip',
+                      description: dragSrc.clipId === targetClipId ? `Frame ${dragSrc.index + 1} → position ${targetIndex + 1}.` : `Frame ${dragSrc.index + 1} inserted at position ${targetIndex + 1}.`,
+                    })
+                  }
+                  setDragSrc(null)
+                  setDropIdx(null)
+                }}
+                dropBefore={dropIdx === i && !!dragSrc}
               />
             ))}
           </div>
@@ -187,18 +256,39 @@ export function LayersPanel() {
         {/* min-h floor: flex-1 + min-h-0 lets short viewports collapse this list
             to 0px, hiding the layer rows entirely (audit bug #3) */}
         <div className="pixelforge-scroll min-h-[76px] flex-1 overflow-y-auto">
-          {layers.map((layer) => {
+          {layers.map((layer, row) => {
             const isActive = layer.id === active?.id
             return (
               <div
                 key={layer.id}
+                draggable
+                onDragStart={(e) => {
+                  setDragId(layer.id)
+                  e.dataTransfer.effectAllowed = 'move'
+                }}
+                onDragOver={(e) => {
+                  e.preventDefault()
+                  e.dataTransfer.dropEffect = 'move'
+                  setOverRow(row)
+                }}
+                onDragLeave={() => setOverRow((cur) => (cur === row ? null : cur))}
+                onDrop={(e) => {
+                  e.preventDefault()
+                  // rows render top-first; the stack index runs bottom-up
+                  if (dragId && dragId !== layer.id) reorderLayer(dragId, layers.length - 1 - row)
+                  setDragId(null)
+                  setOverRow(null)
+                }}
                 className={`group flex cursor-pointer items-center gap-2 border-b border-zinc-800/60 px-3 py-1.5 ${
                   isActive ? 'bg-teal-500/10' : 'hover:bg-zinc-900'
+                } ${dragId === layer.id ? 'opacity-40' : ''} ${
+                  overRow === row && dragId && dragId !== layer.id ? 'border-t-2 border-t-zinc-300' : ''
                 }`}
                 onClick={() => selectLayer(layer.id)}
                 role="button"
                 aria-pressed={isActive}
               >
+                <GripVertical className="h-3.5 w-3 shrink-0 cursor-grab text-zinc-600" aria-hidden />
                 <button
                   type="button"
                   className="text-zinc-400 hover:text-zinc-100"
@@ -238,7 +328,45 @@ export function LayersPanel() {
                     {layer.name}
                   </span>
                 )}
-                <span className="font-mono text-[10px] text-zinc-400">{Math.round(layer.opacity * 100)}%</span>
+                <button
+                  type="button"
+                  className={`shrink-0 ${layer.locked ? 'text-amber-400/90' : 'text-zinc-600 opacity-0 transition-opacity hover:text-zinc-300 group-hover:opacity-100'}`}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setLayerProp(layer.id, { locked: !layer.locked })
+                  }}
+                  aria-label={layer.locked ? `Unlock ${layer.name}` : `Lock ${layer.name}`}
+                  aria-pressed={!!layer.locked}
+                >
+                  {layer.locked ? <Lock className="h-3.5 w-3.5" /> : <LockOpen className="h-3.5 w-3.5" />}
+                </button>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <button
+                      type="button"
+                      className="w-7 shrink-0 text-right font-mono text-[10px] text-zinc-400 hover:text-zinc-200"
+                      aria-label={`Opacity of ${layer.name} — click to adjust`}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {Math.round(layer.opacity * 100)}%
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent side="left" align="center" className="w-44 p-3" onClick={(e) => e.stopPropagation()}>
+                    <div className="flex items-center justify-between">
+                      <p className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400">Opacity</p>
+                      <span className="font-mono text-[10px] text-zinc-300">{Math.round(layer.opacity * 100)}%</span>
+                    </div>
+                    <Slider
+                      value={[Math.round(layer.opacity * 100)]}
+                      min={0}
+                      max={100}
+                      step={5}
+                      onValueChange={(v) => setLayerProp(layer.id, { opacity: (v[0] ?? 100) / 100 })}
+                      aria-label={`${layer.name} opacity`}
+                      className="mt-2.5"
+                    />
+                  </PopoverContent>
+                </Popover>
               </div>
             )
           })}
@@ -259,6 +387,21 @@ export function LayersPanel() {
               <span className="w-8 text-right font-mono text-[10px] text-zinc-300">
                 {Math.round(active.opacity * 100)}%
               </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="w-12 shrink-0 font-mono text-[10px] text-zinc-400">BLEND</span>
+              <Select value={active.blend ?? 'normal'} onValueChange={(v) => setLayerProp(active.id, { blend: v })}>
+                <SelectTrigger size="sm" aria-label="Layer blend mode" className="h-6 w-full border-zinc-800 bg-zinc-900 font-mono text-[11px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {BLEND_MODES.map((m) => (
+                    <SelectItem key={m.value} value={m.value} className="font-mono text-xs">
+                      {m.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className="flex gap-1">
               <Tooltip>

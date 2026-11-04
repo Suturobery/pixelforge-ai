@@ -19,7 +19,7 @@
 
 export interface McpToolInfo {
   name: string
-  tier: 'L0' | 'L1'
+  tier: 'L0' | 'L1' | 'L2' | 'L3'
   description: string
   example: Record<string, unknown>
 }
@@ -82,8 +82,8 @@ export const MCP_TOOLS: McpToolInfo[] = [
   {
     name: 'create_project',
     tier: 'L1',
-    description: 'Replace the active document with a new empty project (rejected with dirty_project when unsaved work exists).',
-    example: { name: 'hero-idle', width: 32, height: 32, fps: 8 },
+    description: 'Replace the active document with a new empty project. Requires confirm:true; rejected with dirty_project when unsaved work exists.',
+    example: { name: 'hero-idle', width: 32, height: 32, fps: 8, confirm: true },
   },
   {
     name: 'open_project',
@@ -111,7 +111,7 @@ export const MCP_TOOLS: McpToolInfo[] = [
   },
   {
     name: 'delete_frame',
-    tier: 'L1',
+    tier: 'L2',
     description: 'Delete a frame (trash-backed: restore_from_trash / undo recover it).',
     example: { frameIndex: 2 },
   },
@@ -120,6 +120,30 @@ export const MCP_TOOLS: McpToolInfo[] = [
     tier: 'L1',
     description: 'Restore a deleted frame/layer/clip from the project trash.',
     example: { entryId: '<trash entry id>' },
+  },
+  {
+    name: 'purge_trash',
+    tier: 'L2',
+    description: 'Permanently remove trash entries (omit entryId to empty the whole trash). Purged entries cannot be restored.',
+    example: {},
+  },
+  {
+    name: 'resize_canvas',
+    tier: 'L2',
+    description: 'Change canvas size (16–256). Content shifts (anchor top-left/center), never rescales; out-of-bounds pixels cropped. One undoable step.',
+    example: { width: 96, height: 64, anchor: 'center' },
+  },
+  {
+    name: 'export_sheet',
+    tier: 'L2',
+    description: 'Export a clip as ONE horizontal sprite-sheet PNG (native size, layers composited). Returns base64 data URL.',
+    example: { clipName: 'walk', padding: 1 },
+  },
+  {
+    name: 'export_gif',
+    tier: 'L2',
+    description: 'Export a clip as an animated GIF (base64 data URL, bg-flattened, clip durations).',
+    example: { clipName: 'walk', scale: 2 },
   },
   {
     name: 'set_pixels',
@@ -135,7 +159,7 @@ export const MCP_TOOLS: McpToolInfo[] = [
   },
   {
     name: 'replace_color',
-    tier: 'L1',
+    tier: 'L2',
     description: 'Replace every pixel of one color on the target cel with another.',
     example: { from: '#ff0000', to: '#00ff00' },
   },
@@ -171,7 +195,7 @@ export const MCP_TOOLS: McpToolInfo[] = [
   },
   {
     name: 'delete_clip',
-    tier: 'L1',
+    tier: 'L2',
     description: 'Remove a clip (trash-backed).',
     example: {},
   },
@@ -189,7 +213,7 @@ export const MCP_TOOLS: McpToolInfo[] = [
   },
   {
     name: 'delete_layer',
-    tier: 'L1',
+    tier: 'L2',
     description: 'Remove a layer and its cels (trash-backed).',
     example: {},
   },
@@ -219,7 +243,7 @@ export const MCP_TOOLS: McpToolInfo[] = [
   },
   {
     name: 'set_palette',
-    tier: 'L1',
+    tier: 'L2',
     description: 'Replace the whole palette (1–256 colors) in one undoable step.',
     example: { colors: ['#0d0d0d', '#f4f4f4', '#14b8a6'] },
   },
@@ -228,6 +252,60 @@ export const MCP_TOOLS: McpToolInfo[] = [
     tier: 'L1',
     description: 'Import a base64 PNG (≤2 MB, exact canvas size) as a NEW layer on the target frame.',
     example: { name: 'imported', pngBase64: '<base64 PNG>' },
+  },
+  {
+    name: 'import_frame_strip',
+    tier: 'L1',
+    description: 'Import a sprite-sheet PNG (columns × rows of canvas-sized cells) as a NEW animated clip — one layer per frame, one undo step.',
+    example: { name: 'run-cycle', columns: 4, rows: 3, fps: 12, pngBase64: '<base64 PNG>' },
+  },
+  {
+    name: 'generate_sprite',
+    tier: 'L3',
+    description: 'PAID: generate pixel-art candidates from a text prompt via the configured provider (L3 credential + per-call approval). Review with get_candidates, import with accept_candidate.',
+    example: { prompt: 'treasure chest, gold trim', count: 2 },
+  },
+  {
+    name: 'beautify_layer',
+    tier: 'L1',
+    description: 'One-call polish: 1px outline around the active layer + directional shading on bottom/right edges (light from top-left). Undoable.',
+    example: { outline: '#1a1c2c', shade: true },
+  },
+  {
+    name: 'harvest_palette',
+    tier: 'L1',
+    description: 'Steal the best colors from any image (median cut, dark→light). Apply with set_palette or add them one by one.',
+    example: { pngBase64: '<base64 PNG>', maxColors: 16 },
+  },
+  {
+    name: 'macro_save',
+    tier: 'L1',
+    description: 'Save a named sequence of tool calls (1–50 steps) for replay. Stored in this browser.',
+    example: { name: 'outline-blue', steps: [{ tool: 'add_layer', args: { name: 'lineart' } }, { tool: 'set_pixels', args: { pixels: [{ x: 1, y: 1 }], color: '#000000' } }] },
+  },
+  {
+    name: 'macro_list',
+    tier: 'L0',
+    description: 'List saved macros (name, step count, saved time).',
+    example: {},
+  },
+  {
+    name: 'macro_run',
+    tier: 'L1',
+    description: 'Replay a saved macro step-by-step. Stops on the first failed step unless stopOnError=false.',
+    example: { name: 'outline-blue' },
+  },
+  {
+    name: 'macro_delete',
+    tier: 'L1',
+    description: 'Delete a saved macro.',
+    example: { name: 'outline-blue' },
+  },
+  {
+    name: 'batch',
+    tier: 'L1',
+    description: 'Run 1–50 tool calls as ONE undoable transaction (all-or-nothing: any failure rolls everything back). One round-trip, one undo entry.',
+    example: { steps: [{ tool: 'set_pixels', args: { pixels: [{ x: 1, y: 1 }], color: '#000000' } }, { tool: 'beautify_layer', args: { outline: '#151111' } }] },
   },
   {
     name: 'accept_candidate',
@@ -250,7 +328,7 @@ export const MCP_TOOLS: McpToolInfo[] = [
   {
     name: 'suggest_motion_preset',
     tier: 'L0',
-    description: 'Propose a motion preset (Idle/Walk/Run/Attack/Jump) + parameters from a natural-language prompt. Pure helper, $0, deterministic.',
+    description: 'Propose a motion preset (Idle/Walk/Run/Attack/Jump/Spin/Duck/Hurt/Swim/Death) + parameters from a natural-language prompt. Pure helper, $0, deterministic.',
     example: { prompt: 'make the hero attack with a sword' },
   },
   {
@@ -262,8 +340,14 @@ export const MCP_TOOLS: McpToolInfo[] = [
   {
     name: 'apply_motion_preset',
     tier: 'L1',
-    description: 'Apply a deterministic motion preset (idle/walk/run/attack/jump) through the composer: integer-pixel offsets, R10 amplitude scaling, anchor-frame alignment. Commits atomically to a new clip or overwrite:true frames; returns the apply report + QA issues + frame-1 preview PNG.',
+    description: 'Apply a deterministic motion preset (10: idle/walk/run/attack/jump/spin/duck/hurt/swim/death) through the composer: integer-pixel offsets, R10 amplitude scaling, anchor-frame alignment. Commits atomically to a new clip or overwrite:true frames; returns the apply report + QA issues + frame-1 preview PNG.',
     example: { preset: 'walk', frameCount: 4, targetName: 'hero-walk' },
+  },
+  {
+    name: 'get_approvals',
+    tier: 'L0',
+    description: 'Read the paid-op approval queue (pending + recent decisions). Approve/Deny happens only in the editor UI — no MCP tool can approve spend.',
+    example: {},
   },
   {
     name: 'undo',

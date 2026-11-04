@@ -232,6 +232,50 @@ describe('failed-command rollback', () => {
       ).toThrow(CommandError);
     });
   });
+
+  test('async transaction groups children into ONE undoable entry', async () => {
+    const { bus, project } = makeBus();
+    const clipId = project.clips[0].id;
+
+    const out = await bus.transaction('async batch', 'mcp', async () => {
+      bus.execute('frame.add', { clipId, copy: true }, 'mcp');
+      bus.execute('palette.addColor', { hex: '#112233' }, 'mcp');
+      await Promise.resolve(); // async boundary inside the transaction
+      bus.execute('palette.addColor', { hex: '#445566' }, 'mcp');
+      return 'done';
+    });
+    expect(out).toBe('done');
+    expect(bus.historyStats().undoDepth).toBe(1);
+    expect(bus.getProject().palette).toContain('#112233');
+    expect(bus.undo().ok).toBeTrue();
+    expect(bus.getProject().clips[0].frames).toHaveLength(1);
+    expect(bus.getProject().palette).not.toContain('#112233');
+  });
+
+  test('async transaction rolls back ALL children on rejection', async () => {
+    const { bus, project } = makeBus();
+    const clipId = project.clips[0].id;
+    const startDoc = bus.getProject();
+    const startSnapshot = cloneProject(startDoc);
+
+    await expect(
+      bus.transaction('async batch', 'mcp', async () => {
+        bus.execute('frame.add', { clipId, copy: true }, 'mcp');
+        bus.execute('palette.addColor', { hex: '#112233' }, 'mcp');
+        await Promise.resolve();
+        throw new Error('async failure');
+      }),
+    ).rejects.toThrow('async failure');
+
+    expect(projectEquals(bus.getProject(), startSnapshot)).toBeTrue();
+    expect(bus.historyStats().undoDepth).toBe(0);
+    expect(bus.getProject()).toBe(startDoc);
+    // bus usable again after rollback
+    bus.transaction('after', 'ui', () => {
+      bus.execute('palette.addColor', { hex: '#010203' }, 'ui');
+    });
+    expect(bus.getProject().palette).toContain('#010203');
+  });
 });
 
 describe('document replacement', () => {

@@ -119,4 +119,11 @@ export class RateLimiter {
   reset(): void {
     this.windows.clear();
   }
+
+  /** Used count + seconds until the sliding window resets, for one key. */
+  usage(key: string): { used: number; resetInSec: number } | null {
+    const w = this.windows.get(key);
+    if (!w) return null;
+    return { used: w.count, resetInSec: Math.max(0, Math.ceil((w.startedAt + 60_000 - Date.now()) / 1000)) };
+  }
 }

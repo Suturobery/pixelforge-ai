@@ -42,7 +42,11 @@ export function drawCelBuffer(
   if (!cel) return // absent cel = fully transparent (C2)
   const img = new ImageData(new Uint8ClampedArray(cel.buffer), w, h)
   const prev = ctx.globalAlpha
+  const prevOp = ctx.globalCompositeOperation
   ctx.globalAlpha = layer.visible ? layer.opacity * alpha : 0
+  // layer blend mode maps 1:1 onto canvas composite operations
+  ctx.globalCompositeOperation =
+    layer.blend && layer.blend !== 'normal' ? layer.blend : prevOp
   if (ctx.globalAlpha > 0) {
     const scratch = getScratch(w, h)
     scratch.clearRect(0, 0, w, h)
@@ -50,6 +54,7 @@ export function drawCelBuffer(
     ctx.drawImage(scratchCanvas as HTMLCanvasElement, 0, 0)
   }
   ctx.globalAlpha = prev
+  ctx.globalCompositeOperation = prevOp
 }
 
 /** One onion-skin ghost to draw beneath the active frame (Task 6 §4). */

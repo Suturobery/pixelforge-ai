@@ -100,6 +100,7 @@ export function createMainWindow(logger: Logger, settings?: SettingsStore): Brow
     title: 'PixelForge AI',
     backgroundColor: '#09090b', // zinc-950 studio dark
     autoHideMenuBar: true,
+    icon: app.isPackaged ? undefined : path.join(app.getAppPath(), 'build', 'icon.ico'),
     webPreferences: {
       preload: preloadPath(),
       contextIsolation: true,
@@ -127,14 +128,20 @@ export function createMainWindow(logger: Logger, settings?: SettingsStore): Brow
 
   // --- navigation & popup hardening ---
   win.webContents.setWindowOpenHandler(({ url }) => {
-    // No renderer-initiated popups; http(s) links go to the OS browser instead.
-    if (/^https?:\/\//i.test(url)) void shell.openExternal(url);
+    // No renderer-initiated popups; http(s) and mailto links go to the OS.
+    if (/^https?:\/\//i.test(url) || /^mailto:/i.test(url)) void shell.openExternal(url);
     logger.warn('window.open.denied', { url });
     return { action: 'deny' };
   });
 
   const allowedPrefix = allowedNavigationPrefix(target);
   win.webContents.on('will-navigate', (event, url) => {
+    // mailto: feedback links open in the OS mail client — never in-app
+    if (/^mailto:/i.test(url)) {
+      event.preventDefault();
+      void shell.openExternal(url);
+      return;
+    }
     if (!url.startsWith(allowedPrefix)) {
       event.preventDefault();
       logger.warn('navigation.blocked', { url, allowedPrefix });

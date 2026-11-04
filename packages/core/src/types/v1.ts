@@ -15,6 +15,10 @@ export interface V1SerializedLayer {
   name: string;
   visible: boolean;
   opacity: number;
+  /** Optional v1.1 extension — classic v1 readers ignore it. */
+  locked?: boolean;
+  /** Optional v1.1 extension — compositing mode. */
+  blend?: 'normal' | 'multiply' | 'screen' | 'overlay' | 'darken' | 'lighten';
   png: string;
 }
 

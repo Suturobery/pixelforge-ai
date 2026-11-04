@@ -1,7 +1,8 @@
 import fsp from 'node:fs/promises';
+import fs from 'node:fs';
 import path from 'node:path';
 
-import { BrowserWindow, app, dialog, ipcMain } from 'electron';
+import { BrowserWindow, Notification, app, clipboard, dialog, ipcMain, shell } from 'electron';
 
 import type { Logger } from '../logger';
 import type {
@@ -17,19 +18,87 @@ import type {
 
 const MAX_FILTERS = 8;
 const MAX_EXTENSIONS_PER_FILTER = 16;
-const EXT_RE = /^[a-z0-9]{1,8}$/i;
+// Electron accepts long extensions ('pixelforgeproj' = 14 chars) and the
+// '*' all-files wildcard; the old 8-char cap rejected valid project filters.
+const EXT_RE = /^\*$|^[a-z0-9][a-z0-9.]{0,31}$/i;
 const MAX_PATH_LEN = 1024;
+const MAX_CLIPBOARD_TEXT_LEN = 1024 * 1024;
 /** Single archive size cap (256 MB) — way beyond any legit sprite project. */
 const MAX_WRITE_BYTES = 256 * 1024 * 1024;
+const MAX_TRUSTED_PROJECTS = 32;
 
 /**
  * Session fs allowlist: directories whose files the renderer may touch via
- * pf:fs-*. Roots are added ONLY by dialog picks and explicit registerPath —
- * i.e. by flows where a human (or the dev harness) chose the location.
+ * pf:fs-*. Roots are added only by native picker results or a persisted,
+ * picker-approved recent project capability.
  * Every fs call re-resolves and re-checks, so `..` traversal and absolute
  * escapes cannot leave the registered roots.
  */
 const allowedRoots = new Set<string>();
+const trustedProjectPaths = new Set<string>();
+let trustedProjectsLoaded = false;
+
+function trustedProjectsFile(): string {
+  return path.join(app.getPath('userData'), 'trusted-project-paths.json');
+}
+
+function validProjectPath(value: string): boolean {
+  return value.toLowerCase().endsWith('.pixelforgeproj');
+}
+
+function loadTrustedProjects(): void {
+  if (trustedProjectsLoaded) return;
+  trustedProjectsLoaded = true;
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(trustedProjectsFile(), 'utf8'));
+    if (!Array.isArray(parsed)) return;
+    for (const item of parsed.slice(0, MAX_TRUSTED_PROJECTS)) {
+      if (typeof item === 'string' && item.length <= MAX_PATH_LEN && validProjectPath(item)) {
+        trustedProjectPaths.add(path.resolve(item));
+      }
+    }
+  } catch {
+    // Missing/corrupt recents are a convenience failure, never a file-access bypass.
+  }
+}
+
+function rememberTrustedProject(filePath: string): void {
+  if (!validProjectPath(filePath)) return;
+  loadTrustedProjects();
+  const resolved = path.resolve(filePath);
+  trustedProjectPaths.delete(resolved);
+  trustedProjectPaths.add(resolved);
+  const recent = [...trustedProjectPaths].slice(-MAX_TRUSTED_PROJECTS).reverse();
+  trustedProjectPaths.clear();
+  for (const item of recent) trustedProjectPaths.add(item);
+  persistTrustedProjects();
+}
+
+function persistTrustedProjects(): void {
+  try {
+    fs.mkdirSync(path.dirname(trustedProjectsFile()), { recursive: true });
+    fs.writeFileSync(trustedProjectsFile(), JSON.stringify([...trustedProjectPaths], null, 2), { mode: 0o600 });
+  } catch {
+    // Keep the in-memory capability for this run if persistence is unavailable.
+  }
+}
+
+function requireTrustedProjectPath(raw: unknown): string {
+  if (typeof raw !== 'string' || raw.length === 0 || raw.length > MAX_PATH_LEN) {
+    throw new Error('recent project path is invalid');
+  }
+  loadTrustedProjects();
+  const resolved = path.resolve(raw);
+  if (!trustedProjectPaths.has(resolved)) {
+    throw new Error('recent project was not approved through a native file picker');
+  }
+  return resolved;
+}
+
+function forgetTrustedProject(filePath: string): void {
+  trustedProjectPaths.delete(filePath);
+  persistTrustedProjects();
+}
 
 function registerRootForFile(filePath: string): string | null {
   const dir = path.resolve(path.dirname(filePath));
@@ -77,6 +146,16 @@ export function registerBridgeHandlers(logger: Logger): void {
     isDev: !app.isPackaged,
     locale: app.getLocale(),
   }));
+
+  // The renderer runs in an isolated, loopback-served context where the web
+  // Clipboard API is not consistently available. Keep native clipboard access
+  // narrow: text only, capped in size, and write-only.
+  ipcMain.handle('pf:clipboard-write', (_event, raw: unknown): void => {
+    if (typeof raw !== 'string' || raw.length > MAX_CLIPBOARD_TEXT_LEN) {
+      throw new Error('clipboard text must be a string up to 1 MB');
+    }
+    clipboard.writeText(raw);
+  });
 
   // --- dialogs (Task 1 surface kept; Task 4 pick flows add registration) ---
 
@@ -136,6 +215,7 @@ export function registerBridgeHandlers(logger: Logger): void {
         : await dialog.showOpenDialog({ properties: ['openFile'], filters: options.filters, defaultPath: options.defaultPath });
       if (!result.canceled && result.filePaths[0]) {
         const root = registerRootForFile(result.filePaths[0]);
+        rememberTrustedProject(result.filePaths[0]);
         logger.info('project.pickOpen', { path: result.filePaths[0], root });
       }
       return { canceled: result.canceled, paths: result.filePaths };
@@ -153,20 +233,156 @@ export function registerBridgeHandlers(logger: Logger): void {
       const picked = result.canceled ? null : (result.filePath ?? null);
       if (picked) {
         const root = registerRootForFile(picked);
+        rememberTrustedProject(picked);
         logger.info('project.pickSave', { path: picked, root });
       }
       return { canceled: result.canceled, path: picked };
     },
   );
 
-  ipcMain.handle('pf:project-register-path', (_event, raw: unknown): BridgeRegisterResult => {
-    if (typeof raw !== 'string' || raw.length === 0 || raw.length > MAX_PATH_LEN) {
-      throw new Error('registerPath requires a path string');
+  // Task 8: native confirm — Electron does NOT support window.confirm in the
+  // renderer, so desktop flows needing a yes/no guard call this instead.
+  ipcMain.handle(
+    'pf:confirm',
+    (event, raw: unknown): boolean => {
+      const p = (raw ?? {}) as { message?: unknown; detail?: unknown };
+      const message = typeof p.message === 'string' && p.message ? p.message : 'Are you sure?';
+      const detail = typeof p.detail === 'string' ? p.detail : undefined;
+      const parent = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+      const opts = {
+        type: 'warning' as const,
+        buttons: ['Cancel', 'OK'],
+        defaultId: 1,
+        cancelId: 0,
+        message,
+        ...(detail ? { detail } : {}),
+      };
+      const choice = parent ? dialog.showMessageBoxSync(parent, opts) : dialog.showMessageBoxSync(opts);
+      return choice === 1;
+    },
+  );
+
+  // OS notification for background events the user would otherwise miss while
+  // the window is minimized (AI approval requests, finished generation jobs).
+  ipcMain.handle('pf:notify', (event, raw: unknown): { ok: boolean; reason?: string } => {
+    const p = (raw ?? {}) as { title?: unknown; body?: unknown };
+    const title = typeof p.title === 'string' && p.title ? p.title.slice(0, 120) : 'PixelForge AI';
+    const body = typeof p.body === 'string' ? p.body.slice(0, 300) : '';
+    if (!Notification.isSupported()) return { ok: false, reason: 'unsupported' };
+    try {
+      const n = new Notification({ title, body: body || undefined });
+      n.on('click', () => {
+        const win = BrowserWindow.fromWebContents(event.sender);
+        if (win) {
+          if (win.isMinimized()) win.restore();
+          win.focus();
+        }
+      });
+      n.show();
+      return { ok: true };
+    } catch (err) {
+      logger.warn('notify.failed', { err: String(err) });
+      return { ok: false, reason: 'failed' };
     }
-    const resolved = path.resolve(raw);
+  });
+
+  // Read-only tail of today's main log — powers "attach app logs" in the
+  // Help & feedback report. Hard-capped so a chatty log can't balloon the
+  // report or the IPC payload.
+  ipcMain.handle('pf:logs-tail', (): { ok: boolean; text?: string; file?: string; error?: string } => {
+    try {
+      const file = logger.file;
+      const MAX = 48 * 1024;
+      const stat = fs.statSync(file);
+      const fd = fs.openSync(file, 'r');
+      try {
+        const len = Math.min(stat.size, MAX);
+        const buf = Buffer.alloc(len);
+        fs.readSync(fd, buf, 0, len, Math.max(0, stat.size - MAX));
+        const text = buf.toString('utf8').split(/\r?\n/).slice(-200).join('\n');
+        return { ok: true, text, file: path.basename(file) };
+      } finally {
+        fs.closeSync(fd);
+      }
+    } catch (err) {
+      return { ok: false, error: String(err instanceof Error ? err.message : err).slice(0, 120) };
+    }
+  });
+
+  // Recents are capabilities, not arbitrary renderer paths. Only files the
+  // user previously selected through a native picker are accepted after a
+  // restart; this prevents a compromised renderer from granting itself access
+  // to any directory on the machine.
+  ipcMain.handle('pf:project-open-recent', (_event, raw: unknown): BridgeRegisterResult => {
+    const resolved = requireTrustedProjectPath(raw);
     const root = registerRootForFile(resolved);
-    logger.info('project.registerPath', { path: resolved, root });
+    logger.info('project.openRecent', { path: resolved, root });
     return { ok: true, root };
+  });
+
+  // Remove only the convenience/capability entry. The user's project file
+  // remains untouched on disk and can always be picked again later.
+  ipcMain.handle('pf:project-forget-recent', (_event, raw: unknown): void => {
+    if (typeof raw !== 'string' || raw.length === 0 || raw.length > MAX_PATH_LEN || !validProjectPath(raw)) {
+      throw new Error('recent project path is invalid');
+    }
+    // Forgetting only REDUCES local access; permit it even for an old/stale
+    // renderer recent that predates the trusted-path file. Opening/deleting
+    // still require a native-picker capability.
+    loadTrustedProjects();
+    const resolved = path.resolve(raw);
+    forgetTrustedProject(resolved);
+    logger.info('project.forgetRecent', { path: resolved });
+  });
+
+  // Disk deletion is deliberately recoverable and independently confirmed in
+  // the MAIN process. A renderer cannot permanently unlink an arbitrary path:
+  // this accepts only a prior native-picker capability and sends it to the OS
+  // Recycle Bin/Trash rather than bypassing recovery.
+  ipcMain.handle('pf:project-trash-recent', async (event, raw: unknown): Promise<{ trashed: boolean }> => {
+    const resolved = requireTrustedProjectPath(raw);
+    let stat: fs.Stats;
+    try {
+      stat = fs.lstatSync(resolved);
+    } catch {
+      throw new Error('The project file no longer exists. Remove it from Recents instead.');
+    }
+    if (!stat.isFile()) throw new Error('Only a saved project file can be moved to the Recycle Bin.');
+    const parent = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+    const result = parent
+      ? await dialog.showMessageBox(parent, {
+          type: 'warning',
+          buttons: ['Cancel', 'Move to Recycle Bin'],
+          defaultId: 0,
+          cancelId: 0,
+          noLink: true,
+          message: 'Move this project to the Recycle Bin?',
+          detail: resolved,
+        })
+      : await dialog.showMessageBox({
+          type: 'warning',
+          buttons: ['Cancel', 'Move to Recycle Bin'],
+          defaultId: 0,
+          cancelId: 0,
+          noLink: true,
+          message: 'Move this project to the Recycle Bin?',
+          detail: resolved,
+        });
+    if (result.response !== 1) return { trashed: false };
+    await shell.trashItem(resolved);
+    forgetTrustedProject(resolved);
+    logger.info('project.trashRecent', { path: resolved });
+    return { trashed: true };
+  });
+
+  // A Save/rename can produce a new filename inside an already picker-approved
+  // root. Persist only such an existing capability; this never grants a new
+  // folder or lets renderer code choose an arbitrary disk location.
+  ipcMain.handle('pf:project-remember-current', (_event, raw: unknown): BridgeRegisterResult => {
+    const resolved = assertAllowed(raw);
+    if (!validProjectPath(resolved)) throw new Error('project file must use the .pixelforgeproj extension');
+    rememberTrustedProject(resolved);
+    return { ok: true, root: path.dirname(resolved) };
   });
 
   // --- Task 7: export destinations -----------------------------------------
@@ -250,9 +466,9 @@ export function registerBridgeHandlers(logger: Logger): void {
 
   logger.info('bridge.handlers.registered', {
     channels: [
-      'pf:ping', 'pf:app-info', 'pf:dialog-open', 'pf:dialog-save',
-      'pf:project-pick-open', 'pf:project-pick-save', 'pf:project-register-path',
-      'pf:export-pick-dir',
+      'pf:ping', 'pf:app-info', 'pf:clipboard-write', 'pf:dialog-open', 'pf:dialog-save',
+      'pf:project-pick-open', 'pf:project-pick-save', 'pf:project-open-recent', 'pf:project-forget-recent', 'pf:project-trash-recent', 'pf:project-remember-current',
+      'pf:confirm', 'pf:notify', 'pf:logs-tail', 'pf:export-pick-dir',
       'pf:fs-read', 'pf:fs-write', 'pf:fs-rename', 'pf:fs-unlink',
       'pf:fs-exists', 'pf:fs-mkdir', 'pf:fs-listdir', 'pf:fs-stat',
     ],

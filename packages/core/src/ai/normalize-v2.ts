@@ -682,6 +682,26 @@ export function medianCutPalette(
 }
 
 /**
+ * Palette harvest: extract the best `maxColors` from any RGBA image
+ * (median cut over opaque pixels) as hex strings, sorted dark → light.
+ * The one-call "steal this image's colors" helper.
+ */
+export function harvestPalette(
+  buf: Uint8Array | Uint8ClampedArray,
+  maxColors = 16,
+): string[] {
+  const rgb = medianCutPalette(buf, maxColors);
+  return rgb
+    .map(([r, g, b]) => {
+      const hexv = `#${[r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+      const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      return { hexv, lum };
+    })
+    .sort((p, q) => p.lum - q.lum)
+    .map((p) => p.hexv);
+}
+
+/**
  * OKLab quantize: map every opaque pixel to its nearest palette color in
  * OKLab space (perceptual — §3.3 step 5). Alpha is preserved. Deterministic
  * tie-break: lowest palette index wins. In place.

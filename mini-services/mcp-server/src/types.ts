@@ -8,9 +8,9 @@
  * guessed (UNKNOWN_TOOL before any relay happens).
  */
 
-export type Tier = 'L0' | 'L1';
+export type Tier = 'L0' | 'L1' | 'L2' | 'L3';
 
-export const TIER_RANK: Record<Tier, number> = { L0: 0, L1: 1 };
+export const TIER_RANK: Record<Tier, number> = { L0: 0, L1: 1, L2: 2, L3: 3 };
 
 /** True when `held` grants access to a tool of tier `needed`. */
 export function tierGrants(held: Tier, needed: Tier): boolean {
@@ -19,7 +19,11 @@ export function tierGrants(held: Tier, needed: Tier): boolean {
 
 export const TIER_RATE_LIMITS: Record<Tier, number> = {
   L0: 60, // requests per minute (§5.5)
-  L1: 30,
+  L1: 120, // raised from 30: sprite imports batch whole frames per call —
+           // 30 starved legitimate draw flows; the 2 MB body cap + auth
+           // remain the real guards against abuse
+  L2: 60, // destructive ops — deliberate pace
+  L3: 20, // paid generation — hard-capped
 };
 
 /** A paired, allowlisted client. The token is stored ONLY as a SHA-256 hash. */
@@ -75,6 +79,7 @@ export type EditorOutbound =
   | { type: 'hello-ok'; server: EditorServerStatus }
   | { type: 'pong' }
   | { type: 'tool-request'; id: string; tool: string; args: unknown; clientId: string; clientName: string; tier: Tier }
+  | { type: 'approval-request'; id: string; tool: string; args: unknown; clientId: string; clientName: string; requestedAt: string; timeoutSec: number }
   | { type: 'ctrl-result'; id: string; ok: boolean; data?: unknown; error?: { code: string; message: string } }
   | { type: 'status'; server: EditorServerStatus };
 
@@ -84,6 +89,7 @@ export interface EditorInbound {
     | 'hello'
     | 'ping'
     | 'tool-result'
+    | 'approval-response'
     | 'ctrl-request'
     | 'status-update'
     | 'event';
@@ -91,6 +97,8 @@ export interface EditorInbound {
   bridgeVersion?: number;
   appVersion?: string;
   origin?: string;
+  /** fresh page claims the slot from a stale holder (sent after repeated rejects) */
+  takeover?: boolean;
   // tool-result
   id?: string;
   ok?: boolean;
@@ -99,6 +107,8 @@ export interface EditorInbound {
   undoable?: boolean;
   stateHash?: string | null;
   summary?: string | null;
+  // approval-response
+  approve?: boolean;
   // ctrl-request
   ctrl?: CtrlRequest;
   // status-update
@@ -113,7 +123,8 @@ export type CtrlRequest =
   | { kind: 'pair-cancel'; token: string }
   | { kind: 'clients-list' }
   | { kind: 'client-revoke'; clientId: string }
-  | { kind: 'ops-recent'; limit?: number };
+  | { kind: 'ops-recent'; limit?: number }
+  | { kind: 'approvals-list' };
 
 export interface EditorEvent {
   type: 'projectChanged' | 'editorStatus';

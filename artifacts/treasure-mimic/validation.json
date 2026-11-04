@@ -1,0 +1,37 @@
+[
+  {
+    "clip": "Idle",
+    "frames": 8,
+    "fps": 8,
+    "loop": true,
+    "exactPixelMatch": true
+  },
+  {
+    "clip": "Open",
+    "frames": 8,
+    "fps": 10,
+    "loop": false,
+    "exactPixelMatch": true
+  },
+  {
+    "clip": "Bite",
+    "frames": 8,
+    "fps": 12,
+    "loop": false,
+    "exactPixelMatch": true
+  },
+  {
+    "clip": "Hop",
+    "frames": 8,
+    "fps": 10,
+    "loop": true,
+    "exactPixelMatch": true
+  },
+  {
+    "clip": "Die",
+    "frames": 8,
+    "fps": 10,
+    "loop": false,
+    "exactPixelMatch": true
+  }
+]

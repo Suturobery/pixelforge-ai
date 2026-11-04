@@ -16,6 +16,7 @@ const TOOL_KEYS: Record<string, ToolId> = {
   f: 'fill',
   l: 'line',
   r: 'rect',
+  c: 'ellipse',
   s: 'marquee',
   i: 'eyedropper',
   m: 'move',
@@ -86,10 +87,9 @@ export function useKeyboardShortcuts(onSave: () => void) {
         return
       }
       if (e.key === 'Escape') {
-        if (st.selection) {
-          e.preventDefault()
-          st.deselect()
-        }
+        e.preventDefault()
+        st.cancelStroke() // no-op when no stroke is in progress
+        if (st.selection) st.deselect()
         return
       }
       if (e.key.startsWith('Arrow') && st.selection) {
@@ -103,7 +103,7 @@ export function useKeyboardShortcuts(onSave: () => void) {
       }
 
       // --- animation transport (Task 6 §7) ---
-      if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (e.key === ' ') {
         if (!isButtonLikeTarget(e.target)) {
           e.preventDefault()
           editorPlayback.toggle()
@@ -136,8 +136,33 @@ export function useKeyboardShortcuts(onSave: () => void) {
         st.swapColors()
         return
       }
+      if (k === 'y') {
+        st.setMirrorX(!st.mirrorX)
+        return
+      }
+      if (k === 'd') {
+        st.setDither(!st.dither)
+        return
+      }
+      // Task 10b tilemap: Shift+K stamp (checked first — same letter as snap)
+      if (e.shiftKey && k === 'k') {
+        st.setTileStamp(!st.tileStamp)
+        return
+      }
+      if (k === 'k') {
+        st.setTileSnap(!st.tileSnap)
+        return
+      }
       if (k >= '1' && k <= '8') {
         st.setBrushSize(parseInt(k, 10))
+        return
+      }
+      if (e.key === '[' || e.key === ']') {
+        st.setBrushSize(st.brushSize + (e.key === ']' ? 1 : -1))
+        return
+      }
+      if (k === 'p') {
+        st.setPaletteOpen(!st.paletteOpen)
         return
       }
       if (k === 'g') {
@@ -148,6 +173,14 @@ export function useKeyboardShortcuts(onSave: () => void) {
         st.setOnionSkin(!st.onionSkin)
         return
       }
+      if (k === 't') {
+        st.setTimelineOpen(!st.timelineOpen)
+        return
+      }
+      // NOTE: no clip-delete key on purpose — D is dither, and destroying a
+      // whole clip on one letter was an accidental-loss footgun (the Keys tab
+      // used to advertise a binding that was unreachable dead code). Clips
+      // are deleted from the timeline UI instead.
       if (e.key === '+' || e.key === '=') {
         st.setZoom(st.zoom * 1.25)
         return

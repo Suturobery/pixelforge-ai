@@ -5,11 +5,14 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ONION_MAX } from '@pixelforge/core'
+import { ONION_MAX, floodFillDither, pixelPerfectStroke, type PixelPerfectState } from '@pixelforge/core'
 import { useEditor, getActiveClip, MIN_ZOOM, MAX_ZOOM } from '@/lib/pixelforge/store'
+import { useToast } from '@/hooks/use-toast'
+import { friendlyError } from '@/lib/utils'
 import { hexToRgba } from '@/lib/pixelforge/color'
 import {
   stampBrush,
+  stampCustomBuffer,
   drawLinePixels,
   drawRectPixels,
   drawEllipsePixels,
@@ -30,6 +33,7 @@ import { PreviewOverlay } from '@/components/pixelforge/preview-overlay'
 import { ViewToolbar } from '@/components/pixelforge/view-toolbar'
 import { ToolOptionsBar } from '@/components/pixelforge/tool-options-bar'
 import { PalettePanel } from '@/components/pixelforge/palette-panel'
+import { ReferenceOverlay } from '@/components/pixelforge/reference-overlay'
 
 // --------------------------------------------------------- free-scale handles
 // The marquee selection gets 8 handles (corners + edge midpoints). The dots
@@ -86,6 +90,10 @@ interface Interaction {
   handle?: StrokeHandle
   snapshot?: Uint8ClampedArray
   changed: boolean
+  /** paint: which pointer button started the stroke (2 = secondary color) */
+  btn?: number
+  /** paint: pixel-perfect freehand state (pencil/eraser, 1px, no mirror) */
+  pp?: PixelPerfectState
   panStart?: { cx: number; cy: number; panX: number; panY: number }
   /** marquee-create / sel-move / sel-scale */
   selectionStart?: SelectionRect
@@ -102,8 +110,8 @@ export function CanvasStage() {
   const boardRef = useRef<HTMLDivElement>(null)
   const offRef = useRef<HTMLCanvasElement | null>(null)
   const interactionRef = useRef<Interaction | null>(null)
-  const spaceRef = useRef(false)
-  const [spaceHeld, setSpaceHeld] = useState(false)
+  const wheelZoomRef = useRef<{ factor: number; cx: number; cy: number } | null>(null)
+  const wheelZoomRafRef = useRef<number | null>(null)
 
   const project = useEditor((s) => s.project)
   const activeClipId = useEditor((s) => s.activeClipId)
@@ -112,6 +120,8 @@ export function CanvasStage() {
   const panX = useEditor((s) => s.panX)
   const panY = useEditor((s) => s.panY)
   const showGrid = useEditor((s) => s.showGrid)
+  const tileSize = useEditor((s) => s.tileSize)
+  const tileSnap = useEditor((s) => s.tileSnap)
   const onionSkin = useEditor((s) => s.onionSkin)
   const onionOpacity = useAppSettings((s) => s.onionOpacity)
   const onionPrevTint = useAppSettings((s) => s.onionPrevTint)
@@ -119,6 +129,11 @@ export function CanvasStage() {
   const tool = useEditor((s) => s.tool)
   const primary = useEditor((s) => s.primary)
   const brushSize = useEditor((s) => s.brushSize)
+  const brushShape = useEditor((s) => s.brushShape)
+  const customBrush = useEditor((s) => s.customBrush)
+  const grayscale = useEditor((s) => s.grayscale)
+  const [dragOver, setDragOver] = useState(false)
+  const { toast } = useToast()
   const mirrorX = useEditor((s) => s.mirrorX)
   const ellipseFilled = useEditor((s) => s.ellipseFilled)
   const selection = useEditor((s) => s.selection)
@@ -156,8 +171,8 @@ export function CanvasStage() {
     const cy = rect.height / 2
     const wx = (cx - st.panX) / st.zoom
     const wy = (cy - st.panY) / st.zoom
-    st.setZoom(nz)
-    st.setPan(cx - wx * nz, cy - wy * nz)
+    // One atomic store update avoids a redundant intermediate canvas redraw.
+    useEditor.setState({ zoom: nz, panX: cx - wx * nz, panY: cy - wy * nz })
   }, [])
 
   const { width: W, height: H } = project
@@ -259,38 +274,75 @@ export function CanvasStage() {
     ctx.drawImage(offRef.current, 0, 0, cw, ch)
 
     // pixel grid
-    if (showGrid && zoom >= 5) {
+    // The grid used to wait for 500% zoom, which made the enabled Grid
+    // control look broken at normal editing magnification. At 200% each
+    // cell still has enough room for a crisp one-pixel line.
+    if (showGrid && zoom >= 2) {
       ctx.lineWidth = 1
-      for (let x = 0; x <= W; x++) {
-        const strong = x % 8 === 0
-        ctx.strokeStyle = strong ? 'rgba(255,255,255,0.16)' : 'rgba(255,255,255,0.07)'
-        const px = Math.round(x * zoom * dpr) / dpr + 0.5 / dpr
+      // Draw each grid weight as ONE path. The previous implementation
+      // stroked every row and column independently (up to 512 strokes per
+      // redraw), which made wheel zoom stutter on larger canvases.
+      for (const strong of [false, true]) {
+        ctx.strokeStyle = strong ? 'rgba(25, 57, 61, 0.62)' : 'rgba(25, 57, 61, 0.28)'
         ctx.beginPath()
-        ctx.moveTo(px, 0)
-        ctx.lineTo(px, ch)
-        ctx.stroke()
-      }
-      for (let y = 0; y <= H; y++) {
-        const strong = y % 8 === 0
-        ctx.strokeStyle = strong ? 'rgba(255,255,255,0.16)' : 'rgba(255,255,255,0.07)'
-        const py = Math.round(y * zoom * dpr) / dpr + 0.5 / dpr
-        ctx.beginPath()
-        ctx.moveTo(0, py)
-        ctx.lineTo(cw, py)
+        for (let x = 0; x <= W; x++) {
+          if ((x % 8 === 0) !== strong) continue
+          const px = Math.round(x * zoom * dpr) / dpr + 0.5 / dpr
+          ctx.moveTo(px, 0)
+          ctx.lineTo(px, ch)
+        }
+        for (let y = 0; y <= H; y++) {
+          if ((y % 8 === 0) !== strong) continue
+          const py = Math.round(y * zoom * dpr) / dpr + 0.5 / dpr
+          ctx.moveTo(0, py)
+          ctx.lineTo(cw, py)
+        }
         ctx.stroke()
       }
     }
 
-    // hover cursor (paint tools)
+    // Task 10b tilemap grid: teal tile-boundary lines over the pixel grid so
+    // the snap grid is visible even at low zoom (where the pixel grid hides)
+    if (tileSnap && zoom >= 2) {
+      ctx.lineWidth = 1
+      ctx.strokeStyle = 'rgba(45, 212, 191, 0.35)'
+      ctx.beginPath()
+      for (let x = 0; x <= W; x += tileSize) {
+        const px = Math.round(x * zoom * dpr) / dpr + 0.5 / dpr
+        ctx.moveTo(px, 0)
+        ctx.lineTo(px, ch)
+      }
+      for (let y = 0; y <= H; y += tileSize) {
+        const py = Math.round(y * zoom * dpr) / dpr + 0.5 / dpr
+        ctx.moveTo(0, py)
+        ctx.lineTo(cw, py)
+      }
+      ctx.stroke()
+    }
+
+    // hover cursor (paint tools), grey like the frame-thumb hover border
     if (hover && !playing && tool !== 'eyedropper' && tool !== 'move' && tool !== 'marquee') {
       const size = tool === 'fill' ? 1 : brushSize
       const off2 = Math.floor((Math.max(1, size) - 1) / 2)
       const hx = (hover.x - off2) * zoom
       const hy = (hover.y - off2) * zoom
       const hs = Math.max(1, size) * zoom
-      ctx.strokeStyle = 'rgba(45, 212, 191, 0.9)'
+      ctx.strokeStyle = 'rgba(113, 113, 122, 0.9)'
       ctx.lineWidth = 1
-      ctx.strokeRect(hx + 0.5, hy + 0.5, hs - 1, hs - 1)
+      if (customBrush) {
+        ctx.strokeRect(
+          (hover.x - Math.floor(customBrush.w / 2)) * zoom + 0.5,
+          (hover.y - Math.floor(customBrush.h / 2)) * zoom + 0.5,
+          customBrush.w * zoom - 1,
+          customBrush.h * zoom - 1,
+        )
+      } else if (brushShape === 'circle') {
+        ctx.beginPath()
+        ctx.arc(hx + hs / 2, hy + hs / 2, hs / 2, 0, Math.PI * 2)
+        ctx.stroke()
+      } else {
+        ctx.strokeRect(hx + 0.5, hy + 0.5, hs - 1, hs - 1)
+      }
     }
 
     // marching-ants selection outline (two alternating dashed passes);
@@ -319,7 +371,7 @@ export function CanvasStage() {
     // NOTE: the onion values must be deps too — toggling the switch or changing
     // opacity/tints re-composites the offscreen buffer only; without these deps
     // the visible canvas keeps showing the pre-onion blit (stale ghosts).
-  }, [project, W, H, zoom, panX, panY, showGrid, renderTick, hover, tool, brushSize, playing, activeFrameIndex, selection, scaleDraft, ellipseFilled, antsTick, onionSkin, onionOpacity, onionPrevTint, onionNextTint])
+  }, [project, W, H, zoom, panX, panY, showGrid, tileSnap, tileSize, renderTick, hover, tool, brushSize, brushShape, customBrush, playing, activeFrameIndex, selection, scaleDraft, ellipseFilled, antsTick, onionSkin, onionOpacity, onionPrevTint, onionNextTint])
 
   // ------------------------------------------------------------ fit / zoom
   const fitView = useCallback(() => {
@@ -328,8 +380,7 @@ export function CanvasStage() {
     const rect = container.getBoundingClientRect()
     const z = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.floor(Math.min((rect.width - 48) / W, (rect.height - 48) / H))))
     const st = useEditor.getState()
-    st.setZoom(z)
-    st.setPan((rect.width - W * z) / 2, (rect.height - H * z) / 2)
+    useEditor.setState({ zoom: z, panX: (rect.width - W * z) / 2, panY: (rect.height - H * z) / 2 })
   }, [W, H])
 
   useEffect(() => {
@@ -371,46 +422,70 @@ export function CanvasStage() {
     if (!container) return
     const onWheel = (e: WheelEvent) => {
       e.preventDefault()
-      const st = useEditor.getState()
       const rect = container.getBoundingClientRect()
-      const cx = e.clientX - rect.left
-      const cy = e.clientY - rect.top
-      const factor = Math.exp(-e.deltaY * 0.0015)
-      const nz = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, st.zoom * factor))
-      const wx = (cx - st.panX) / st.zoom
-      const wy = (cy - st.panY) / st.zoom
-      st.setZoom(nz)
-      st.setPan(cx - wx * nz, cy - wy * nz)
+      const pending = wheelZoomRef.current
+      wheelZoomRef.current = {
+        factor: (pending?.factor ?? 1) * Math.exp(-e.deltaY * 0.0015),
+        cx: e.clientX - rect.left,
+        cy: e.clientY - rect.top,
+      }
+      if (wheelZoomRafRef.current !== null) return
+      wheelZoomRafRef.current = requestAnimationFrame(() => {
+        wheelZoomRafRef.current = null
+        const input = wheelZoomRef.current
+        wheelZoomRef.current = null
+        if (!input) return
+        const st = useEditor.getState()
+        const nz = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, st.zoom * input.factor))
+        const wx = (input.cx - st.panX) / st.zoom
+        const wy = (input.cy - st.panY) / st.zoom
+        // Store zoom + pan together. This caps wheel redraws to the display
+        // refresh rate while preserving the cursor anchor.
+        useEditor.setState({ zoom: nz, panX: input.cx - wx * nz, panY: input.cy - wy * nz })
+      })
     }
     container.addEventListener('wheel', onWheel, { passive: false })
-    return () => container.removeEventListener('wheel', onWheel)
-  }, [])
-
-  // space-to-pan tracking
-  useEffect(() => {
-    const down = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && !e.repeat) {
-        const t = e.target as HTMLElement
-        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
-        spaceRef.current = true
-        setSpaceHeld(true)
-      }
-    }
-    const up = (e: KeyboardEvent) => {
-      if (e.code === 'Space') {
-        spaceRef.current = false
-        setSpaceHeld(false)
-      }
-    }
-    window.addEventListener('keydown', down)
-    window.addEventListener('keyup', up)
     return () => {
-      window.removeEventListener('keydown', down)
-      window.removeEventListener('keyup', up)
+      container.removeEventListener('wheel', onWheel)
+      if (wheelZoomRafRef.current !== null) cancelAnimationFrame(wheelZoomRafRef.current)
+      wheelZoomRafRef.current = null
+      wheelZoomRef.current = null
     }
   }, [])
 
   // ------------------------------------------------------------- pointers
+  // pinch-zoom: track two touch pointers on the container; spread → zoom
+  const pinchRef = useRef<Map<number, { x: number; y: number }>>(new Map())
+  const pinchStartRef = useRef<{ dist: number; zoom: number } | null>(null)
+
+  const onContainerPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.pointerType !== 'touch') return
+    pinchRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+    if (pinchRef.current.size === 2) {
+      const [a, b] = Array.from(pinchRef.current.values())
+      pinchStartRef.current = { dist: Math.hypot(a.x - b.x, a.y - b.y), zoom }
+      // cancel any in-progress paint when the second finger lands
+      finishInteraction()
+      interactionRef.current = null
+    }
+  }
+
+  const onContainerPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.pointerType !== 'touch' || !pinchRef.current.has(e.pointerId)) return
+    pinchRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+    const start = pinchStartRef.current
+    if (pinchRef.current.size !== 2 || !start) return
+    const [a, b] = Array.from(pinchRef.current.values())
+    const dist = Math.hypot(a.x - b.x, a.y - b.y)
+    if (start.dist > 0) {
+      useEditor.setState({ zoom: Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, start.zoom * (dist / start.dist))) })
+    }
+  }
+
+  const onContainerPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (pinchRef.current.delete(e.pointerId) && pinchRef.current.size < 2) pinchStartRef.current = null
+  }
+
   const toPixel = useCallback(
     (clientX: number, clientY: number) => {
       const container = containerRef.current
@@ -418,6 +493,13 @@ export function CanvasStage() {
       const rect = container.getBoundingClientRect()
       const x = Math.floor((clientX - rect.left - panX) / zoom)
       const y = Math.floor((clientY - rect.top - panY) / zoom)
+      // Task 10b tilemap mode: snap raw pixels to the tile grid so strokes,
+      // fills and rects land on tile boundaries (top-left of the tile).
+      const snap = useEditor.getState()
+      if (snap.tileSnap && snap.tileStamp === false) {
+        const t = snap.tileSize
+        return { x: Math.floor(x / t) * t, y: Math.floor(y / t) * t }
+      }
       return { x, y }
     },
     [panX, panY, zoom]
@@ -431,8 +513,8 @@ export function CanvasStage() {
     const px = toPixel(e.clientX, e.clientY)
     canvas.setPointerCapture(e.pointerId)
 
-    // pan: middle button, right button, or space held
-    if (e.button === 1 || e.button === 2 || spaceRef.current) {
+    // pan: middle button only — right button paints the secondary color (Aseprite)
+    if (e.button === 1) {
       interactionRef.current = {
         mode: 'pan',
         start: px,
@@ -442,10 +524,42 @@ export function CanvasStage() {
       }
       return
     }
-    if (e.button !== 0) return
+    if (e.button !== 0 && e.button !== 2) return
 
     const { width: w, height: h } = st.project
-    const color = hexToRgba(st.primary)
+    const color = hexToRgba(e.button === 2 ? st.secondary : st.primary)
+
+    // Task 10b: tile stamp — a pencil click fills the ENTIRE tile under the
+    // cursor with the primary (right-click = secondary / eraser clears it).
+    // Works with pencil/eraser tools while tileStamp is on; snap keeps the
+    // tile aligned so every click lands on exact tile boundaries.
+    if (st.tileSnap && st.tileStamp && st.tileSize <= w && st.tileSize <= h && (st.tool === 'pencil' || st.tool === 'eraser')) {
+      const t = st.tileSize
+      const handle = st.beginStroke()
+      if (!handle) return
+      const c: [number, number, number, number] = st.tool === 'eraser' || e.button === 2 ? [0, 0, 0, 0] : color
+      const tile = new Uint8ClampedArray(t * t * 4)
+      for (let i = 0; i < t * t; i++) {
+        tile[i * 4] = c[0]
+        tile[i * 4 + 1] = c[1]
+        tile[i * 4 + 2] = c[2]
+        tile[i * 4 + 3] = c[3]
+      }
+      // stampCustomBuffer centers the brush on (cx, cy) — offset to the tile's
+      // center so the whole tile fills exactly
+      stampCustomBuffer(handle.buffer, w, h, px.x + Math.floor(t / 2), px.y + Math.floor(t / 2), { w: t, h: t, data: tile }, st.mirrorX, st.tool === 'eraser')
+      interactionRef.current = {
+        mode: 'paint',
+        tool: st.tool,
+        start: px,
+        last: px,
+        handle,
+        changed: true,
+        btn: e.button,
+      }
+      st.bump()
+      return
+    }
 
     switch (st.tool) {
       case 'pencil':
@@ -453,7 +567,11 @@ export function CanvasStage() {
         const handle = st.beginStroke()
         if (!handle) return
         const c: [number, number, number, number] = st.tool === 'eraser' ? [0, 0, 0, 0] : color
-        stampBrush(handle.buffer, w, h, px.x, px.y, st.brushSize, c, st.mirrorX)
+        if (st.customBrush) {
+          stampCustomBuffer(handle.buffer, w, h, px.x, px.y, st.customBrush, st.mirrorX, st.tool === 'eraser')
+        } else {
+          stampBrush(handle.buffer, w, h, px.x, px.y, st.brushSize, c, st.mirrorX, st.brushShape)
+        }
         interactionRef.current = {
           mode: 'paint',
           tool: st.tool,
@@ -461,6 +579,10 @@ export function CanvasStage() {
           last: px,
           handle,
           changed: true,
+          btn: e.button,
+          pp: st.brushSize === 1 && !st.customBrush && !st.mirrorX && !st.dither
+            ? { p2: null, p1: px, patch: new Map() }
+            : undefined,
         }
         st.bump()
         break
@@ -468,7 +590,9 @@ export function CanvasStage() {
       case 'fill': {
         const handle = st.beginStroke()
         if (!handle) return
-        const changed = floodFill(handle.buffer, w, h, px.x, px.y, color, st.mirrorX)
+        const changed = st.dither
+          ? floodFillDither(handle.buffer, w, h, px.x, px.y, color, hexToRgba(st.secondary), st.mirrorX)
+          : floodFill(handle.buffer, w, h, px.x, px.y, color, st.mirrorX)
         st.endStroke('Fill', changed)
         break
       }
@@ -639,8 +763,54 @@ export function CanvasStage() {
     const { width: w, height: h } = st.project
 
     if (it.mode === 'paint' && it.tool) {
-      const c: [number, number, number, number] = it.tool === 'eraser' ? [0, 0, 0, 0] : hexToRgba(st.primary)
-      drawLinePixels(handle.buffer, w, h, it.last.x, it.last.y, px.x, px.y, st.brushSize, c, st.mirrorX)
+      const c: [number, number, number, number] = it.tool === 'eraser'
+        ? [0, 0, 0, 0]
+        : hexToRgba(it.btn === 2 ? st.secondary : st.primary)
+      // dither pencil/eraser: 1px + dither ON → checker stamps (own path —
+      // the pixel-perfect tracker assumes every adjacent cell)
+      if (st.dither && st.brushSize === 1 && !st.customBrush && !st.mirrorX &&
+        (it.tool === 'pencil' || it.tool === 'eraser')) {
+        const pts: Array<{ x: number; y: number }> = []
+        let x = it.last.x, y = it.last.y
+        const dx = Math.abs(px.x - x), dy = Math.abs(px.y - y)
+        const sx = it.last.x < px.x ? 1 : -1, sy = it.last.y < px.y ? 1 : -1
+        let err = dx - dy
+        for (let i = 0; i <= dx + dy + 1; i++) {
+          if ((x + y) % 2 === 0) pts.push({ x, y })
+          if (x === px.x && y === px.y) break
+          const e2 = 2 * err
+          if (e2 > -dy) { err -= dy; x += sx }
+          if (e2 < dx) { err += dx; y += sy }
+        }
+        for (const p of pts) stampBrush(handle.buffer, w, h, p.x, p.y, 1, c, false, st.brushShape)
+        it.last = px
+        it.changed = true
+        st.bump()
+        return
+      }
+      // pixel-perfect freehand: 1px pencil/eraser, no custom brush, no mirror
+      if (it.pp && !st.customBrush && !st.mirrorX && st.brushSize === 1) {
+        pixelPerfectStroke(it.pp, px, handle.buffer, w, h, c, st.brushShape)
+        it.last = px
+        it.changed = true
+        st.bump()
+        return
+      }
+      if (st.customBrush) {
+        // interpolate stamps along the segment so fast strokes stay connected
+        const steps = Math.max(1, Math.hypot(px.x - it.last.x, px.y - it.last.y))
+        for (let s = 0; s <= steps; s++) {
+          stampCustomBuffer(
+            handle.buffer, w, h,
+            Math.round(it.last.x + ((px.x - it.last.x) * s) / steps),
+            Math.round(it.last.y + ((px.y - it.last.y) * s) / steps),
+            st.customBrush, st.mirrorX, st.tool === 'eraser',
+          )
+        }
+      } else {
+        const lineC: [number, number, number, number] = it.tool === 'eraser' ? [0, 0, 0, 0] : c
+        drawLinePixels(handle.buffer, w, h, it.last.x, it.last.y, px.x, px.y, st.brushSize, lineC, st.mirrorX, st.brushShape)
+      }
       it.last = px
       it.changed = true
       st.bump()
@@ -651,10 +821,10 @@ export function CanvasStage() {
       handle.buffer.set(it.snapshot)
       if (it.tool === 'line') {
         const c = hexToRgba(st.primary)
-        drawLinePixels(handle.buffer, w, h, it.start.x, it.start.y, px.x, px.y, st.brushSize, c, st.mirrorX)
+        drawLinePixels(handle.buffer, w, h, it.start.x, it.start.y, px.x, px.y, st.brushSize, c, st.mirrorX, st.brushShape)
       } else if (it.tool === 'rect') {
         const c = hexToRgba(st.primary)
-        drawRectPixels(handle.buffer, w, h, it.start.x, it.start.y, px.x, px.y, st.brushSize, c, e.shiftKey, st.mirrorX)
+        drawRectPixels(handle.buffer, w, h, it.start.x, it.start.y, px.x, px.y, st.brushSize, c, e.shiftKey, st.mirrorX, st.brushShape)
       } else {
         // ellipse: outline uses the primary color; filled uses the secondary
         // (v3.1 §2.1 shape convention). Shift inverts the fill toggle.
@@ -761,7 +931,7 @@ export function CanvasStage() {
 
   const scaleRect = tool === 'marquee' && !playing ? scaleDraft ?? selection : null
   const handleHover =
-    scaleRect && hover && !spaceHeld
+    scaleRect && hover
       ? handlePoints(scaleRect).find(
           (h) =>
             Math.abs(h.x - (hover.x + 0.5)) <= 6 / zoom &&
@@ -771,31 +941,77 @@ export function CanvasStage() {
 
   const cursor = playing
     ? 'default'
-    : spaceHeld
-      ? 'grab'
-      : handleHover
-        ? HANDLE_CURSOR[handleHover.id]
-        : tool === 'move'
+    : handleHover
+      ? HANDLE_CURSOR[handleHover.id]
+      : tool === 'move'
+        ? 'move'
+        : tool === 'marquee' && selection && hover && pointInSelection(selection, hover.x, hover.y)
           ? 'move'
-          : tool === 'marquee' && selection && hover && pointInSelection(selection, hover.x, hover.y)
-            ? 'move'
-            : 'crosshair'
+          : 'crosshair'
 
   return (
-    <div className="@container relative min-w-0 flex-1 overflow-hidden bg-zinc-900/60">
+    <div
+      className={`@container relative min-w-0 flex-1 overflow-hidden bg-zinc-900/60 ${
+        dragOver ? 'ring-2 ring-inset ring-frost-400/60' : ''
+      }`}
+      onDragOver={(e) => {
+        e.preventDefault()
+        setDragOver(true)
+      }}
+      onDragLeave={(e) => {
+        if (e.target === e.currentTarget) setDragOver(false)
+      }}
+      onDrop={(e) => {
+        e.preventDefault()
+        setDragOver(false)
+        const f = e.dataTransfer.files?.[0]
+        if (!f || !f.type.startsWith('image/')) return
+        void f.arrayBuffer().then(async (buf) => {
+          try {
+            const bmp = await createImageBitmap(new Blob([buf], { type: f.type }))
+            const project = useEditor.getState().project
+            // contain-fit the image inside the canvas, centered
+            const s = Math.min(project.width / bmp.width, project.height / bmp.height)
+            const dw = Math.max(1, Math.round(bmp.width * s))
+            const dh = Math.max(1, Math.round(bmp.height * s))
+            const off = document.createElement('canvas')
+            off.width = project.width
+            off.height = project.height
+            const octx = off.getContext('2d')
+            if (!octx) return
+            octx.imageSmoothingEnabled = false
+            octx.drawImage(bmp, Math.floor((project.width - dw) / 2), Math.floor((project.height - dh) / 2), dw, dh)
+            const rgba = octx.getImageData(0, 0, project.width, project.height).data
+            const ref = useEditor.getState().importCandidateAsLayer(
+              new Uint8ClampedArray(rgba),
+              `dropped: ${f.name.slice(0, 24)}`,
+            )
+            if (ref) toast({ title: 'Image imported as layer', description: f.name.slice(0, 40) })
+          } catch (err) {
+            toast({ title: 'Drop import failed', description: friendlyError(err), variant: 'destructive' })
+          }
+        })
+      }}
+    >
       <div
         ref={containerRef}
         className="absolute inset-0 overflow-hidden"
         onContextMenu={(e) => e.preventDefault()}
+        onPointerDown={onContainerPointerDown}
+        onPointerMove={onContainerPointerMove}
+        onPointerUp={onContainerPointerUp}
+        onPointerCancel={onContainerPointerUp}
       >
         <div
           ref={boardRef}
-          className="pixelforge-checker absolute left-0 top-0 shadow-[0_0_0_1px_rgba(255,255,255,0.18),0_8px_32px_rgba(0,0,0,0.5)]"
+          className="pixelforge-canvas-checker absolute left-0 top-0 rounded-md shadow-[0_0_0_1px_rgba(255,255,255,0.12),0_12px_40px_rgba(0,0,0,0.45)]"
         >
+          {/* signature: soft focus halo hugging the board (system blue) */}
+          <div className="pf-ticks pointer-events-none absolute inset-0 rounded-md" aria-hidden />
           <canvas
             ref={canvasRef}
             className="absolute left-0 top-0 touch-none select-none"
-            style={{ cursor, imageRendering: 'pixelated' }}
+            style={{ cursor, imageRendering: 'pixelated', filter: grayscale ? 'grayscale(1)' : undefined }}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
@@ -827,10 +1043,13 @@ export function CanvasStage() {
       {/* floating palette — draggable + hideable (same pattern as preview) */}
       <PalettePanel />
 
+      {/* floating reference image — draw "under" a semi-transparent picture */}
+      <ReferenceOverlay />
+
       {/* floating view controls — draggable + hideable (persisted) */}
       <ViewToolbar onZoomBy={zoomBy} onFit={fitView} />
 
-      {/* contextual tool options (ellipse fill toggle, selection actions) */}
+      {/* contextual tool options (ellipse fill toggle, tilemap toggle, selection actions) */}
       <ToolOptionsBar />
 
       {/* empty-frame hint — makes it explicit that pixels were NOT lost when
@@ -838,12 +1057,12 @@ export function CanvasStage() {
       {frameEmpty && !playing && (
         <div
           role="status"
-          className="pointer-events-none absolute left-1/2 top-3 z-10 -translate-x-1/2 rounded-full border border-zinc-700/80 bg-zinc-950/90 px-3 py-1.5 text-center shadow-lg backdrop-blur"
+          className="pointer-events-none absolute left-1/2 top-3 z-10 -translate-x-1/2 rounded-sm border border-zinc-700 bg-zinc-950/95 px-3 py-1.5 text-center shadow-lg"
         >
-          <p className="font-mono text-[11px] text-zinc-200">
+          <p className="text-[11px] text-zinc-100">
             Frame {Math.min(activeFrameIndex + 1, getActiveClip(useEditor.getState()).frames.length)} is empty
           </p>
-          <p className="font-mono text-[10px] text-zinc-400">
+          <p className="mt-0.5 text-[10px] text-zinc-400">
             draw here — your other frames are safe on the timeline below
           </p>
         </div>

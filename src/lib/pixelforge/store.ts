@@ -23,11 +23,13 @@ import {
   CommandError,
   clearRegionInPlace,
   clampRect,
+  composeFrameRgba,
   createProject as coreCreateProject,
   locateCel,
   pasteRegionInPlace,
   writeExportPlan,
   type CommandOrigin,
+  type CustomBrush,
   type MotionApplyPayload,
   type PartRect,
   type Project,
@@ -55,8 +57,8 @@ import type {
 
 export type { SelectionRect, ClipboardContent, TransformKind }
 
-export const MIN_ZOOM = 1
-export const MAX_ZOOM = 48
+export const MIN_ZOOM = 0.25 // 25% — lets big canvases fit small screens
+export const MAX_ZOOM = 64 // 6400% — 1 canvas px = 64 screen px
 
 export type RightTab = 'layers' | 'ai' | 'motion' | 'agent'
 
@@ -154,6 +156,12 @@ function activeRefs(s: Pick<EditorState, 'activeClipId' | 'activeFrameIndex' | '
   return { clipId: clip.id, frameId: frame.id, frameIndex, layerId: layer.id }
 }
 
+/** Paint-lock check: pixel tools refuse to touch a locked layer. */
+function layerIsLocked(clipId: string, layerId: string): boolean {
+  const clip = bus.getProject().clips.find((c) => c.id === clipId)
+  return !!clip?.layers.find((l) => l.id === layerId)?.locked
+}
+
 function findNewLayerId(before: Set<string>, project: Project, clipId: string): string | null {
   const clip = project.clips.find((c) => c.id === clipId)
   if (!clip) return null
@@ -179,6 +187,10 @@ function withStroke(
   refs: ActiveRefs,
   fn: (handle: CoreStrokeHandle) => boolean
 ): boolean {
+  if (layerIsLocked(refs.clipId, refs.layerId)) {
+    toast({ title: 'Layer is locked', description: 'Unlock it in the Layers panel to edit.', variant: 'destructive' })
+    return false
+  }
   let changed = false
   try {
     const handle = bus.beginStroke({ clipId: refs.clipId, frameId: refs.frameId, layerId: refs.layerId })
@@ -236,7 +248,10 @@ export interface EditorState {
   primary: string
   secondary: string
   brushSize: number
+  brushShape: 'square' | 'circle'
   mirrorX: boolean
+  /** fill tool: 2×2 Bayer dither between primary and secondary */
+  dither: boolean
   ellipseFilled: boolean
   // marquee selection — VIEW state only (v3.1 §2.8: excluded from history
   // until an op commits; cleared on frame/layer/clip switches)
@@ -248,6 +263,13 @@ export interface EditorState {
   panX: number
   panY: number
   showGrid: boolean
+  /** Task 10b — tilemap mode: tile size in px (8/16/32), snap toggle, and
+   *  stamp mode (a click fills the whole tile with the primary color). */
+  tileSize: 8 | 16 | 32
+  tileSnap: boolean
+  tileStamp: boolean
+  /** value-preview: render the whole document desaturated */
+  grayscale: boolean
   onionSkin: boolean
   hover: { x: number; y: number } | null
   // playback
@@ -287,6 +309,7 @@ export interface EditorState {
   newProject: (p: Project) => void
   loadProject: (p: Project, opts?: { projectId?: string | null; filePath?: string | null }) => void
   setName: (name: string) => void
+  resizeCanvas: (w: number, h: number) => void
 
   // --- pixel stroke flow ---
   beginStroke: () => StrokeHandle | null
@@ -302,6 +325,10 @@ export interface EditorState {
   addFrame: (copyContent: boolean) => void
   deleteFrame: (index: number) => void
   moveFrame: (from: number, to: number) => void
+  /** Drag-and-drop: reorder within a clip, or copy a frame into another
+   *  clip (composited snapshot of the source frame onto the target's
+   *  active layer, inserted before targetIndex). One undo entry. */
+  dragFrame: (srcClipId: string, srcIndex: number, dstClipId: string, dstIndex: number) => void
   /** Per-frame duration override (Task 6): 0 = inherit the clip fps. */
   setFrameDuration: (frameIndex: number, durationMs: number) => void
   /** Document onion-skin range (Task 6): undoable via settings.setOnion. */
@@ -311,7 +338,8 @@ export interface EditorState {
   duplicateLayer: (layerId: string) => void
   mergeDown: (layerId: string) => void
   moveLayer: (layerId: string, dir: -1 | 1) => void
-  setLayerProp: (layerId: string, patch: Partial<Pick<{ name: string; visible: boolean; opacity: number }, 'name' | 'visible' | 'opacity'>>) => void
+  reorderLayer: (layerId: string, toIndex: number) => void
+  setLayerProp: (layerId: string, patch: Partial<Pick<{ name: string; visible: boolean; opacity: number; locked: boolean; blend: string }, 'name' | 'visible' | 'opacity' | 'locked' | 'blend'>>) => void
   addClip: (name: string) => void
   deleteClip: (clipId: string) => void
   setClipProp: (
@@ -346,12 +374,24 @@ export interface EditorState {
   setSecondary: (hex: string) => void
   swapColors: () => void
   setBrushSize: (n: number) => void
+  setBrushShape: (s: 'square' | 'circle') => void
+  customBrush: CustomBrush | null
+  setCustomBrush: (b: CustomBrush | null) => void
+  /** Agent panel: auto-approve L1 tool calls (survives tab switches) */
+  agentAutoL1: boolean
+  setAgentAutoL1: (v: boolean) => void
+  /** AI Agent conversation memory — survives panel tab switches */
+  agentChat: import('./ai/agent-chat').AgentMsg[]
+  setAgentChat: (m: import('./ai/agent-chat').AgentMsg[]) => void
   setMirrorX: (v: boolean) => void
+  setDither: (v: boolean) => void
   setEllipseFilled: (v: boolean) => void
   // --- selection ops (Task 5a) ---
   setSelection: (rect: SelectionRect | null) => void
   deselect: () => void
   selectionCopy: () => void
+  /** capture the active selection as a reusable brush stamp (Aseprite-style) */
+  saveSelectionAsBrush: () => void
   selectionCut: () => void
   selectionPaste: () => void
   selectionDelete: () => void
@@ -369,6 +409,10 @@ export interface EditorState {
   setZoom: (z: number) => void
   setPan: (x: number, y: number) => void
   setShowGrid: (v: boolean) => void
+  setTileSize: (v: 8 | 16 | 32) => void
+  setTileSnap: (v: boolean) => void
+  setTileStamp: (v: boolean) => void
+  setGrayscale: (v: boolean) => void
   setOnionSkin: (v: boolean) => void
   setHover: (h: { x: number; y: number } | null) => void
   setPlaying: (v: boolean) => void
@@ -458,7 +502,12 @@ export const useEditor = create<EditorState>()((set, get) => ({
   primary: '#2ce8f5',
   secondary: '#1a1c2c',
   brushSize: 1,
+  brushShape: 'square' as 'square' | 'circle',
+  customBrush: null,
+  agentAutoL1: false,
+  agentChat: [],
   mirrorX: false,
+  dither: false,
   ellipseFilled: false,
   selection: null,
   clipboard: null,
@@ -466,6 +515,10 @@ export const useEditor = create<EditorState>()((set, get) => ({
   panX: 0,
   panY: 0,
   showGrid: true,
+  tileSize: 16,
+  tileSnap: false,
+  tileStamp: false,
+  grayscale: false,
   onionSkin: true,
   hover: null,
   playing: false,
@@ -550,11 +603,60 @@ export const useEditor = create<EditorState>()((set, get) => ({
     }
   },
 
+  // canvas resize for the OPEN project: buffers are re-created at the new
+  // size with old pixels anchored top-left; bypasses tile history (full
+  // document replace, same as newProject/loadProject)
+  resizeCanvas: (w, h) => {
+    const W = Math.max(16, Math.min(256, Math.round(w)))
+    const H = Math.max(16, Math.min(256, Math.round(h)))
+    const p = bus.getProject()
+    if (p.width === W && p.height === H) return
+    const remap = new Map<Uint8ClampedArray, Uint8ClampedArray>()
+    const resized = (buf: Uint8ClampedArray) => {
+      let out = remap.get(buf)
+      if (!out) {
+        out = new Uint8ClampedArray(W * H * 4)
+        const cw = Math.min(p.width, W)
+        const ch = Math.min(p.height, H)
+        for (let y = 0; y < ch; y++) {
+          out.set(buf.subarray(y * p.width * 4, y * p.width * 4 + cw * 4), y * W * 4)
+        }
+        remap.set(buf, out)
+      }
+      return out
+    }
+    const project: Project = {
+      ...p,
+      width: W,
+      height: H,
+      clips: p.clips.map((clip) => ({
+        ...clip,
+        frames: clip.frames.map((f) => {
+          const cels: typeof f.cels = {}
+          for (const [layerId, cel] of Object.entries(f.cels)) {
+            cels[layerId] = { ...cel, buffer: resized(cel.buffer) }
+          }
+          return { ...f, cels }
+        }),
+      })),
+    }
+    bus.setProject(project, { dirty: true })
+    // refit the view so the new canvas size is immediately visible
+    const zoom = Math.max(1, Math.min(24, Math.floor(384 / Math.max(W, H))))
+    set({ selection: null, zoom, panX: 0, panY: 0 })
+    syncFromBus()
+    toast({ title: `Canvas resized to ${W}×${H}` })
+  },
+
   // --- pixel stroke flow ---
 
   beginStroke: () => {
     const refs = activeRefs(get())
     if (!refs) return null
+    if (layerIsLocked(refs.clipId, refs.layerId)) {
+      toast({ title: 'Layer is locked', description: 'Unlock it in the Layers panel to edit.', variant: 'destructive' })
+      return null
+    }
     try {
       return bus.beginStroke({ clipId: refs.clipId, frameId: refs.frameId, layerId: refs.layerId })
     } catch {
@@ -609,6 +711,19 @@ export const useEditor = create<EditorState>()((set, get) => ({
     const source = cel?.buffer ?? new Uint8ClampedArray(project.width * project.height * 4)
     const clip = extractClipboard(source, project.width, project.height, selection)
     set({ clipboard: clip })
+  },
+
+  saveSelectionAsBrush: () => {
+    const { selection } = get()
+    if (!selection) return
+    const refs = activeRefs(get())
+    if (!refs) return
+    const project = bus.getProject()
+    const cel = locateCel(project, refs.clipId, refs.frameId, refs.layerId)?.cel
+    const source = cel?.buffer ?? new Uint8ClampedArray(project.width * project.height * 4)
+    const clip = extractClipboard(source, project.width, project.height, selection)
+    set({ customBrush: { w: clip.w, h: clip.h, data: clip.buffer } })
+    toast({ title: 'Custom brush saved', description: 'Paint stamps your selection — reset it in the brush popover.' })
   },
 
   selectionCut: () => {
@@ -667,6 +782,10 @@ export const useEditor = create<EditorState>()((set, get) => ({
     if (!selection || (dx === 0 && dy === 0)) return
     const refs = activeRefs(get())
     if (!refs) return
+    if (layerIsLocked(refs.clipId, refs.layerId)) {
+      toast({ title: 'Layer is locked', description: 'Unlock it in the Layers panel to edit.', variant: 'destructive' })
+      return
+    }
     const project = bus.getProject()
     let ok = false
     try {
@@ -689,6 +808,10 @@ export const useEditor = create<EditorState>()((set, get) => ({
   commitSelectionShift: (rect, dx, dy, label) => {
     const refs = activeRefs(get())
     if (!refs) return false
+    if (layerIsLocked(refs.clipId, refs.layerId)) {
+      toast({ title: 'Layer is locked', description: 'Unlock it in the Layers panel to edit.', variant: 'destructive' })
+      return false
+    }
     const project = bus.getProject()
     let ok = false
     try {
@@ -882,6 +1005,48 @@ export const useEditor = create<EditorState>()((set, get) => ({
     set({ activeFrameIndex: to })
   },
 
+  dragFrame: (srcClipId, srcIndex, dstClipId, dstIndex) => {
+    const project = bus.getProject()
+    const srcClip = project.clips.find((c) => c.id === srcClipId)
+    const dstClip = project.clips.find((c) => c.id === dstClipId)
+    if (!srcClip || !dstClip) return
+    const srcFrame = srcClip.frames[srcIndex]
+    if (!srcFrame) return
+    if (dstIndex < 0 || dstIndex > dstClip.frames.length) return
+
+    // same clip → plain reorder
+    if (srcClipId === dstClipId) {
+      const to = srcIndex < dstIndex ? dstIndex - 1 : dstIndex
+      if (to !== srcIndex) {
+        bus.execute('frame.move', { clipId: srcClipId, from: srcIndex, to }, ORIGIN)
+        set({ activeClipId: dstClipId, activeFrameIndex: to, playing: false })
+      }
+      return
+    }
+
+    // cross-clip → composite the source frame and paint it onto the
+    // destination's active layer as a NEW frame (one undo entry)
+    const dstLayerId = dstClip.layers.find((l) => l.id === get().activeLayerId)?.id ?? dstClip.layers[0]?.id
+    if (!dstLayerId) return
+    const composed = composeFrameRgba(project, srcClip, srcFrame)
+    const insertAt = Math.min(dstIndex, dstClip.frames.length)
+    try {
+      bus.transaction('Copy frame to clip', ORIGIN, () => {
+        bus.execute('frame.add', { clipId: dstClipId, afterIndex: insertAt - 1, copy: false }, ORIGIN)
+        const clip = bus.getProject().clips.find((c) => c.id === dstClipId)!
+        const frame = clip.frames[insertAt]!
+        bus.execute(
+          'pixels.applyOp',
+          { clipId: dstClipId, frameId: frame.id, layerId: dstLayerId, ops: [{ op: 'setBuffer', buffer: new Uint8ClampedArray(composed) }] },
+          ORIGIN,
+        )
+      })
+      set({ activeClipId: dstClipId, activeFrameIndex: insertAt, activeLayerId: dstLayerId, playing: false })
+    } catch {
+      return
+    }
+  },
+
   setFrameDuration: (frameIndex, durationMs) => {
     const refs = activeRefs(get())
     if (!refs) return
@@ -975,6 +1140,16 @@ export const useEditor = create<EditorState>()((set, get) => ({
     if (!refs) return
     try {
       bus.execute('layer.move', { clipId: refs.clipId, layerId, dir }, ORIGIN)
+    } catch {
+      /* out of range no-ops in the command itself */
+    }
+  },
+
+  reorderLayer: (layerId, toIndex) => {
+    const refs = activeRefs(get())
+    if (!refs) return
+    try {
+      bus.execute('layer.reorder', { clipId: refs.clipId, layerId, to: toIndex }, ORIGIN)
     } catch {
       /* out of range no-ops in the command itself */
     }
@@ -1182,12 +1357,21 @@ export const useEditor = create<EditorState>()((set, get) => ({
   setPrimary: (hex) => set({ primary: hex }),
   setSecondary: (hex) => set({ secondary: hex }),
   swapColors: () => set((s) => ({ primary: s.secondary, secondary: s.primary })),
-  setBrushSize: (n) => set({ brushSize: Math.min(4, Math.max(1, Math.round(n))) }),
+  setBrushSize: (n) => set({ brushSize: Math.min(8, Math.max(1, Math.round(n))) }),
+  setBrushShape: (s) => set({ brushShape: s }),
+  setCustomBrush: (b) => set({ customBrush: b }),
+  setAgentAutoL1: (v) => set({ agentAutoL1: v }),
+  setAgentChat: (m) => set({ agentChat: m }),
   setMirrorX: (v) => set({ mirrorX: v }),
+  setDither: (v) => set({ dither: v }),
   setEllipseFilled: (v) => set({ ellipseFilled: v }),
   setZoom: (z) => set({ zoom: Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z)) }),
   setPan: (x, y) => set({ panX: x, panY: y }),
   setShowGrid: (v) => set({ showGrid: v }),
+  setTileSize: (v) => set({ tileSize: v }),
+  setTileSnap: (v) => set({ tileSnap: v }),
+  setTileStamp: (v) => set({ tileStamp: v }),
+  setGrayscale: (v) => set({ grayscale: v }),
   setOnionSkin: (v) => set({ onionSkin: v }),
   setHover: (h) =>
     set((s) => {

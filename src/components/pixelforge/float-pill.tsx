@@ -33,6 +33,8 @@ interface FloatPillProps {
   onActivate: () => void
   /** fired on every drag move — the owner persists the position */
   onMoved: (p: PillPos) => void
+  /** double-click: drop the saved position and return to the home anchor */
+  onReset: () => void
   iconClassName?: string
 }
 
@@ -45,6 +47,7 @@ export function FloatPill({
   defaultAnchorClass,
   onActivate,
   onMoved,
+  onReset,
   iconClassName = '',
 }: FloatPillProps) {
   const ref = useRef<HTMLButtonElement>(null)
@@ -152,8 +155,8 @@ export function FloatPill({
       ref={ref}
       type="button"
       aria-label={ariaLabel}
-      title={`${label} — drag to move, click to open`}
-      className={`absolute z-30 flex touch-none select-none items-center border border-zinc-700/80 bg-zinc-900/90 font-mono text-zinc-300 shadow-lg backdrop-blur transition-colors hover:border-teal-500/60 hover:text-teal-300 ${
+      title={`${label} — drag to move · right-click to reset${pos ? '' : ' (home)'}`}
+      className={`absolute z-30 flex touch-none select-none items-center border border-zinc-700/80 bg-zinc-900/80 text-xs font-medium text-zinc-300 shadow-lg backdrop-blur-xl transition-colors hover:border-zinc-500/60 hover:text-zinc-100 ${
         dragging ? 'cursor-grabbing shadow-xl' : 'cursor-grab'
       } ${s.box} ${pos ? '' : defaultAnchorClass}`}
       style={pos ? { left: pos.x, top: pos.y } : undefined}
@@ -167,6 +170,12 @@ export function FloatPill({
           return
         }
         onActivate()
+      }}
+      // right-click, not double-click: the plain click already opens the
+      // panel (unmounting the pill), which kills the second click
+      onContextMenu={(e) => {
+        e.preventDefault()
+        onReset()
       }}
     >
       {icon}

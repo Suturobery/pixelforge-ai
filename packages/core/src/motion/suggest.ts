@@ -17,6 +17,14 @@ interface KeywordRule {
 /** Priority order: the first rule with a matching keyword wins. */
 const RULES: readonly KeywordRule[] = [
   {
+    preset: 'death',
+    keywords: ['death', 'dying', 'dies', 'collapse', 'knocked out', 'perish', 'faints'],
+  },
+  {
+    preset: 'hurt',
+    keywords: ['hurt', 'knockback', 'recoil', 'flinch', 'stagger', 'damaged', 'wince'],
+  },
+  {
     preset: 'attack',
     keywords: ['attack', 'slash', 'swing', 'strike', 'hit', 'punch', 'stab', 'shoot', 'sword', 'axe', 'melee'],
   },
@@ -25,12 +33,24 @@ const RULES: readonly KeywordRule[] = [
     keywords: ['jump', 'hop', 'leap', 'bounce', 'vault'],
   },
   {
+    preset: 'duck',
+    keywords: ['duck', 'crouch', 'sneak', 'crawl', 'dodge'],
+  },
+  {
+    preset: 'swim',
+    keywords: ['swim', 'swimming', 'underwater', 'breaststroke'],
+  },
+  {
     preset: 'run',
     keywords: ['run', 'sprint', 'dash', 'charge', 'rush', 'chase', 'flee'],
   },
   {
     preset: 'walk',
     keywords: ['walk', 'stroll', 'step', 'march', 'patrol', 'wander'],
+  },
+  {
+    preset: 'spin',
+    keywords: ['spin', 'spinning', 'twirl', 'whirl', 'rotate'],
   },
   {
     preset: 'idle',

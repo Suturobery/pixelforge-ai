@@ -19,13 +19,17 @@
 // (L1, deterministic composer through the SAME bus command as the UI).
 
 import {
+  beautifyLayer,
   CommandError,
   buildPlaybackCycle,
   composeFrameRgba,
+  composeSheetRgba,
   crc32,
   createProject as coreCreateProject,
   decodePng,
   encodePng,
+  harvestPalette,
+  type SheetLayout,
   sha256Hex,
   type Clip,
   type Frame,
@@ -37,6 +41,10 @@ import {
 import { getBus, useEditor } from './store'
 import { hexToRgba } from './color'
 import { importLegacyProjectJson, isSerializedProject } from './project-io'
+import { describeApiErrorInline } from './api-error'
+import { rememberLastProject } from './last-session'
+import { followCommandTarget } from './mcp-follow'
+import { importFrameStrip } from './mcp-strip'
 import { AGENT_FETCH_HEADERS } from './agent-headers'
 
 export interface ToolExecResult {
@@ -51,13 +59,15 @@ export interface ToolExecResult {
 export interface ToolExecContext {
   clientId: string
   clientName: string
-  tier: 'L0' | 'L1'
+  tier: 'L0' | 'L1' | 'L2' | 'L3'
 }
 
 const HEX_RE = /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i
 const MAX_SET_PIXELS = 2000 // §5.3: prototype cap kept
 const MAX_PREVIEW_FRAMES = 32
 const MAX_PREVIEW_BYTES = 6 * 1024 * 1024
+const MAX_EXPORT_PIXELS = 1 << 24 // 2^24 px ≈ 64 MB RGBA (same guard as core sheets)
+const MAX_EXPORT_BYTES = 12 * 1024 * 1024 // base64 data-URL response cap
 
 // ---------------------------------------------------------------------------
 // state hash — deterministic document fingerprint for staleness detection
@@ -189,6 +199,7 @@ function resolveLayerRef(clip: Clip, args: Record<string, unknown>): Layer {
 
 /** Execute one bus command with MCP origin. Returns the new project. */
 function execCommand(type: string, payload: unknown, label?: string): Project {
+  followCommandTarget(payload) // the user watches MCP edits land live
   const outcome = getBus().execute(type, payload, 'mcp', label ? { label } : {})
   return outcome.project
 }
@@ -269,10 +280,26 @@ function clipDetail(clip: Clip): Record<string, unknown> {
   }
 }
 
+// Frame PNGs are keyed by the immutable project instance — copy-on-write
+// means the same project object always renders the same pixels, so cache
+// entries die automatically on the next edit (no explicit invalidation).
+const framePngCache = new WeakMap<Project, Map<string, string>>()
+
 async function framePng(project: Project, clip: Clip, frame: Frame, scale: 0.25 | 0.5 | 1): Promise<string> {
+  let cache = framePngCache.get(project)
+  if (!cache) {
+    cache = new Map()
+    framePngCache.set(project, cache)
+  }
+  const key = `${clip.id}:${frame.id}:${scale}`
+  const hit = cache.get(key)
+  if (hit) return hit
   const composed = composeFrameRgba(project, clip, frame)
   const scaled = nnScale(composed, project.width, project.height, scale)
-  return pngDataUrl(scaled.w, scaled.h, scaled.rgba)
+  const url = await pngDataUrl(scaled.w, scaled.h, scaled.rgba)
+  if (cache.size > 256) cache.clear()
+  cache.set(key, url)
+  return url
 }
 
 async function withStateHash(data: unknown, opts: { undoable?: boolean; summary?: string } = {}): Promise<ToolExecResult> {
@@ -314,8 +341,8 @@ const handlers: Record<string, ToolHandler> = {
   async list_projects() {
     try {
       const res = await fetch('/api/projects', { headers: AGENT_FETCH_HEADERS })
-      const json = (await res.json()) as { ok: boolean; projects?: Array<{ id: string; name: string; width: number; height: number; updatedAt: string }>; error?: string }
-      if (!json.ok) return fail('persistence_error', json.error ?? 'Failed to list projects')
+      const json = (await res.json()) as { ok: boolean; projects?: Array<{ id: string; name: string; width: number; height: number; updatedAt: string }>; error?: unknown }
+      if (!json.ok) return fail('persistence_error', describeApiErrorInline(json.error, 'Failed to list projects'))
       return withStateHash({ count: json.projects?.length ?? 0, projects: json.projects ?? [] })
     } catch (err) {
       return fail('persistence_error', err instanceof Error ? err.message : 'Failed to list projects')
@@ -407,6 +434,13 @@ const handlers: Record<string, ToolHandler> = {
         'Ask the user to save (Ctrl+S / Save button), then retry create_project. PixelForge never discards work silently.'
       )
     }
+    if (args.confirm !== true) {
+      return fail(
+        'confirm_required',
+        'create_project replaces the ACTIVE document — pass confirm:true to replace it deliberately.',
+        'The current project stays in the saved project list; reopen it with open_project if needed.'
+      )
+    }
     const name = asString(args.name, 'name', 120)
     const width = asInt(args.width, 'width', 16, 256)
     const height = asInt(args.height, 'height', 16, 256)
@@ -444,11 +478,12 @@ const handlers: Record<string, ToolHandler> = {
     const projectId = asString(args.projectId, 'projectId', 128)
     try {
       const res = await fetch(`/api/projects/${encodeURIComponent(projectId)}`, { headers: AGENT_FETCH_HEADERS })
-      const json = (await res.json()) as { ok: boolean; project?: unknown; error?: string }
-      if (!json.ok || !json.project) return fail('not_found', json.error ?? `project "${projectId}" not found`)
+      const json = (await res.json()) as { ok: boolean; project?: unknown; error?: unknown }
+      if (!json.ok || !json.project) return fail('not_found', describeApiErrorInline(json.error, `project "${projectId}" not found`))
       if (!isSerializedProject(json.project)) return fail('persistence_error', 'Stored project failed schema validation')
       const { project } = await importLegacyProjectJson(json.project, projectId)
       useEditor.getState().loadProject(project, { projectId })
+      rememberLastProject(projectId) // agent-opened projects survive refresh too
       return withStateHash(
         { opened: true, projectId, name: project.name, width: project.width, height: project.height, clipCount: project.clips.length },
         { summary: `Opened project "${project.name}"` }
@@ -508,6 +543,129 @@ const handlers: Record<string, ToolHandler> = {
     const entryId = asString(args.entryId, 'entryId', 128)
     execCommand('trash.restore', { entryId })
     return withStateHash({ restored: entryId }, { undoable: true, summary: `Restored trash entry ${entryId}` })
+  },
+
+  async purge_trash(args) {
+    const bus = getBus()
+    const project = bus.getProject()
+    const ids = project.trash.map((t) => t.id)
+    if (ids.length === 0) {
+      return withStateHash({ purged: 0 }, { undoable: false, summary: 'Trash is already empty' })
+    }
+    const entryId = args.entryId !== undefined ? asString(args.entryId, 'entryId', 128) : null
+    const targets = entryId ? ids.filter((id) => id === entryId) : ids
+    if (entryId && targets.length === 0) {
+      return fail('not_found', `Trash entry "${entryId}" not found`, 'Read get_project_state for current trash entries.')
+    }
+    execTransaction(`Purge ${targets.length} trash entr${targets.length === 1 ? 'y' : 'ies'}`, () => {
+      for (const id of targets) bus.execute('trash.purge', { entryId: id }, 'mcp')
+    })
+    return withStateHash(
+      { purged: targets.length, entryIds: targets },
+      { undoable: true, summary: `Purged ${targets.length} trash entr${targets.length === 1 ? 'y' : 'ies'} (one undo entry)` }
+    )
+  },
+
+  async resize_canvas(args) {
+    const bus = getBus()
+    const width = asInt(args.width, 'width', 16, 256)
+    const height = asInt(args.height, 'height', 16, 256)
+    let anchor: 'top-left' | 'center' | undefined
+    if (args.anchor === 'center' || args.anchor === 'top-left') anchor = args.anchor
+    else if (args.anchor !== undefined) {
+      return fail('validation_failed', 'anchor must be "top-left" or "center"')
+    }
+    execCommand('canvas.resize', { width, height, ...(anchor ? { anchor } : {}) })
+    const p = bus.getProject()
+    return withStateHash(
+      { width: p.width, height: p.height, anchor: anchor ?? 'top-left' },
+      { undoable: true, summary: `Canvas resized to ${p.width}×${p.height} (${anchor ?? 'top-left'}) — content shifted, nothing rescaled` }
+    )
+  },
+
+  async export_sheet(args) {
+    const project = getBus().getProject()
+    const clip = resolveClipRef(project, args)
+    if (clip.frames.length === 0) return fail('not_found', `clip "${clip.name}" has no frames`)
+    let composed: { rgba: Uint8ClampedArray; layout: SheetLayout }
+    try {
+      composed = composeSheetRgba(project, clip, {
+        columns: 0, // horizontal strip (single row)
+        padding: optInt(args.padding, 'padding', 0, 64) ?? 0,
+        spacing: optInt(args.spacing, 'spacing', 0, 64) ?? undefined,
+      })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      return fail('validation_failed', msg)
+    }
+    const { rgba, layout } = composed
+    const png = await pngDataUrl(layout.width, layout.height, rgba)
+    if (png.length > MAX_EXPORT_BYTES) {
+      return fail('response_too_large', `Encoded sheet is ${(png.length / 1e6).toFixed(1)} MB — fewer frames or smaller canvas.`)
+    }
+    return withStateHash(
+      {
+        clipId: clip.id,
+        clipName: clip.name,
+        frameCount: clip.frames.length,
+        width: layout.width,
+        height: layout.height,
+        padding: layout.padding,
+        spacing: layout.spacing,
+        png,
+      },
+      { summary: `Exported sprite sheet "${clip.name}" (${clip.frames.length} frames, ${layout.width}×${layout.height})` }
+    )
+  },
+
+  async export_gif(args) {
+    const project = getBus().getProject()
+    const clip = resolveClipRef(project, args)
+    if (clip.frames.length === 0) return fail('not_found', `clip "${clip.name}" has no frames`)
+    if (clip.frames.length > 64) return fail('validation_failed', 'max 64 frames per GIF')
+    const scale = args.scale === 2 || args.scale === 4 || args.scale === 8 ? args.scale : 1
+    const bg = args.bg !== undefined ? asHex(args.bg, 'bg') : '#101014'
+    const bgRgb = [parseInt(bg.slice(1, 3), 16), parseInt(bg.slice(3, 5), 16), parseInt(bg.slice(5, 7), 16)]
+    const fw = project.width * scale
+    const fh = project.height * scale
+    if (fw * fh * clip.frames.length > MAX_EXPORT_PIXELS) {
+      return fail('response_too_large', `GIF would be ${fw}×${fh} × ${clip.frames.length} frames — reduce scale.`)
+    }
+    const { GIFEncoder, quantize, applyPalette } = await import('gifenc')
+    const gif = GIFEncoder()
+    let palette: number[][] | null = null
+    for (const frame of clip.frames) {
+      const fr = composeFrameRgba(project, clip, frame)
+      const flat = new Uint8ClampedArray(fw * fh * 4)
+      for (let y = 0; y < fh; y++) {
+        const sy = Math.floor(y / scale)
+        for (let x = 0; x < fw; x++) {
+          const sx = Math.floor(x / scale)
+          const di = (y * fw + x) * 4
+          const si = (sy * project.width + sx) * 4
+          const a = fr[si + 3] / 255
+          flat[di] = Math.round(fr[si] * a + bgRgb[0] * (1 - a))
+          flat[di + 1] = Math.round(fr[si + 1] * a + bgRgb[1] * (1 - a))
+          flat[di + 2] = Math.round(fr[si + 2] * a + bgRgb[2] * (1 - a))
+          flat[di + 3] = 255
+        }
+      }
+      if (!palette) palette = quantize(flat, 64)
+      gif.writeFrame(applyPalette(flat, palette), fw, fh, {
+        palette,
+        delay: Math.max(20, frame.durationMs),
+        dispose: 2,
+      })
+    }
+    gif.finish()
+    const dataUrl = `data:image/gif;base64,${base64FromBytes(gif.bytes() as Uint8Array)}`
+    if (dataUrl.length > MAX_EXPORT_BYTES) {
+      return fail('response_too_large', `Encoded GIF is ${(dataUrl.length / 1e6).toFixed(1)} MB — reduce scale or frame count.`)
+    }
+    return withStateHash(
+      { clipId: clip.id, clipName: clip.name, frameCount: clip.frames.length, width: fw, height: fh, scale, bg, gif: dataUrl },
+      { summary: `Exported GIF "${clip.name}" (${clip.frames.length} frames, ${fw}×${fh})` }
+    )
   },
 
   async set_pixels(args) {
@@ -806,6 +964,221 @@ const handlers: Record<string, ToolHandler> = {
   },
 
   // ------------------------------------------------- AI candidates (Task 9)
+
+  async import_frame_strip(args) {
+    return importFrameStrip(args)
+  },
+
+  async macro_save(args) {
+    const { macroSave } = await import('./mcp-macros')
+    const name = asString(args.name, 'name', 60)
+    if (!Array.isArray(args.steps) || args.steps.length === 0 || args.steps.length > 50) {
+      return fail('validation_failed', 'steps must be an array of 1–50 { tool, args } objects')
+    }
+    const steps: { tool: string; args: Record<string, unknown> }[] = []
+    for (let i = 0; i < args.steps.length; i++) {
+      const s = args.steps[i] as Record<string, unknown>
+      if (!s || typeof s.tool !== 'string') {
+        return fail('validation_failed', `steps[${i}].tool is required`)
+      }
+      steps.push({
+        tool: s.tool,
+        args: (s.args && typeof s.args === 'object' ? s.args : {}) as Record<string, unknown>,
+      })
+    }
+    const macro = macroSave(name, steps)
+    return withStateHash(
+      { name: macro.name, steps: macro.steps.length },
+      { summary: `Macro "${macro.name}" saved (${macro.steps.length} steps)` },
+    )
+  },
+
+  async macro_list() {
+    const { macroList } = await import('./mcp-macros')
+    const macros = macroList()
+    return withStateHash(
+      { macros: macros.map((m) => ({ name: m.name, steps: m.steps.length, savedAt: m.savedAt })) },
+      { summary: `${macros.length} macro(s) saved` },
+    )
+  },
+
+  async macro_run(args) {
+    const { macroRun } = await import('./mcp-macros')
+    const name = asString(args.name, 'name', 60)
+    const out = await macroRun(name, (tool, runArgs) => executeMcpTool(tool, runArgs, {
+      clientId: 'macro',
+      clientName: 'macro',
+      tier: 'L1',
+    }), args.stopOnError === false)
+    const bad = out.results.find((r) => !r.ok)
+    return withStateHash(
+      { name, completed: out.completed, ok: out.ok, rolledBack: out.rolledBack ?? false, results: out.results },
+      {
+        summary: out.rolledBack
+          ? `Macro "${name}" rolled back — step ${bad?.step ?? '?'} failed: ${bad?.error?.message ?? ''} (document unchanged)`
+          : out.ok
+            ? `Macro "${name}" completed (${out.completed}/${out.results.length} steps, ONE undo entry)`
+            : `Macro "${name}" failed at step ${bad?.step ?? '?'} — ${bad?.error?.message ?? ''}`,
+      },
+    )
+  },
+
+  async batch(args) {
+    const { runStepsInTransaction } = await import('./mcp-macros')
+    const raw = args.steps
+    if (!Array.isArray(raw) || raw.length < 1 || raw.length > 50) {
+      return fail('validation_failed', 'steps must be an array of 1–50 {tool, args} entries')
+    }
+    const steps = raw.map((s, i) => {
+      if (!s || typeof s !== 'object' || typeof (s as Record<string, unknown>).tool !== 'string' || !(s as Record<string, unknown>).tool) {
+        throw new CommandError('VALIDATION_FAILED', `steps[${i}].tool must be a non-empty string`)
+      }
+      const { tool, args: stepArgs } = s as { tool: string; args?: Record<string, unknown> }
+      return { tool, args: stepArgs && typeof stepArgs === 'object' ? stepArgs : {} }
+    })
+    const out = await runStepsInTransaction(`Batch (${steps.length} steps)`, steps, (tool, runArgs) => executeMcpTool(tool, runArgs, {
+      clientId: 'macro',
+      clientName: 'macro',
+      tier: 'L1',
+    }), args.stopOnError === false)
+    const bad = out.results.find((r) => !r.ok)
+    return withStateHash(
+      { completed: out.completed, ok: out.ok, rolledBack: out.rolledBack ?? false, results: out.results },
+      {
+        summary: out.rolledBack
+          ? `Batch rolled back — step ${bad?.step ?? '?'} failed: ${bad?.error?.message ?? ''} (document unchanged)`
+          : out.ok
+            ? `Batch completed (${out.completed}/${out.results.length} steps, ONE undo entry)`
+            : `Batch failed at step ${bad?.step ?? '?'} — ${bad?.error?.message ?? ''}`,
+      },
+    )
+  },
+
+  async macro_delete(args) {
+    const { macroDelete } = await import('./mcp-macros')
+    const name = asString(args.name, 'name', 60)
+    if (!macroDelete(name)) return fail('not_found', `Macro "${name}" not found`)
+    return withStateHash({ deleted: name }, { summary: `Macro "${name}" deleted` })
+  },
+
+  async generate_sprite(args) {
+    // L3 — paid generation. Approval gating lives in the callers (agent gate
+    // always asks; server tierGrants enforces the L3 credential).
+    const prompt = asString(args.prompt, 'prompt', 600)
+    const count = typeof args.count === 'number' ? Math.max(1, Math.min(4, Math.floor(args.count))) : 1
+    const { getActiveProvider, useAppSettings } = await import('./settings')
+    const s = useAppSettings.getState()
+    const provider = getActiveProvider(s)
+    const { aiCandidateStore, newCandidateId } = await import('./ai/candidates')
+    const { normalizeCandidate } = await import('./ai/generate')
+    const project = getBus().getProject()
+    const res = await fetch('/api/ai/sprite', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...AGENT_FETCH_HEADERS },
+      body: JSON.stringify({
+        prompt,
+        count,
+        provider: provider
+          ? { kind: provider.kind, baseUrl: provider.baseUrl, apiKey: provider.apiKey, model: provider.model }
+          : undefined,
+      }),
+    })
+    const json = (await res.json()) as {
+      ok: boolean; images?: string[]; image?: string; note?: string; error?: unknown
+    }
+    if (!json.ok) {
+      return fail('generation_failed', describeApiErrorInline(json.error, `Generation failed (HTTP ${res.status})`))
+    }
+    const images = json.images && json.images.length > 0 ? json.images : json.image ? [json.image] : []
+    if (images.length === 0) return fail('generation_failed', 'Generation returned no images')
+    const ids: string[] = []
+    for (const src of images) {
+      const candidate = {
+        id: newCandidateId(),
+        prompt,
+        providerId: provider?.id ?? 'zai',
+        providerLabel: provider?.label ?? 'Z.AI (built-in)',
+        model: provider?.model ?? 'auto',
+        seed: null,
+        requestSize: '—',
+        width: project.width,
+        height: project.height,
+        createdAt: new Date().toISOString(),
+        jobDurationMs: null,
+        costEstimateUsd: null,
+        cacheHit: false,
+        recipe: 'free',
+        originalSrc: src,
+        originalW: 0,
+        originalH: 0,
+        normalizeOpts: {},
+        normalized: null,
+        status: 'normalizing' as const,
+        error: null,
+      }
+      aiCandidateStore.getState().upsert(candidate)
+      ids.push(candidate.id)
+      await normalizeCandidate(candidate.id, {
+        targetW: project.width, targetH: project.height,
+        removeBg: true, bgTolerance: 48, paletteMode: 'auto',
+        palette: [], maxColors: 16, outlineCleanup: true,
+      })
+    }
+    return withStateHash(
+      { candidateIds: ids, count: ids.length, note: json.note ?? null },
+      {
+        summary: `Generated ${ids.length} candidate(s) — review with get_candidates, accept with accept_candidate`,
+      },
+    )
+  },
+
+  async beautify_layer(args) {
+    const project = getBus().getProject()
+    const clip = resolveClipRef(project, args)
+    const { frame } = resolveFrameRef(clip, args)
+    const layer = resolveLayerRef(clip, args)
+    const outline =
+      args.outline === null ? null
+      : args.outline !== undefined ? hexToRgba(asString(args.outline, 'outline', 9))
+      : ([26, 28, 44, 255] as RGBA)
+    const shade = args.shade !== false
+    execTransaction(`Beautify layer "${layer.name}"`, () => {
+      getBus().execute(
+        'pixels.applyOp',
+        { clipId: clip.id, frameId: frame.id, layerId: layer.id, ops: [{ op: 'setBuffer', buffer: new Uint8ClampedArray(frame.cels[layer.id].buffer) }] },
+        'mcp',
+      )
+      const live = getBus().getProject().clips.find((c) => c.id === clip.id)!
+        .frames.find((f) => f.id === frame.id)!.cels[layer.id].buffer
+      const changed = beautifyLayer(live, project.width, project.height, { outline, shade })
+      if (!changed) throw new CommandError('VALIDATION_FAILED', 'nothing to beautify — the layer is empty')
+    })
+    return withStateHash(
+      { clipId: clip.id, frameId: frame.id, layerId: layer.id },
+      { undoable: true, summary: `Beautified "${layer.name}" — outline ${outline ? 'on' : 'off'}, shade ${shade ? 'on' : 'off'}` },
+    )
+  },
+
+  async harvest_palette(args) {
+    const raw = asString(args.pngBase64, 'pngBase64', 2_800_000)
+    const b64 = raw.includes(',') ? raw.slice(raw.indexOf(',') + 1) : raw
+    let binary: Uint8Array
+    try {
+      const bin = atob(b64)
+      binary = new Uint8Array(bin.length)
+      for (let i = 0; i < bin.length; i++) binary[i] = bin.charCodeAt(i)
+    } catch {
+      return fail('validation_failed', 'pngBase64 is not valid base64')
+    }
+    const decoded = await decodePng(binary).catch(() => null)
+    if (!decoded) return fail('validation_failed', 'pngBase64 is not a decodable PNG')
+    const maxColors = typeof args.maxColors === 'number' ? Math.max(2, Math.min(32, Math.floor(args.maxColors))) : 16
+    const colors = harvestPalette(decoded.rgba, maxColors)
+    return withStateHash(
+      { colors, count: colors.length },
+      { summary: `Harvested ${colors.length} colors (dark → light) — apply with set_palette` },
+    )
+  },
 
   async get_candidates(args) {
     const { aiCandidateStore } = await import('./ai/candidates')
