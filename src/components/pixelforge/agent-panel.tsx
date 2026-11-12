@@ -9,17 +9,18 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { executeMcpTool, type ToolExecResult } from '@/lib/pixelforge/mcp-tools'
+import { computeStateHash, executeMcpTool, type ToolExecResult } from '@/lib/pixelforge/mcp-tools'
 import { MCP_TOOLS } from '@/lib/pixelforge/mcp-tool-catalog'
 import { useEditor } from '@/lib/pixelforge/store'
 import { useAppSettings } from '@/lib/pixelforge/settings'
+import { resolveBrainProvider } from '@/lib/pixelforge/brain-core'
 import { copyText } from '@/lib/pixelforge/desktop-bridge'
 import { Button } from '@/components/ui/button'
-import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/hooks/use-toast'
 import { friendlyError } from '@/lib/utils'
 import { AGENT_FETCH_HEADERS } from '@/lib/pixelforge/agent-headers'
+import { describeApiErrorInline } from '@/lib/pixelforge/api-error'
 import {
   buildAgentInstructions,
   type AgentMsg,
@@ -35,6 +36,54 @@ interface SessionOp {
   ok: boolean
   summary: string
   at: string
+}
+
+interface ChangeScope {
+  projectName: string
+  canvas: string
+  clipName: string
+  frameNumber: number
+  layerName: string
+  region: string
+  stateHash: string
+}
+
+interface PendingChange {
+  call: AgentToolCall
+  args: Record<string, unknown>
+  scope: ChangeScope
+}
+
+const PIXEL_MUTATION_TOOLS = new Set([
+  'set_pixels',
+  'fill_rect',
+  'replace_color',
+  'flip_frame',
+  'rotate_frame',
+  'shift_frame',
+  'beautify_layer',
+])
+
+function isDocumentMutation(name: string): boolean {
+  return MCP_TOOLS.find((tool) => tool.name === name)?.tier !== 'L0'
+}
+
+function describeRegion(args: Record<string, unknown>, selection: { x: number; y: number; w: number; h: number } | null): string {
+  const rect = args.rect
+  if (
+    rect &&
+    typeof rect === 'object' &&
+    !Array.isArray(rect) &&
+    typeof (rect as Record<string, unknown>).x === 'number' &&
+    typeof (rect as Record<string, unknown>).y === 'number' &&
+    typeof (rect as Record<string, unknown>).w === 'number' &&
+    typeof (rect as Record<string, unknown>).h === 'number'
+  ) {
+    const value = rect as { x: number; y: number; w: number; h: number }
+    return `region x:${value.x} y:${value.y} · ${value.w}×${value.h}`
+  }
+  if (selection) return `active selection x:${selection.x} y:${selection.y} · ${selection.w}×${selection.h}`
+  return 'entire active layer'
 }
 
 /** Tool picker groups: read-only helpers (L0) above editors (L1), alphabetical
@@ -60,7 +109,6 @@ export function AgentPanel() {
   const [result, setResult] = useState<string | null>(null)
   const [resultOk, setResultOk] = useState(true)
   const [ops, setOps] = useState<SessionOp[]>([])
-  const [opSeq, setOpSeq] = useState(0)
   // live JSON syntax check — run stays disabled while invalid
   let argsValid = true
   try {
@@ -148,31 +196,59 @@ export function AgentPanel() {
   const settings = useAppSettings()
   const [agentGoal, setAgentGoal] = useState('')
   const [agentBusy, setAgentBusy] = useState(false)
-  // store-backed: survives panel tab switches (local useState died on unmount)
-  const autoL1 = useEditor((s) => s.agentAutoL1)
-  const setAutoL1 = useEditor((s) => s.setAgentAutoL1)
   const agentChat = useEditor((s) => s.agentChat)
   const setAgentChat = useEditor((s) => s.setAgentChat)
-  const [pending, setPending] = useState<{ call: AgentToolCall; resolve: (v: 'run' | 'skip') => void } | null>(null)
+  const agentRunRequest = useEditor((s) => s.agentRunRequest)
+  const clearAgentRunRequest = useEditor((s) => s.clearAgentRunRequest)
+  const [pending, setPending] = useState<PendingChange | null>(null)
   const stoppedRef = useRef(false)
+  // Stop must reach the in-flight provider fetch and a parked approval gate —
+  // flipping only the flag left both unresponsive until they timed out
+  const agentAbortRef = useRef<AbortController | null>(null)
 
-  type AgentProvider = AgentProviderConfig & { label: string }
+  type AgentProvider = AgentProviderConfig & { id: string; label: string }
   const agentProvider: AgentProvider | null = (() => {
     const p = settings.aiProviders.find((x) => x.id === settings.activeProviderId)
     if (!p || !p.enabled) return null
-    if (p.kind !== 'zai' && !p.apiKey.trim()) return null
-    return { kind: p.kind, baseUrl: p.baseUrl, apiKey: p.apiKey, model: p.model, label: p.label }
+    const hasVaultKey = Boolean(settings.secureMode && settings.keyStatus[p.id]?.hasKey)
+    // unlike /api/ai/sprite (built-in engine fallback), the agent route calls
+    // the provider API directly — a key is required for every kind, zai included
+    if (!p.apiKey.trim() && !hasVaultKey) return null
+    return { id: p.id, kind: p.kind, baseUrl: p.baseUrl, apiKey: p.apiKey, model: p.model, label: p.label }
   })()
+
+  // Brain plans are reasoned with the configured Brain provider (default
+  // Groq), so they can run in-app even when the currently selected image
+  // provider is Gemini.  The desktop main process injects the vault key using
+  // this provider id; browser mode uses its saved key as normal. Key presence
+  // comes from the shared Brain Core facade.
+  const { provider: brainProfile, hasKey: brainHasKey } = resolveBrainProvider(
+    settings.aiProviders,
+    settings.secureMode,
+    settings.keyStatus,
+    settings.brainProviderId,
+  )
+  const brainAgentProvider: AgentProvider | null =
+    brainProfile && brainProfile.enabled && brainHasKey
+      ? {
+          id: brainProfile.id,
+          kind: brainProfile.kind,
+          baseUrl: brainProfile.baseUrl,
+          apiKey: brainProfile.apiKey,
+          model: brainProfile.model,
+          label: brainProfile.label,
+        }
+      : null
 
   // append one message to the persistent conversation
   const pushMsg = (m: AgentMsg) => setAgentChat([...useEditor.getState().agentChat, m])
 
   const logOp = (tool: string, args: Record<string, unknown>, ok: boolean, summary: string) => {
-    setOpSeq((n) => n + 1)
     setOps((prev) =>
       [
         {
-          id: opSeq,
+          // derive inside the updater — the old opSeq closure repeated ids
+          id: (prev[0]?.id ?? -1) + 1,
           tool,
           args: JSON.stringify(args),
           ok,
@@ -184,26 +260,64 @@ export function AgentPanel() {
     )
   }
 
-  const executeCall = async (call: AgentToolCall, gate: boolean): Promise<AgentMsg['toolResults']> => {
-    const tier = MCP_TOOLS.find((t) => t.name === call.name)?.tier ?? 'L1'
-    const destructive = /^(delete_|purge_|restore_)/.test(call.name)
-    if (gate && (tier === 'L1' || destructive)) {
-      setPending({ call, resolve: () => {} })
+  const prepareChange = async (call: AgentToolCall): Promise<PendingChange> => {
+    const state = useEditor.getState()
+    const project = state.project
+    const clip = project.clips.find((item) => item.id === state.activeClipId) ?? project.clips[0]
+    if (!clip) throw new Error('The project has no active clip.')
+    const frameIndex = Math.min(Math.max(0, state.activeFrameIndex), clip.frames.length - 1)
+    const frame = clip.frames[frameIndex]
+    const layer = clip.layers.find((item) => item.id === state.activeLayerId) ?? clip.layers[clip.layers.length - 1]
+    if (!frame || !layer) throw new Error('The active clip needs a frame and layer before the agent can edit.')
+
+    const supplied = call.args && typeof call.args === 'object' && !Array.isArray(call.args) ? call.args : {}
+    const args: Record<string, unknown> = { ...supplied, expectedStateHash: await computeStateHash() }
+    // Pixel-changing commands are forcibly bound to what the artist has open.
+    // Model-provided ids cannot redirect these writes to a hidden frame/layer.
+    if (PIXEL_MUTATION_TOOLS.has(call.name)) {
+      Object.assign(args, { clipId: clip.id, frameId: frame.id, layerId: layer.id })
+    }
+
+    return {
+      call,
+      args,
+      scope: {
+        projectName: project.name,
+        canvas: `${project.width}×${project.height}`,
+        clipName: clip.name,
+        frameNumber: frameIndex + 1,
+        layerName: layer.name,
+        region: describeRegion(args, state.selection),
+        stateHash: String(args.expectedStateHash).slice(0, 12),
+      },
+    }
+  }
+
+  const executeCall = async (call: AgentToolCall): Promise<AgentMsg['toolResults']> => {
+    const tool = MCP_TOOLS.find((item) => item.name === call.name)
+    if (!tool) {
+      return [{ id: call.id, name: call.name, ok: false, content: 'This tool is not available in PixelForge.' }]
+    }
+    let args: Record<string, unknown> = call.args && typeof call.args === 'object' && !Array.isArray(call.args) ? call.args : {}
+    if (isDocumentMutation(call.name)) {
+      const change = await prepareChange(call)
+      args = change.args
+      setPending(change)
       const verdict = await new Promise<'run' | 'skip'>((resolve) => {
         pendingResolveRef.current = resolve
       })
       setPending(null)
       if (verdict === 'skip') {
-        return [{ id: call.id, name: call.name, ok: false, content: 'User declined this action.' }]
+        return [{ id: call.id, name: call.name, ok: false, content: 'Artist declined this change plan; artwork was not modified.' }]
       }
     }
     try {
-      const res: ToolExecResult = await executeMcpTool(call.name, call.args, {
+      const res: ToolExecResult = await executeMcpTool(call.name, args, {
         clientId: 'agent-console',
         clientName: 'agent-console',
-        tier: 'L1',
+        tier: tool.tier,
       })
-      logOp(call.name, call.args, res.ok, res.summary ?? res.error?.message ?? '')
+      logOp(call.name, args, res.ok, res.summary ?? res.error?.message ?? '')
       return [
         {
           id: call.id,
@@ -218,9 +332,10 @@ export function AgentPanel() {
     }
   }
 
-  const runAgent = async () => {
-    if (agentBusy || !agentProvider) return
-    if (!agentGoal.trim()) return
+  const runAgent = async (goal = agentGoal, provider: AgentProvider | null = agentProvider) => {
+    if (agentBusy || !provider) return
+    const trimmedGoal = goal.trim()
+    if (!trimmedGoal) return
     stoppedRef.current = false
     setAgentBusy(true)
     const project = useEditor.getState().project
@@ -230,13 +345,14 @@ export function AgentPanel() {
     const system = [
       'You are the in-app agent of PixelForge AI, a pixel-art sprite editor.',
       'You manage the OPEN document by calling tools. One tool batch per turn; wait for results before deciding the next step.',
-      'Prefer L0 (read-only) tools to inspect state before mutating with L1 tools. Keep edits minimal and reversible.',
+      'Always inspect with L0 tools before proposing a mutation. Every document or paid action is shown to the artist as a scoped change plan and must be accepted; never claim a change happened until its tool result confirms it.',
+      'For pixel changes, work only on the active frame and active layer. Keep changes minimal, use a rect when the request is regional, and preserve the current canvas size and palette unless the artist explicitly asks otherwise.',
       `Current project: "${project.name}" ${project.width}×${project.height}, ${project.clips.length} clip(s)` +
         (clip ? `; active clip "${clip.name}" fps ${clip.fps}, ${clip.frames.length} frame(s), layers: ${clip.layers.map((l) => l.name).join(', ')}.` : '.'),
       'When the goal is complete, reply with a short summary and NO tool calls.',
     ].join(' ')
     // conversation memory: seed from the stored history so follow-ups work
-    const messages: AgentMsg[] = [...useEditor.getState().agentChat, { role: 'user', text: agentGoal.trim() }]
+    const messages: AgentMsg[] = [...useEditor.getState().agentChat, { role: 'user', text: trimmedGoal }]
     setAgentChat(messages)
     const MAX_STEPS = 8
     const commit = (m: AgentMsg[]) => {
@@ -250,14 +366,37 @@ export function AgentPanel() {
           commit([...messages, { role: 'assistant', text: '⚠ Stopped by user.' }])
           break
         }
-        const res = await fetch('/api/ai/agent', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', ...AGENT_FETCH_HEADERS },
-          body: JSON.stringify({ cfg: agentProvider, system, messages: messages.slice(-30) }),
-        })
-        const json = (await res.json()) as { text?: string; toolCalls?: AgentToolCall[]; error?: string }
+        let json: { text?: string; toolCalls?: AgentToolCall[]; error?: unknown }
+        const reqPayload = { cfg: provider, system, messages: messages.slice(-30) }
+        const abort = new AbortController()
+        agentAbortRef.current = abort
+        try {
+          if (typeof window !== 'undefined' && window.pixelforge?.ai?.agent) {
+            json = (await window.pixelforge.ai.agent(reqPayload)) as typeof json
+          } else {
+            const res = await fetch('/api/ai/agent', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json', ...AGENT_FETCH_HEADERS },
+              body: JSON.stringify(reqPayload),
+              signal: abort.signal,
+            })
+            json = (await res.json()) as typeof json
+          }
+        } catch (err) {
+          if (stoppedRef.current && err instanceof Error && err.name === 'AbortError') {
+            agentAbortRef.current = null
+            break
+          }
+          throw err
+        }
+        agentAbortRef.current = null
         if (json.error) {
-          commit([...messages, { role: 'assistant', text: `⚠ ${json.error}` }])
+          // guard denials return a structured { code, message, hint } object —
+          // describeApiErrorInline renders it instead of "[object Object]"
+          const errText = typeof json.error === 'string'
+            ? json.error
+            : describeApiErrorInline(json.error, 'Agent request failed')
+          commit([...messages, { role: 'assistant', text: `⚠ ${errText}` }])
           break
         }
         const calls = json.toolCalls ?? []
@@ -266,11 +405,7 @@ export function AgentPanel() {
         const results: NonNullable<AgentMsg['toolResults']> = []
         for (const call of calls) {
           if (stoppedRef.current) break
-          const tier = MCP_TOOLS.find((t) => t.name === call.name)?.tier ?? 'L1'
-          const destructive = /^(delete_|purge_|restore_)/.test(call.name)
-          // L3 (paid generation) is NEVER auto-run — approval every time
-          const gate = !autoL1 || destructive || tier === 'L3'
-          const r = (await executeCall(call, gate)) ?? []
+          const r = (await executeCall(call)) ?? []
           results.push(...r)
           // live progress: grow the trailing results message in place
           commit([...messages, { role: 'user', toolResults: [...results] }])
@@ -287,6 +422,33 @@ export function AgentPanel() {
       setPending(null)
     }
   }
+
+  // Consume a queued Brain plan only after this panel has mounted.  Clearing
+  // the request before the async call prevents a re-render from starting it
+  // twice.  Mutating tool calls still stop at the existing approval gate.
+  useEffect(() => {
+    if (!agentRunRequest || agentBusy) return
+    clearAgentRunRequest(agentRunRequest.id)
+    setAgentGoal(agentRunRequest.goal)
+    if (!agentApiEnabled) {
+      toast({
+        title: 'Agent API is disabled',
+        description: 'Enable Settings → MCP → Agent API, then run the plan again.',
+        variant: 'destructive',
+      })
+      return
+    }
+    const provider = agentRunRequest.source === 'brain' ? brainAgentProvider : agentProvider
+    if (!provider) {
+      toast({
+        title: 'Groq is needed for this Brain plan',
+        description: 'Add and enable your Groq API key in Settings → AI & MCP, then run the plan again.',
+        variant: 'destructive',
+      })
+      return
+    }
+    void runAgent(agentRunRequest.goal, provider)
+  }, [agentRunRequest, agentApiEnabled, agentBusy, agentProvider, brainAgentProvider, clearAgentRunRequest, toast])
 
   const run = async () => {
     if (running) return
@@ -308,18 +470,18 @@ export function AgentPanel() {
         clean[k] = v
       }
 
+      const selectedTool = MCP_TOOLS.find((item) => item.name === toolName)
       const res: ToolExecResult = await executeMcpTool(toolName, clean, {
         clientId: 'agent-console',
         clientName: 'agent-console',
-        tier: 'L1',
+        tier: selectedTool?.tier ?? 'L0',
       })
       setResult(JSON.stringify(res, null, 2))
       setResultOk(res.ok)
-      setOpSeq((n) => n + 1)
       setOps((prev) =>
         [
           {
-            id: opSeq,
+            id: (prev[0]?.id ?? -1) + 1,
             tool: toolName,
             args: argsText,
             ok: res.ok,
@@ -339,20 +501,6 @@ export function AgentPanel() {
     }
   }
 
-  // Agent API disabled in Settings → MCP: show a notice instead of the console
-  if (!agentApiEnabled) {
-    return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
-        <Bot className="h-6 w-6 text-zinc-400" />
-        <p className="max-w-[240px] font-mono text-[10px] leading-relaxed text-zinc-400">
-          The Agent API (MCP) is currently disabled. Enable it in{' '}
-          <span className="text-frost-300">Settings → MCP</span> to run editor tools here or
-          from external AI assistants.
-        </p>
-      </div>
-    )
-  }
-
   useEffect(() => {
     let alive = true
     void fetch('/api/mcp/status', { headers: AGENT_FETCH_HEADERS })
@@ -365,6 +513,21 @@ export function AgentPanel() {
       alive = false
     }
   }, [])
+
+  // Agent API disabled in Settings → MCP: show a notice instead of the console.
+  // The status effect stays above this branch so Hooks keep their call order.
+  if (!agentApiEnabled) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
+        <Bot className="h-6 w-6 text-zinc-400" />
+        <p className="max-w-[240px] font-mono text-[10px] leading-relaxed text-zinc-400">
+          The Agent API (MCP) is currently disabled. Enable it in{' '}
+          <span className="text-frost-300">Settings → MCP</span> to run editor tools here or
+          from external AI assistants.
+        </p>
+      </div>
+    )
+  }
 
   return (
     <div className="pixelforge-scroll mx-auto flex h-full w-full max-w-[520px] flex-col gap-3 overflow-x-hidden overflow-y-auto p-3">
@@ -468,11 +631,13 @@ export function AgentPanel() {
       <div className="rounded-lg border border-frost-900/60 bg-frost-950/20 p-2.5">
         <div className="mb-1.5 flex items-center justify-between gap-2">
           <span className="font-mono text-[10px] font-semibold uppercase tracking-wider text-frost-300">AI Agent</span>
-          <label className="flex items-center gap-1 font-mono text-[9px] text-zinc-400">
-            auto-run L1
-            <Switch checked={autoL1} onCheckedChange={setAutoL1} aria-label="Auto-approve editor tools" className="scale-90" />
-          </label>
+          <span className="rounded border border-emerald-500/30 bg-emerald-950/30 px-1.5 py-px font-mono text-[8px] uppercase tracking-wider text-emerald-300">
+            review before change
+          </span>
         </div>
+        <p className="mb-2 font-mono text-[9px] leading-relaxed text-zinc-500">
+          Read-only checks run immediately. Every document or paid action is pinned to the current artwork, then requires your approval.
+        </p>
         {!agentProvider && (
           <p className="mb-1.5 font-mono text-[10px] text-amber-300">
             No AI provider — add an API key in Settings → AI &amp; MCP (Claude included).
@@ -490,7 +655,18 @@ export function AgentPanel() {
             className="h-8 min-w-0 flex-1 rounded-md border border-zinc-800 bg-zinc-900 px-2 font-mono text-xs text-zinc-200 outline-none placeholder:text-zinc-500 focus-visible:border-frost-500/60"
           />
           {agentBusy ? (
-            <Button size="sm" variant="outline" className="h-8 shrink-0 border-zinc-800 font-mono text-[11px] text-zinc-300" onClick={() => { stoppedRef.current = true }}>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 shrink-0 border-zinc-800 font-mono text-[11px] text-zinc-300"
+              onClick={() => {
+                stoppedRef.current = true
+                agentAbortRef.current?.abort()
+                // a parked approval gate counts as declined so the loop unwinds
+                pendingResolveRef.current?.('skip')
+                pendingResolveRef.current = null
+              }}
+            >
               <Square className="mr-1 h-3 w-3" /> Stop
             </Button>
           ) : (
@@ -540,12 +716,26 @@ export function AgentPanel() {
           </ul>
         )}
         {pending && (
-          <div className="mt-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2">
-            <p className="font-mono text-[10px] text-amber-200">
-              Approve <strong>{pending.call.name}</strong>?
-            </p>
+          <div className="mt-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2" role="alert">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <p className="font-mono text-[10px] font-semibold text-amber-100">
+                  Change plan: <strong>{pending.call.name}</strong>
+                </p>
+                <p className="mt-0.5 font-mono text-[9px] leading-relaxed text-amber-200/80">
+                  Nothing has changed yet. Approval applies only to the scope below.
+                </p>
+              </div>
+              <span className="shrink-0 rounded border border-amber-400/30 px-1 py-px font-mono text-[8px] text-amber-200">pending</span>
+            </div>
+            <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 rounded bg-zinc-950/40 p-1.5 font-mono text-[9px] leading-relaxed text-zinc-300">
+              <dt className="text-zinc-500">project</dt><dd className="truncate">{pending.scope.projectName} · {pending.scope.canvas}</dd>
+              <dt className="text-zinc-500">target</dt><dd className="truncate">{pending.scope.clipName} · frame {pending.scope.frameNumber} · {pending.scope.layerName}</dd>
+              <dt className="text-zinc-500">region</dt><dd className="truncate">{pending.scope.region}</dd>
+              <dt className="text-zinc-500">state</dt><dd title={pending.scope.stateHash}>#{pending.scope.stateHash}</dd>
+            </dl>
             <pre className="pixelforge-scroll mt-1 max-h-24 overflow-auto rounded bg-zinc-950/60 p-1.5 font-mono text-[9px] text-zinc-300">
-              {JSON.stringify(pending.call.args, null, 2)}
+              {JSON.stringify(pending.args, null, 2)}
             </pre>
             <div className="mt-1.5 flex gap-1.5">
               <Button
@@ -553,7 +743,7 @@ export function AgentPanel() {
                 className="h-6 bg-teal-600 px-2 font-mono text-[10px] text-white hover:bg-teal-500"
                 onClick={() => pendingResolveRef.current?.('run')}
               >
-                Approve &amp; run
+                Accept change
               </Button>
               <Button
                 size="sm"
@@ -561,7 +751,7 @@ export function AgentPanel() {
                 className="h-6 px-2 font-mono text-[10px] text-zinc-400"
                 onClick={() => pendingResolveRef.current?.('skip')}
               >
-                Skip
+                Reject
               </Button>
             </div>
           </div>

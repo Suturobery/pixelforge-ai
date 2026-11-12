@@ -12,7 +12,7 @@
  * Writes are atomic (tmp + rename) so a crash never corrupts the allowlist.
  */
 
-import { mkdirSync, readFileSync, renameSync, appendFileSync, existsSync, writeFileSync, chmodSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, appendFileSync, existsSync, writeFileSync, chmodSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { AuditEntry, PairedClient, PendingPairing, Tier } from './types';
 
@@ -22,8 +22,64 @@ export interface StoreOptions {
 }
 
 const MAX_AUDIT_MEMORY = 500;
+const MAX_AUDIT_FILE_BYTES = 2 * 1024 * 1024;
+const RETAIN_AUDIT_FILE_BYTES = 1024 * 1024;
+
+export type BrainTaskStatus = 'pending' | 'claimed' | 'running' | 'done' | 'failed' | 'cancelled';
+
+export interface BrainTask {
+  id: string;
+  title: string;
+  detail: string;
+  status: BrainTaskStatus;
+  claimedBy: string | null;
+  /** stable owner identity — display names are NOT unique across agents */
+  claimedByClient: string | null;
+  /** lease anchor: refreshed by progress updates so silent agents get requeued */
+  claimedAt: number | null;
+  result: string | null;
+  /** bounded progress note from the owning agent (claimed/running) */
+  progress: string | null;
+  /** groups tasks queued by one plan (replace/append semantics + UI) */
+  planId: string | null;
+  /** dedupe key — re-pushing the same plan step never duplicates work */
+  idempotencyKey: string | null;
+  /** editor stateHash at claim time — completion-verification anchor */
+  stateHashAtClaim: string | null;
+  /** editor stateHash at finish time */
+  stateHashAtFinish: string | null;
+  /** true when the document actually changed between claim and successful finish */
+  verified: boolean | null;
+}
+
+const BRAIN_STATUSES: readonly BrainTaskStatus[] = ['pending', 'claimed', 'running', 'done', 'failed', 'cancelled'];
+
+/** Normalize a persisted task: fill v2 fields and coerce unknown statuses so
+ * pre-phase-4 board files load cleanly (fail-open to pending). */
+function normalizeBrainTask(raw: Partial<BrainTask>): BrainTask {
+  const status = BRAIN_STATUSES.includes(raw.status as BrainTaskStatus) ? (raw.status as BrainTaskStatus) : 'pending';
+  return {
+    id: String(raw.id ?? ''),
+    title: String(raw.title ?? '').slice(0, 200),
+    detail: String(raw.detail ?? '').slice(0, 2000),
+    status,
+    claimedBy: typeof raw.claimedBy === 'string' ? raw.claimedBy.slice(0, 80) : null,
+    claimedByClient: typeof raw.claimedByClient === 'string' ? raw.claimedByClient.slice(0, 80) : null,
+    claimedAt: typeof raw.claimedAt === 'number' ? raw.claimedAt : null,
+    result: typeof raw.result === 'string' ? raw.result.slice(0, 2000) : null,
+    progress: typeof raw.progress === 'string' ? raw.progress.slice(0, 200) : null,
+    planId: typeof raw.planId === 'string' ? raw.planId.slice(0, 80) : null,
+    idempotencyKey: typeof raw.idempotencyKey === 'string' ? raw.idempotencyKey.slice(0, 120) : null,
+    stateHashAtClaim: typeof raw.stateHashAtClaim === 'string' ? raw.stateHashAtClaim.slice(0, 64) : null,
+    stateHashAtFinish: typeof raw.stateHashAtFinish === 'string' ? raw.stateHashAtFinish.slice(0, 64) : null,
+    verified: typeof raw.verified === 'boolean' ? raw.verified : null,
+  };
+}
 
 export class McpStore {
+  /** claimed tasks older than this are requeued (crashed-agent recovery) */
+  readonly claimTimeoutMs: number;
+
   readonly dataDir: string;
   private readonly clientsFile: string;
   private readonly auditPath: string;
@@ -32,11 +88,13 @@ export class McpStore {
   private auditMemory: AuditEntry[] = [];
   private auditSeq = 0;
 
-  constructor(opts: StoreOptions = {}) {
+  constructor(opts: StoreOptions & { claimTimeoutMs?: number } = {}) {
+    this.claimTimeoutMs = opts.claimTimeoutMs ?? Number(process.env.PF_BRAIN_CLAIM_TIMEOUT_MS ?? 600_000);
     this.dataDir = opts.dataDir ?? process.env.PF_MCP_DATA_DIR ?? path.resolve(import.meta.dir, '../../../db');
     mkdirSync(this.dataDir, { recursive: true });
     this.clientsFile = path.join(this.dataDir, 'mcp-clients.json');
     this.auditPath = opts.auditFile ?? path.join(this.dataDir, 'mcp-ops.jsonl');
+    this.loadBrainTasks();
     this.loadClients();
     // Task 13a: token-hash allowlist + audit log are sensitive — restrict to
     // the owner (best-effort; no-op on Windows where DPAPI/ACLs apply).
@@ -103,6 +161,20 @@ export class McpStore {
     return c;
   }
 
+  /**
+   * Forget a revoked pairing from the allowlist. Active clients must be
+   * revoked first, so the UI cannot accidentally turn a live credential into
+   * an invisible credential.
+   */
+  removeRevokedClient(clientId: string): 'removed' | 'active' | 'not_found' {
+    const c = this.clients.get(clientId);
+    if (!c) return 'not_found';
+    if (!c.revoked) return 'active';
+    this.clients.delete(clientId);
+    this.persistClients();
+    return 'removed';
+  }
+
   touchClient(clientId: string): void {
     const c = this.clients.get(clientId);
     if (c && !c.revoked) {
@@ -153,13 +225,251 @@ export class McpStore {
     }
     try {
       appendFileSync(this.auditPath, JSON.stringify(full) + '\n');
+      this.trimAuditFile();
     } catch (err) {
       // best-effort: never break a tool call because the audit file failed
       console.error('[mcp] audit append failed:', err instanceof Error ? err.message : err);
     }
   }
 
-  recentOps(limit = 20): AuditEntry[] {
+  // ---- second-brain task board -------------------------------------------
+  // Agent-executable work items queued by the Groq orchestrator. In-memory
+  // ring with best-effort JSON persistence in the data dir (survives
+  // restarts; on conflict the newest file wins).
+
+  brainTasks: BrainTask[] = [];
+  private get brainFile(): string { return path.join(this.dataDir, 'brain-tasks.json'); }
+
+  private loadBrainTasks(): void {
+    try {
+      const parsed = JSON.parse(readFileSync(this.brainFile, 'utf8')) as BrainTask[];
+      this.brainTasks = Array.isArray(parsed) ? parsed.map(normalizeBrainTask) : [];
+    } catch (err) {
+      if (existsSync(this.brainFile)) {
+        // never silently destroy a corrupted board — quarantine it
+        const quarantine = this.brainFile.replace('.json', '.corrupt-' + Date.now() + '.json');
+        try {
+          renameSync(this.brainFile, quarantine);
+          console.error('[pf-mcp] brain-tasks.json was CORRUPT — quarantined to', quarantine, String(err).slice(0, 120));
+        } catch {
+          console.error('[pf-mcp] brain-tasks.json unreadable AND quarantine failed — starting empty');
+        }
+      }
+      this.brainTasks = [];
+    }
+  }
+
+  private saveBrainTasks(): void {
+    try {
+      // atomic write (tmp + rename) — a crash must never corrupt the board
+      const tmp = this.brainFile + '.tmp-' + Date.now();
+      writeFileSync(tmp, JSON.stringify(this.brainTasks, null, 2));
+      renameSync(tmp, this.brainFile);
+    } catch {
+      // best-effort: the board is advisory state, never blocks tool calls
+    }
+  }
+
+  /** requeue claimed/running tasks whose agent went silent past the lease */
+  private sweepStaleClaims(): number {
+    const now = Date.now();
+    let recovered = 0;
+    for (const t of this.brainTasks) {
+      if (
+        (t.status === 'claimed' || t.status === 'running') &&
+        typeof t.claimedAt === 'number' &&
+        now - t.claimedAt > this.claimTimeoutMs
+      ) {
+        t.status = 'pending';
+        t.claimedBy = null;
+        t.claimedByClient = null;
+        t.claimedAt = null;
+        t.progress = null;
+        recovered++;
+      }
+    }
+    if (recovered > 0) this.saveBrainTasks();
+    return recovered;
+  }
+
+  /**
+   * Queue tasks for IDE agents (shared-Brain phase 4).
+   * `replacePending` is EXPLICIT: without it, a new plan APPENDS and never
+   * destroys unrelated pending work. `idempotencyKey` dedupes re-pushed plan
+   * steps against still-active/completed tasks (failed/cancelled re-create).
+   */
+  brainPush(
+    tasks: Array<{ title: string; detail: string; idempotencyKey?: string }>,
+    opts: { replacePending?: boolean; planId?: string | null } = {},
+  ): BrainTask[] {
+    if (!Array.isArray(this.brainTasks)) this.loadBrainTasks();
+    this.sweepStaleClaims();
+    const planId = typeof opts.planId === 'string' && opts.planId.trim() ? opts.planId.slice(0, 80) : null;
+    const incoming = (tasks ?? []).slice(0, 20);
+    const created: BrainTask[] = [];
+    for (const t of incoming) {
+      const key = typeof t.idempotencyKey === 'string' && t.idempotencyKey.trim() ? t.idempotencyKey.trim().slice(0, 120) : null;
+      if (key && this.brainTasks.some((x) => x.idempotencyKey === key && x.status !== 'failed' && x.status !== 'cancelled')) {
+        continue; // duplicate of a still-active/completed task — skip
+      }
+      created.push({
+        id: 'bt_' + Date.now().toString(36) + '_' + created.length + '_' + Math.random().toString(36).slice(2, 8),
+        title: String(t.title ?? '').slice(0, 200),
+        detail: String(t.detail ?? '').slice(0, 2000),
+        status: 'pending',
+        claimedBy: null,
+        claimedByClient: null,
+        claimedAt: null,
+        result: null,
+        progress: null,
+        planId,
+        idempotencyKey: key,
+        stateHashAtClaim: null,
+        stateHashAtFinish: null,
+        verified: null,
+      });
+    }
+    // replace mode: a new plan supersedes ALL still-pending items (history stays);
+    // append mode (default): existing tasks are untouched
+    const rest = this.brainTasks.filter((t) => (opts.replacePending ? t.status !== 'pending' : true));
+    this.brainTasks = [...created, ...rest].slice(0, 100);
+    this.saveBrainTasks();
+    return created;
+  }
+
+  brainList(): BrainTask[] {
+    this.sweepStaleClaims();
+    return this.brainTasks;
+  }
+
+  brainClaim(id: string, claimedBy: string, claimedByClient: string, stateHash?: string | null): BrainTask | null {
+    if (!Array.isArray(this.brainTasks)) this.loadBrainTasks();
+    this.sweepStaleClaims();
+    const t = this.brainTasks.find((x) => x.id === id && x.status === 'pending');
+    if (!t) return null;
+    t.status = 'claimed';
+    t.claimedBy = claimedBy.slice(0, 80);
+    t.claimedByClient = claimedByClient.slice(0, 80);
+    t.claimedAt = Date.now();
+    t.progress = null;
+    // completion-verification anchor: the document fingerprint at claim time
+    t.stateHashAtClaim = typeof stateHash === 'string' ? stateHash.slice(0, 64) : null;
+    t.stateHashAtFinish = null;
+    t.verified = null;
+    this.saveBrainTasks();
+    return t;
+  }
+
+  /** Owner-only bounded progress note; first update moves claimed → running
+   * and refreshes the claim lease (progress doubles as a heartbeat). */
+  brainProgress(id: string, claimedByClient: string, progress: string): BrainTask | null {
+    if (!Array.isArray(this.brainTasks)) this.loadBrainTasks();
+    this.sweepStaleClaims();
+    const t = this.brainTasks.find(
+      (x) => x.id === id && (x.status === 'claimed' || x.status === 'running') && x.claimedByClient === claimedByClient,
+    );
+    if (!t) return null;
+    t.status = 'running';
+    t.progress = String(progress ?? '').slice(0, 200);
+    t.claimedAt = Date.now();
+    this.saveBrainTasks();
+    return t;
+  }
+
+  /**
+   * Cancel a task. With `requesterClient` (an MCP agent) only the OWNER may
+   * cancel its claimed/running work. Without one (editor ctrl = the human)
+   * any unfinished task may be cancelled — human authority outranks agents.
+   * Finished tasks are immutable.
+   */
+  brainCancel(id: string, requesterClient?: string): BrainTask | null {
+    if (!Array.isArray(this.brainTasks)) this.loadBrainTasks();
+    this.sweepStaleClaims();
+    const t = this.brainTasks.find((x) => x.id === id);
+    if (!t || t.status === 'done' || t.status === 'failed' || t.status === 'cancelled') return null;
+    if (requesterClient) {
+      const owned = (t.status === 'claimed' || t.status === 'running') && t.claimedByClient === requesterClient;
+      if (!owned) return null;
+    }
+    t.status = 'cancelled';
+    t.progress = null;
+    t.claimedBy = null;
+    t.claimedByClient = null;
+    t.claimedAt = null;
+    this.saveBrainTasks();
+    return t;
+  }
+
+  brainFinish(id: string, claimedByClient: string, ok: boolean, result: string, stateHash?: string | null): BrainTask | null {
+    if (!Array.isArray(this.brainTasks)) this.loadBrainTasks();
+    this.sweepStaleClaims();
+    const t = this.brainTasks.find(
+      (x) =>
+        (x.status === 'claimed' || x.status === 'running') &&
+        x.claimedByClient === claimedByClient &&
+        x.id === id,
+    );
+    if (!t) return null;
+    t.status = ok ? 'done' : 'failed';
+    t.result = String(result ?? '').slice(0, 2000);
+    // verify against the claim anchor when both fingerprints are known:
+    // a successful task that left the document unchanged is reported UNVERIFIED
+    if (typeof stateHash === 'string') t.stateHashAtFinish = stateHash.slice(0, 64);
+    t.verified =
+      ok && t.stateHashAtClaim !== null && t.stateHashAtFinish !== null
+        ? t.stateHashAtFinish !== t.stateHashAtClaim
+        : null;
+    this.saveBrainTasks();
+    return t;
+  }
+
+  /** Remove finished (`done` / `failed` / `cancelled`) tasks while preserving active ones. */
+  brainClearFinished(): BrainTask[] {
+    if (!Array.isArray(this.brainTasks)) this.loadBrainTasks();
+    this.sweepStaleClaims();
+    this.brainTasks = this.brainTasks.filter((t) => t.status === 'pending' || t.status === 'claimed' || t.status === 'running');
+    this.saveBrainTasks();
+    return this.brainTasks;
+  }
+
+  /** Re-queue failed tasks (all failed tasks, or a specific failed task by `id`) back to `pending`. */
+  brainRetryFailed(id?: string): BrainTask[] {
+    if (!Array.isArray(this.brainTasks)) this.loadBrainTasks();
+    this.sweepStaleClaims();
+    let changed = false;
+    for (const t of this.brainTasks) {
+      if (t.status === 'failed' && (!id || t.id === id)) {
+        t.status = 'pending';
+        t.claimedBy = null;
+        t.claimedByClient = null;
+        t.claimedAt = null;
+        t.result = null;
+        t.progress = null;
+        changed = true;
+      }
+    }
+    if (changed) this.saveBrainTasks();
+    return this.brainTasks;
+  }
+
+    recentOps(limit = 20): AuditEntry[] {
     return this.auditMemory.slice(-Math.max(1, Math.min(limit, MAX_AUDIT_MEMORY))).reverse();
+  }
+
+  /** Keep the on-disk audit useful without letting a busy IDE grow forever. */
+  private trimAuditFile(): void {
+    try {
+      const size = statSync(this.auditPath).size;
+      if (size <= MAX_AUDIT_FILE_BYTES) return;
+      const start = Math.max(0, size - RETAIN_AUDIT_FILE_BYTES);
+      const tail = readFileSync(this.auditPath).subarray(start);
+      // Drop a partial JSONL line when the retained window starts mid-entry.
+      const firstNewline = tail.indexOf(0x0a);
+      const completeLines = firstNewline >= 0 ? tail.subarray(firstNewline + 1) : tail;
+      writeFileSync(this.auditPath, completeLines);
+      this.restrict(this.auditPath);
+    } catch {
+      // Audit retention must never interrupt an MCP tool call.
+    }
   }
 }

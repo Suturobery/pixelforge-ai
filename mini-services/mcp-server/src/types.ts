@@ -96,6 +96,8 @@ export interface EditorInbound {
   bridgeVersion?: number;
   appVersion?: string;
   origin?: string;
+  /** shared editor secret — see editor-auth.ts (hello is rejected without it) */
+  editorKey?: string;
   /** fresh page claims the slot from a stale holder (sent after repeated rejects) */
   takeover?: boolean;
   // tool-result
@@ -122,8 +124,18 @@ export type CtrlRequest =
   | { kind: 'pair-cancel'; token: string }
   | { kind: 'clients-list' }
   | { kind: 'client-revoke'; clientId: string }
+  /** Remove a client record only after it has been revoked. */
+  | { kind: 'client-remove'; clientId: string }
   | { kind: 'ops-recent'; limit?: number }
-  | { kind: 'approvals-list' };
+  | { kind: 'approvals-list' }
+  | { kind: 'brain-push'; tasks: Array<{ title: string; detail: string; idempotencyKey?: string }>; replacePending?: boolean; planId?: string }
+  | { kind: 'brain-tasks' }
+  | { kind: 'brain-clear' }
+  | { kind: 'brain-retry'; id?: string }
+  /** editor-side cancel — the human may cancel ANY unfinished task */
+  | { kind: 'brain-cancel'; id: string }
+  /** dormant: broadcast tools/list_changed when the catalog ever becomes dynamic */
+  | { kind: 'tools-changed' };
 
 export interface EditorEvent {
   type: 'projectChanged' | 'editorStatus';

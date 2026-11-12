@@ -58,7 +58,25 @@ export const DEFAULT_AI_PROVIDERS: AIProviderConfig[] = [
     kind: 'custom',
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
     apiKey: '',
-    model: 'gemini-2.5-flash-image',
+    model: 'gemini-3.1-flash-image',
+    enabled: false,
+  },
+  {
+    id: 'cloudflare',
+    label: 'Cloudflare · Workers AI',
+    kind: 'custom',
+    baseUrl: '',
+    apiKey: '',
+    model: '@cf/black-forest-labs/flux-1-schnell',
+    enabled: false,
+  },
+  {
+    id: 'groq',
+    label: 'Groq (second brain)',
+    kind: 'openai',
+    baseUrl: 'https://api.groq.com/openai/v1',
+    apiKey: '',
+    model: 'llama-3.3-70b-versatile',
     enabled: false,
   },
   {
@@ -79,6 +97,12 @@ export const DEFAULT_AI_PROVIDERS: AIProviderConfig[] = [
  */
 export const MODEL_PRESETS: Record<string, { id: string; label: string }[]> = {
   zai: [{ id: 'auto', label: 'auto — best available' }],
+  groq: [
+    { id: 'llama-3.3-70b-versatile', label: 'llama-3.3-70b — best quality (second brain)' },
+    { id: 'llama-3.1-8b-instant', label: 'llama-3.1-8b — instant (fastest)' },
+    { id: 'openai/gpt-oss-120b', label: 'gpt-oss-120b — strong reasoning' },
+    { id: 'qwen/qwen3-32b', label: 'qwen3-32b — balanced' },
+  ],
   openai: [
     { id: 'gpt-image-1', label: 'gpt-image-1 — latest image model' },
     { id: 'gpt-image-1-mini', label: 'gpt-image-1-mini — fast & cheaper' },
@@ -86,10 +110,13 @@ export const MODEL_PRESETS: Record<string, { id: string; label: string }[]> = {
     { id: 'dall-e-2', label: 'dall-e-2 — legacy' },
   ],
   gemini: [
-    { id: 'gemini-2.5-flash-image', label: 'gemini-2.5-flash-image — Nano Banana (images)' },
-    { id: 'gemini-2.5-flash', label: 'gemini-2.5-flash — fast all-rounder' },
-    { id: 'gemini-2.5-pro', label: 'gemini-2.5-pro — most capable' },
-    { id: 'gemini-2.0-flash', label: 'gemini-2.0-flash — legacy' },
+    { id: 'gemini-3.1-flash-image', label: 'gemini-3.1-flash-image — current image model' },
+    { id: 'gemini-3.1-flash-lite-image', label: 'gemini-3.1-flash-lite-image — fast image model' },
+    { id: 'gemini-3-pro-image', label: 'gemini-3-pro-image — high-fidelity image model' },
+    { id: 'gemini-2.5-flash-image', label: 'gemini-2.5-flash-image — legacy (use only if your key supports it)' },
+  ],
+  cloudflare: [
+    { id: '@cf/black-forest-labs/flux-1-schnell', label: 'FLUX.1 Schnell — Workers AI daily free allocation' },
   ],
 }
 
@@ -118,6 +145,9 @@ export interface AppSettings {
   aiProviders: AIProviderConfig[]
   /** which enabled provider the Generate panel uses */
   activeProviderId: string
+  /** which provider the Brain (reasoning) uses — id from aiProviders; Groq is
+   * the default profile, not a hard-wired requirement (shared-Brain phase 3) */
+  brainProviderId: string
   /** monthly spending cap in USD (ESTIMATE-based hard stop; 0 = unlimited) */
   aiMonthlyLimitUsd: number
   /** spending warning threshold in USD (0 = off) */
@@ -128,6 +158,8 @@ export interface AppSettings {
   mcpPort: number
   /** size of the floating restore pills (collapsed Preview / View toolbar) */
   floatBtnSize: 'sm' | 'md' | 'lg'
+  /** readable compact labels without changing canvas pixels or project data */
+  uiTextScale: 'normal' | 'large'
   // --- runtime-only (never persisted) — desktop secure mode (Task 13a) ---
   /** true when the desktop bridge v4 settings vault is available */
   secureMode: boolean
@@ -150,11 +182,13 @@ export const DEFAULT_SETTINGS: AppSettings = {
   onionNextTint: '#3fbf7f',
   aiProviders: DEFAULT_AI_PROVIDERS,
   activeProviderId: 'zai',
+  brainProviderId: 'groq',
   aiMonthlyLimitUsd: 5,
   aiWarnUsd: 1,
   agentApiEnabled: true,
   mcpPort: 3030,
   floatBtnSize: 'md',
+  uiTextScale: 'normal',
   secureMode: false,
   keyStatus: {},
   encryptionWarning: null,
@@ -167,6 +201,9 @@ export function getActiveProvider(s: Pick<AppSettings, 'aiProviders' | 'activePr
   // Old saved settings may still carry kind "anthropic" (removed provider) —
   // treat as unusable so generation falls back to built-in.
   if ((p.kind as string) === 'anthropic') return null
+  // Groq is the TEXT "second brain" — it has no image-generation API, so the
+  // sprite pipeline must never pick it (the brain reads it by id instead).
+  if (p.id === 'groq') return null
   if (p.kind !== 'zai' && !p.apiKey.trim()) return null
   return p
 }
@@ -198,7 +235,7 @@ export interface DesktopSettingsView {
       AppSettings,
       | 'autosaveDelay' | 'historyLimit' | 'defaultClipFps' | 'defaultSize'
       | 'defaultPaletteId' | 'showGridDefault' | 'onionSkinDefault'
-      | 'onionOpacity' | 'onionPrevTint' | 'onionNextTint' | 'floatBtnSize'
+      | 'onionOpacity' | 'onionPrevTint' | 'onionNextTint' | 'floatBtnSize' | 'uiTextScale'
     >
   >
   mcp: { agentApiEnabled: boolean; bridgeAutoConnect: boolean }
@@ -214,6 +251,7 @@ export interface DesktopSettingsView {
     sessionOnly: boolean
   }>
   activeProviderId: string
+  brainProviderId: string
   credentials: {
     encryptionAvailable: boolean
     backend: string
@@ -254,6 +292,7 @@ export const useAppSettings = create<SettingsStore>()(
           ...(view.app.onionPrevTint !== undefined ? { onionPrevTint: view.app.onionPrevTint } : {}),
           ...(view.app.onionNextTint !== undefined ? { onionNextTint: view.app.onionNextTint } : {}),
           ...(view.app.floatBtnSize !== undefined ? { floatBtnSize: view.app.floatBtnSize } : {}),
+          ...(view.app.uiTextScale !== undefined ? { uiTextScale: view.app.uiTextScale } : {}),
           agentApiEnabled: view.mcp.agentApiEnabled,
           ...(view.ai
             ? {
@@ -268,6 +307,9 @@ export const useAppSettings = create<SettingsStore>()(
             return v ? { ...p, label: v.label, kind: v.kind, baseUrl: v.baseUrl, model: v.model, enabled: v.enabled } : p
           }),
           activeProviderId: s.aiProviders.some((p) => p.id === view.activeProviderId) ? view.activeProviderId : s.activeProviderId,
+          // reasoning-provider choice rides the desktop settings file too
+          // (older main processes without the field keep the localStorage value)
+          ...(typeof view.brainProviderId === 'string' ? { brainProviderId: view.brainProviderId } : {}),
           secureMode: true,
           keyStatus: Object.fromEntries(
             view.aiProviders.map((p) => [p.id, { hasKey: p.hasKey, sessionOnly: p.sessionOnly }]),
@@ -279,7 +321,7 @@ export const useAppSettings = create<SettingsStore>()(
     }),
     {
       name: 'pixelforge-settings-v1', // same storage key as v0/v1 blobs (migrated in place)
-      version: 3,
+      version: 5,
       storage: createJSONStorage(() =>
         typeof window !== 'undefined' ? window.localStorage : memoryStorage
       ),
@@ -300,11 +342,13 @@ export const useAppSettings = create<SettingsStore>()(
           DESKTOP ? { ...p, apiKey: '' } : p
         ),
         activeProviderId: s.activeProviderId,
+        brainProviderId: s.brainProviderId,
         agentApiEnabled: s.agentApiEnabled,
         mcpPort: s.mcpPort,
         aiMonthlyLimitUsd: s.aiMonthlyLimitUsd,
         aiWarnUsd: s.aiWarnUsd,
         floatBtnSize: s.floatBtnSize,
+        uiTextScale: s.uiTextScale,
       }),
       // v0/v1 blobs may carry plaintext keys from an earlier build (or the web
       // prototype sharing this origin in dev): on desktop they are scrubbed
@@ -321,6 +365,27 @@ export const useAppSettings = create<SettingsStore>()(
           p.aiProviders = p.aiProviders.filter((x) => (x as { kind?: string }).kind !== 'anthropic')
         }
         if (p.activeProviderId === 'anthropic') p.activeProviderId = 'zai'
+        // v4: the Groq "second brain" provider was added — older blobs predate
+        // it; inject the default entry (before Custom) so the card appears.
+        if (Array.isArray(p.aiProviders) && !p.aiProviders.some((x) => (x as { id?: string }).id === 'groq')) {
+          const groq = DEFAULT_AI_PROVIDERS.find((x) => x.id === 'groq')
+          if (groq) {
+            const customIdx = p.aiProviders.findIndex((x) => (x as { id?: string }).id === 'custom')
+            p.aiProviders = [...p.aiProviders]
+            p.aiProviders.splice(customIdx >= 0 ? customIdx : p.aiProviders.length, 0, { ...groq })
+          }
+        }
+        // v5: Cloudflare Workers AI needs a provider-specific transport rather
+        // than the generic OpenAI-compatible path. Add its empty profile; its
+        // API token remains absent until the artist explicitly saves one.
+        if (Array.isArray(p.aiProviders) && !p.aiProviders.some((x) => (x as { id?: string }).id === 'cloudflare')) {
+          const cloudflare = DEFAULT_AI_PROVIDERS.find((x) => x.id === 'cloudflare')
+          if (cloudflare) {
+            const groqIdx = p.aiProviders.findIndex((x) => (x as { id?: string }).id === 'groq')
+            p.aiProviders = [...p.aiProviders]
+            p.aiProviders.splice(groqIdx >= 0 ? groqIdx : p.aiProviders.length, 0, { ...cloudflare })
+          }
+        }
         return { ...DEFAULT_SETTINGS, ...p } as AppSettings & SettingsStore
       },
       onRehydrateStorage: () => (state) => {
@@ -384,8 +449,8 @@ export function startDesktopSettingsSync(): () => void {
   const persistFields = [
     'autosaveDelay', 'historyLimit', 'defaultClipFps', 'defaultSize',
     'defaultPaletteId', 'showGridDefault', 'onionSkinDefault', 'onionOpacity',
-    'onionPrevTint', 'onionNextTint', 'floatBtnSize', 'agentApiEnabled',
-    'activeProviderId', 'aiProviders', 'aiMonthlyLimitUsd', 'aiWarnUsd',
+    'onionPrevTint', 'onionNextTint', 'floatBtnSize', 'uiTextScale', 'agentApiEnabled',
+    'activeProviderId', 'brainProviderId', 'aiProviders', 'aiMonthlyLimitUsd', 'aiWarnUsd',
   ] as const
 
   const schedule = () => {
@@ -407,10 +472,12 @@ export function startDesktopSettingsSync(): () => void {
           onionPrevTint: s.onionPrevTint,
           onionNextTint: s.onionNextTint,
           floatBtnSize: s.floatBtnSize,
+          uiTextScale: s.uiTextScale,
         },
         mcp: { agentApiEnabled: s.agentApiEnabled },
         ai: { monthlyLimitUsd: s.aiMonthlyLimitUsd, warnUsd: s.aiWarnUsd, cacheEnabled: true },
         activeProviderId: s.activeProviderId,
+        brainProviderId: s.brainProviderId,
         aiProviders: s.aiProviders.map((p) => ({
           id: p.id, label: p.label, kind: p.kind, baseUrl: p.baseUrl,
           model: p.model, enabled: p.enabled,

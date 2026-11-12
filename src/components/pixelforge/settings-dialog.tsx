@@ -57,6 +57,9 @@ import {
   Bot,
   KeyRound,
   ShieldAlert,
+  Brain,
+  Image as ImageIcon,
+  WandSparkles,
   Trash2,
   X,
 } from 'lucide-react'
@@ -117,14 +120,16 @@ function ModelPicker({
 
   if (!presets) {
     return (
-      <Input
-        value={provider.model}
-        onChange={(e) => onUpdate({ model: e.target.value })}
-        placeholder="e.g. llama3.2, qwen2.5, gemini-2.5-flash-image…"
-        className="h-6 border-zinc-800 bg-zinc-950 px-2 font-mono text-[11px]"
-        aria-label={`${provider.label} model`}
-        spellCheck={false}
-      />
+      <div className="min-w-0 flex-1">
+        <Input
+          value={provider.model}
+          onChange={(e) => onUpdate({ model: e.target.value })}
+          placeholder="e.g. llama3.2, qwen2.5, gemini-2.5-flash-image…"
+          className="h-6 min-w-0 w-full border-zinc-800 bg-zinc-950 px-2 font-mono text-[11px]"
+          aria-label={`${provider.label} model`}
+          spellCheck={false}
+        />
+      </div>
     )
   }
 
@@ -143,7 +148,7 @@ function ModelPicker({
         }}
       >
         <SelectTrigger
-          className="h-6 w-full border-zinc-800 bg-zinc-950 px-2 font-mono text-[11px]"
+          className="h-6 w-full min-w-0 border-zinc-800 bg-zinc-950 px-2 font-mono text-[11px] [&>span]:truncate"
           aria-label={`${provider.label} model`}
         >
           <SelectValue placeholder="pick a model" />
@@ -164,7 +169,7 @@ function ModelPicker({
           value={provider.model}
           onChange={(e) => onUpdate({ model: e.target.value })}
           placeholder="type model id"
-          className="h-6 border-zinc-800 bg-zinc-950 px-2 font-mono text-[11px]"
+          className="h-6 min-w-0 w-full border-zinc-800 bg-zinc-950 px-2 font-mono text-[11px]"
           aria-label={`${provider.label} custom model id`}
           spellCheck={false}
         />
@@ -220,24 +225,21 @@ function SecureKeyEditor({
   }
 
   return (
-    <div className="mt-1.5 space-y-1">
+    <div className="mt-1.5 min-w-0 space-y-1">
       {/* status row — never shows key material */}
-      <div className="flex items-center justify-between gap-2">
-        <span className="flex min-w-0 items-center gap-1.5 font-mono text-[10px] text-zinc-400">
+      <div className="flex flex-col items-start gap-1 min-[420px]:flex-row min-[420px]:items-center min-[420px]:justify-between min-[420px]:gap-2">
+        <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 font-mono text-[10px] text-zinc-400">
           <KeyRound className={`h-3 w-3 shrink-0 ${hasKey ? 'text-teal-400' : 'text-zinc-600'}`} aria-hidden />
           {hasKey ? (
             <>
               <span className="text-zinc-300">●●●●●●●●</span>
-              <span className="truncate">{sessionOnly ? 'stored — session only' : 'stored — encrypted'}</span>
+            <span className="min-w-0 break-words">{sessionOnly ? 'stored — session only' : 'stored — encrypted'}</span>
             </>
           ) : (
             'no key stored'
           )}
           {!hasKey && hasSessionKey && (
-            <span className="shrink-0 rounded bg-amber-500/10 px-1 font-mono text-[9px] text-amber-300">entered — unsaved</span>
-          )}
-          {hasKey && !hasSessionKey && (
-            <span className="shrink-0 rounded bg-zinc-800 px-1 font-mono text-[9px] text-zinc-300">locked until re-entered</span>
+            <span className="rounded bg-amber-500/10 px-1 font-mono text-[9px] text-amber-300">entered — unsaved</span>
           )}
         </span>
         <span className="flex shrink-0 items-center gap-1">
@@ -267,13 +269,13 @@ function SecureKeyEditor({
         </span>
       </div>
       {editing && (
-        <div className="flex items-center gap-1">
+        <div className="flex min-w-0 items-center gap-1">
           <Input
             type="password"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             placeholder="paste the API key — it is sent to the OS keyring and never stored in plain text"
-            className="h-6 border-zinc-800 bg-zinc-950 px-2 font-mono text-[11px]"
+            className="h-6 min-w-0 flex-1 border-zinc-800 bg-zinc-950 px-2 font-mono text-[11px]"
             aria-label={`${provider.label} new API key`}
             spellCheck={false}
             onKeyDown={(e) => {
@@ -306,6 +308,18 @@ function SecureKeyEditor({
   )
 }
 
+function AiSectionHeader({ icon, title, hint }: { icon: React.ReactNode; title: string; hint: string }) {
+  return (
+    <div className="mb-1.5 mt-1 flex min-w-0 items-baseline gap-1.5 first:mt-0">
+      {icon}
+      <div className="min-w-0">
+        <p className="font-mono text-[11px] font-semibold uppercase tracking-wider text-zinc-200">{title}</p>
+        <p className="font-mono text-[9px] leading-tight text-zinc-500">{hint}</p>
+      </div>
+    </div>
+  )
+}
+
 function ProviderCard({
   provider,
   isActive,
@@ -319,18 +333,21 @@ function ProviderCard({
   wide?: boolean
   secureMode: boolean
   onUpdate: (patch: Partial<AIProviderConfig>) => void
-  onSetActive: () => void
+  onSetActive?: () => void
 }) {
   const [showKey, setShowKey] = useState(false)
   const [testing, setTesting] = useState(false)
   const [test, setTest] = useState<TestResult | null>(null)
 
   const isBuiltin = provider.kind === 'zai'
+  const isCloudflare = provider.id === 'cloudflare'
+  const cloudflareAccountId = /^https:\/\/api\.cloudflare\.com\/client\/v4\/accounts\/([a-f0-9]{32})\/?$/i.exec(provider.baseUrl)?.[1] ?? ''
   // Desktop credentials are write-only in the renderer. MAIN owns and uses
   // the stored vault key, so `hasKey` is the only signal this card needs.
   const keyStatus = useAppSettings((s) => s.keyStatus[provider.id])
   const hasUsableKey = secureMode ? Boolean(keyStatus?.hasKey) : provider.apiKey.trim() !== ''
-  const canBeEngine = hasUsableKey
+  const isBrainOnly = provider.id === 'groq'
+  const canBeEngine = hasUsableKey && !isBrainOnly
 
   const runTest = async () => {
     setTesting(true)
@@ -358,6 +375,7 @@ function ProviderCard({
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...AGENT_FETCH_HEADERS },
         body: JSON.stringify({
+          id: provider.id,
           kind: provider.kind,
           baseUrl: provider.baseUrl,
           apiKey: provider.apiKey,
@@ -379,9 +397,9 @@ function ProviderCard({
   }
 
   return (
-    <div className={`rounded-lg border border-zinc-800 bg-zinc-900/50 p-2 ${wide ? 'sm:col-span-2' : ''}`}>
+    <div className={`min-w-0 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900/50 p-2 ${wide ? 'md:col-span-2' : ''}`}>
       {/* header row */}
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex min-w-0 items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-1.5">
           <span
             className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${
@@ -389,17 +407,21 @@ function ProviderCard({
             }`}
             aria-hidden
           />
-          <span className="truncate font-mono text-xs text-zinc-100">{provider.label}</span>
+          <span className="min-w-0 truncate font-mono text-xs text-zinc-100">{provider.label}</span>
           <span className="shrink-0 rounded border border-zinc-800 bg-zinc-950 px-1 py-px font-mono text-[9px] uppercase tracking-wider text-zinc-400">
-            {provider.kind === 'custom' ? 'openai-compat' : provider.kind}
+            {isCloudflare ? 'workers ai' : provider.kind === 'custom' ? 'openai-compat' : provider.kind}
           </span>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {isActive ? (
+          {isBrainOnly ? (
+            <span className="rounded bg-sky-600/20 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-sky-300">
+              brain
+            </span>
+          ) : isActive ? (
             <span className="rounded bg-teal-600/20 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider text-teal-300">
               engine
             </span>
-          ) : (
+          ) : onSetActive ? (
             <Button
               variant="ghost"
               size="sm"
@@ -414,7 +436,7 @@ function ProviderCard({
             >
               Use
             </Button>
-          )}
+          ) : null}
           <Switch
             checked={provider.enabled}
             onCheckedChange={(v) => onUpdate({ enabled: v })}
@@ -424,37 +446,50 @@ function ProviderCard({
       </div>
 
       {isBuiltin && (
-        <p className="mt-1 font-mono text-[10px] leading-tight text-zinc-400">
+        <p className="mt-1 break-words font-mono text-[10px] leading-tight text-zinc-400">
           {secureMode
             ? <>Save your Z.AI Base URL and API key here (e.g. <span className="text-zinc-300">https://api.z.ai/api/paas/v4</span>). The desktop app uses the encrypted key directly.</>
             : <>Works out of the box where a <span className="text-zinc-300">.z-ai-config</span> exists — otherwise paste your Z.AI Base URL + key below.</>}
         </p>
       )}
+      {isCloudflare && (
+        <p className="mt-1 break-words font-mono text-[10px] leading-tight text-zinc-400">
+          Workers AI has a daily free allocation. Create a dedicated <span className="text-zinc-300">Workers AI API token</span> with Read + Edit permissions; save its Account ID below. The token is encrypted by the desktop app.
+        </p>
+      )}
       <div className="mt-1.5 space-y-1">
-        <label className="flex items-center gap-1.5">
-          <span className="w-16 shrink-0 font-mono text-[10px] text-zinc-400">BASE URL</span>
+        <label className="flex min-w-0 items-center gap-1.5">
+          <span className="w-16 shrink-0 font-mono text-[10px] text-zinc-400">{isCloudflare ? 'ACCOUNT ID' : 'BASE URL'}</span>
           <Input
-            value={provider.baseUrl}
-            onChange={(e) => onUpdate({ baseUrl: e.target.value })}
-            placeholder={isBuiltin ? 'https://api.z.ai/api/paas/v4' : 'https://api.example.com/v1'}
-            className="h-6 border-zinc-800 bg-zinc-950 px-2 font-mono text-[11px]"
-            aria-label={`${provider.label} base URL`}
+            value={isCloudflare ? cloudflareAccountId : provider.baseUrl}
+            onChange={(e) => {
+              const value = e.target.value.trim()
+              onUpdate({ baseUrl: isCloudflare ? (value ? `https://api.cloudflare.com/client/v4/accounts/${value}` : '') : value })
+            }}
+            placeholder={isCloudflare ? '32-character Cloudflare Account ID' : isBuiltin ? 'https://api.z.ai/api/paas/v4' : 'https://api.example.com/v1'}
+            maxLength={isCloudflare ? 32 : undefined}
+            className="h-6 min-w-0 flex-1 border-zinc-800 bg-zinc-950 px-2 font-mono text-[11px]"
+            aria-label={isCloudflare ? `${provider.label} account ID` : `${provider.label} base URL`}
             spellCheck={false}
           />
         </label>
             {secureMode ? (
-              <div className="pl-[4.5rem]">
+            <div className="ml-0 min-w-0 min-[420px]:ml-[4.5rem]">
                 <SecureKeyEditor
                   provider={provider}
                   hasKey={keyStatus?.hasKey ?? false}
                   sessionOnly={keyStatus?.sessionOnly ?? false}
-                  onSaved={(ok, message) =>
+                  onSaved={(ok, message) => {
                     setTest({ ok, text: message })
-                  }
+                    // Saving a provider key is an explicit intent to use it.
+                    // Activate it in the same interaction so the AI panel does
+                    // not keep reporting the vague "image engine needed".
+                    if (ok) onSetActive?.()
+                  }}
                 />
               </div>
             ) : (
-              <label className="flex items-center gap-1.5">
+              <label className="flex min-w-0 items-center gap-1.5">
                 <span className="w-16 shrink-0 font-mono text-[10px] text-zinc-400">API KEY</span>
                 <div className="relative min-w-0 flex-1">
                   <Input
@@ -477,12 +512,12 @@ function ProviderCard({
                 </div>
               </label>
             )}
-            <label className="flex items-center gap-1.5">
+            <label className="flex min-w-0 items-center gap-1.5">
               <span className="w-16 shrink-0 font-mono text-[10px] text-zinc-400">MODEL</span>
               <ModelPicker provider={provider} onUpdate={onUpdate} />
             </label>
           </div>
-      <div className="mt-1.5 flex items-center gap-2">
+      <div className="mt-1.5 flex min-w-0 items-center gap-2">
         <Button
           variant="outline"
           size="sm"
@@ -524,8 +559,11 @@ export function SettingsDialog({
   const [appVersion, setAppVersion] = useState<string | null>(null)
   // Claude can analyze images but is not an image-generation endpoint in this
   // workflow. Never show a card that suggests it can power sprite creation.
-  const imageProviders = s.aiProviders.filter((provider) => (provider.kind as string) !== 'anthropic')
-  const hasUnsupportedAnthropic = s.aiProviders.some((provider) => (provider.kind as string) === 'anthropic')
+  const allProviders = s.aiProviders.filter((provider) => (provider.kind as string) !== 'anthropic')
+  const IMAGE_IDS = new Set(['zai', 'openai', 'gemini', 'cloudflare'])
+  const imageProviders = allProviders.filter((p) => IMAGE_IDS.has(p.id))
+  const brainProviders = allProviders.filter((p) => p.id === 'groq')
+  const customProviders = allProviders.filter((p) => p.id === 'custom')
 
   useEffect(() => {
     if (!open || !isDesktop()) return
@@ -557,8 +595,8 @@ export function SettingsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85dvh] overflow-y-auto border-zinc-800 bg-zinc-950 p-4 text-zinc-100 sm:max-w-2xl">
-        <DialogHeader>
+      <DialogContent className="flex max-h-[88dvh] w-[calc(100%-2rem)] flex-col gap-3 overflow-hidden border-zinc-800 bg-zinc-950 p-4 text-zinc-100 sm:max-w-2xl">
+        <DialogHeader className="shrink-0">
           <DialogTitle className="flex items-center justify-between font-mono">
             <span className="flex items-center gap-2">
               Settings
@@ -581,8 +619,8 @@ export function SettingsDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <Tabs defaultValue="general">
-          <TabsList className="grid w-full grid-cols-5 bg-zinc-900">
+        <Tabs defaultValue="general" className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          <TabsList className="grid w-full shrink-0 grid-cols-5 bg-zinc-900">
             <TabsTrigger value="general" className="font-mono text-[11px]">General</TabsTrigger>
             <TabsTrigger value="canvas" className="font-mono text-[11px]">Canvas</TabsTrigger>
             <TabsTrigger value="ai" className="font-mono text-[11px]">AI</TabsTrigger>
@@ -591,7 +629,7 @@ export function SettingsDialog({
           </TabsList>
 
           {/* ---------------------------------------------------- general */}
-          <TabsContent value="general" className="space-y-4 pt-3">
+          <TabsContent value="general" className="pixelforge-scroll min-h-0 min-w-0 flex-1 space-y-4 overflow-y-auto overflow-x-hidden pr-1 pt-3">
             <SoftwareUpdatesCard />
             <Row label="Autosave" hint="Save the open project automatically after changes">
               <Switch checked={autosave} onCheckedChange={setAutosave} aria-label="Autosave" />
@@ -626,6 +664,20 @@ export function SettingsDialog({
                   <SelectItem value="40" className="font-mono text-xs">32 MB</SelectItem>
                   <SelectItem value="100" className="font-mono text-xs">64 MB</SelectItem>
                   <SelectItem value="200" className="font-mono text-xs">128 MB</SelectItem>
+                </SelectContent>
+              </Select>
+            </Row>
+            <Row label="Interface text" hint="Make compact labels easier to read across the studio">
+              <Select
+                value={s.uiTextScale}
+                onValueChange={(v) => setSetting('uiTextScale', v === 'large' ? 'large' : 'normal')}
+              >
+                <SelectTrigger className="h-8 w-24 border-zinc-800 bg-zinc-900 font-mono text-xs" aria-label="Interface text size">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="normal" className="font-mono text-xs">Normal</SelectItem>
+                  <SelectItem value="large" className="font-mono text-xs">Large</SelectItem>
                 </SelectContent>
               </Select>
             </Row>
@@ -667,7 +719,7 @@ export function SettingsDialog({
           </TabsContent>
 
           {/* ----------------------------------------------------- canvas */}
-          <TabsContent value="canvas" className="space-y-4 pt-3">
+          <TabsContent value="canvas" className="pixelforge-scroll min-h-0 min-w-0 flex-1 space-y-4 overflow-y-auto overflow-x-hidden pr-1 pt-3">
             <Row label="Default canvas size" hint="Preselected in the New project dialog">
               <Select
                 value={String(s.defaultSize)}
@@ -722,18 +774,12 @@ export function SettingsDialog({
           </TabsContent>
 
           {/* ---------------------------------------------------- AI & MCP */}
-          <TabsContent value="ai" className="pt-2">
-            {/* 2-column grid so all providers fit the viewport — no scrolling */}
+          <TabsContent value="ai" className="pixelforge-scroll min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden pr-1 pt-2">
             <p className="mb-1.5 font-mono text-[10px] leading-tight text-zinc-400">
               {secureMode
                 ? 'Keys are stored encrypted by the desktop app (OS keyring) and never written in plain text. The app can only store them — never read them back.'
                 : 'Keys are stored only in this browser and sent only to the endpoints you configure.'}
             </p>
-            {hasUnsupportedAnthropic && (
-              <p className="mb-1.5 font-mono text-[10px] leading-tight text-amber-300">
-                Claude is not listed as an image engine because this app requires an image-generation API. Use Z.AI, OpenAI, Gemini, or an OpenAI-compatible endpoint.
-              </p>
-            )}
             {s.encryptionWarning && (
               <div
                 className="mb-1.5 flex items-start gap-1.5 rounded-lg border border-amber-800/60 bg-amber-950/30 p-2"
@@ -743,7 +789,13 @@ export function SettingsDialog({
                 <p className="font-mono text-[10px] leading-tight text-amber-200">{s.encryptionWarning}</p>
               </div>
             )}
-            <div className="grid gap-1.5 sm:grid-cols-2">
+            {/* ---------- IMAGE GENERATION ---------- */}
+            <AiSectionHeader
+              icon={<ImageIcon className="h-3.5 w-3.5 shrink-0 text-teal-400" aria-hidden />}
+              title="Image generation — sprites & assets"
+              hint="The engine marked ACTIVE powers the Generate button. Only image-capable APIs are listed here."
+            />
+            <div className="grid min-w-0 gap-1.5 md:grid-cols-2">
               {imageProviders.map((p) => (
                 <ProviderCard
                   key={p.id}
@@ -755,25 +807,92 @@ export function SettingsDialog({
                   onSetActive={() => setEngine(p.id)}
                 />
               ))}
+            </div>
 
-              {/* MCP pointer — the real MCP lives in the dedicated tab (Task 8);
-                  pinned to the RIGHT column — it sits beside Custom instead of
-                  stretching full-width under the provider grid */}
-              <div className="rounded-lg border border-teal-900/60 bg-teal-950/20 p-2 sm:col-start-2">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex min-w-0 items-center gap-1.5">
-                    <Bot className="h-3.5 w-3.5 shrink-0 text-teal-400" />
-                    <div className="min-w-0">
-                      <p className="font-mono text-xs text-zinc-100">Agent API (MCP)</p>
-                      <p className="font-mono text-[10px] leading-tight text-zinc-400">
-                        This toggle is the MCP master switch — pairing, clients and the operation
-                        log live in the <span className="text-teal-300">MCP</span> tab. The old REST
-                        tool endpoint (<span className="text-zinc-300">/api/mcp/run</span>) was
-                        retired in favor of the real MCP server.
-                      </p>
-                    </div>
+            {/* ---------- BRAIN / REASONING ---------- */}
+            <AiSectionHeader
+              icon={<Brain className="h-3.5 w-3.5 shrink-0 text-sky-400" aria-hidden />}
+              title="Brain / reasoning — text assistants"
+              hint="Advisory + planning (Second brain, task-board orchestration). These do NOT generate images."
+            />
+            <div className="flex items-center justify-between gap-2 rounded-lg border border-sky-900/60 bg-sky-950/20 p-2">
+              <div className="min-w-0">
+                <p className="font-mono text-xs text-zinc-100">Reasoning provider</p>
+                <p className="mt-0.5 font-mono text-[10px] leading-tight text-zinc-400">
+                  Which enabled, OpenAI-compatible provider interprets, plans and answers. Default: Groq.
+                </p>
+              </div>
+              <Select
+                value={s.brainProviderId}
+                onValueChange={(v) => setSetting('brainProviderId', v)}
+              >
+                <SelectTrigger className="h-7 w-44 shrink-0 font-mono text-[11px]" aria-label="Reasoning provider">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {allProviders.map((p) => (
+                    <SelectItem key={p.id} value={p.id} disabled={!p.enabled}>
+                      {p.label}
+                      {!p.enabled ? ' (disabled)' : ''}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid min-w-0 gap-1.5">
+              {brainProviders.map((p) => (
+                <ProviderCard
+                  key={p.id}
+                  provider={p}
+                  isActive={false}
+                  wide
+                  secureMode={secureMode}
+                  onUpdate={(patch) => updateProvider(p.id, patch)}
+                />
+              ))}
+            </div>
+
+            {/* ---------- CUSTOM ---------- */}
+            <AiSectionHeader
+              icon={<WandSparkles className="h-3.5 w-3.5 shrink-0 text-frost-400" aria-hidden />}
+              title="Custom APIs"
+              hint="Point at any OpenAI-compatible endpoint. It can serve as the image engine once marked ACTIVE."
+            />
+            <div className="grid min-w-0 gap-1.5">
+              {customProviders.map((p) => (
+                <ProviderCard
+                  key={p.id}
+                  provider={p}
+                  isActive={s.activeProviderId === p.id}
+                  wide
+                  secureMode={secureMode}
+                  onUpdate={(patch) => updateProvider(p.id, patch)}
+                  onSetActive={() => setEngine(p.id)}
+                />
+              ))}
+            </div>
+
+            {/* ---------- OTHER INTEGRATIONS ---------- */}
+            <AiSectionHeader
+              icon={<Bot className="h-3.5 w-3.5 shrink-0 text-teal-400" aria-hidden />}
+              title="Other integrations"
+              hint="Non-API plumbing that still lives in Settings."
+            />
+            <div className="grid min-w-0 gap-1.5">
+              <div className="min-w-0 rounded-lg border border-teal-900/60 bg-teal-950/20 p-2">
+                <div className="flex min-w-0 items-start gap-2">
+                  <Bot className="mt-0.5 h-3.5 w-3.5 shrink-0 text-teal-400" />
+                  <div className="min-w-0 flex-1">
+                    <p className="font-mono text-xs text-zinc-100">Agent API (MCP)</p>
+                    <p className="mt-1 break-words font-mono text-[10px] leading-tight text-zinc-400">
+                      This toggle is the MCP master switch — pairing, clients and the operation
+                      log live in the <span className="text-teal-300">MCP</span> tab. The old REST
+                      tool endpoint (<span className="text-zinc-300">/api/mcp/run</span>) was
+                      retired in favor of the real MCP server.
+                    </p>
                   </div>
                   <Switch
+                    className="mt-0.5 shrink-0"
                     checked={s.agentApiEnabled}
                     onCheckedChange={(v) => setSetting('agentApiEnabled', v)}
                     aria-label="Enable Agent API"
@@ -784,12 +903,12 @@ export function SettingsDialog({
           </TabsContent>
 
           {/* --------------------------------------------------------- MCP */}
-          <TabsContent value="mcp" className="pt-2">
+          <TabsContent value="mcp" className="pixelforge-scroll min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden pr-1 pt-2">
             <McpConnections />
           </TabsContent>
 
           {/* -------------------------------------------------- shortcuts */}
-          <TabsContent value="shortcuts" className="pt-3">
+          <TabsContent value="shortcuts" className="pixelforge-scroll min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden pr-1 pt-3">
             <div className="grid gap-x-8 gap-y-2 sm:grid-cols-2">
               <div className="space-y-2">
                 <p className="font-mono text-[10px] uppercase tracking-wider text-zinc-400">Tools</p>

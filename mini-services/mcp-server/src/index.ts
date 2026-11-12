@@ -23,6 +23,8 @@
  * the desktop main process can host the same modules in-process.
  */
 
+import * as path from 'node:path';
+import { getOrCreateEditorToken } from './editor-auth';
 import { EditorLink, type EditorSocket } from './editor-link';
 import { McpStore } from './store';
 import { McpHost, type RequestIdentity } from './server';
@@ -38,8 +40,12 @@ const HOST = '127.0.0.1';
 const MAX_BODY_BYTES = 2 * 1024 * 1024; // §5.5 request cap
 const MCP_HOSTS = new Set([`${HOST}:${PORT}`, `localhost:${PORT}`]);
 
-const store = new McpStore();
-const link = new EditorLink();
+function storeDataDir(): string {
+  return process.env.PF_MCP_DATA_DIR ?? path.resolve(import.meta.dir, '../../../db');
+}
+
+const store = new McpStore({ dataDir: storeDataDir() });
+const link = new EditorLink({ editorToken: getOrCreateEditorToken(storeDataDir()) });
 let mcpEnabled = true;
 const startedAt = new Date().toISOString();
 const endpointUrl = `http://${HOST}:${PORT}/mcp`;
@@ -106,6 +112,17 @@ function handleCtrl(msg: EditorInbound, reply: (id: string, ok: boolean, data?: 
       reply(id, !!revoked, revoked ? { revoked: true, clientId: revoked.clientId } : undefined, revoked ? undefined : { code: 'not_found', message: 'Unknown client id' });
       return;
     }
+    case 'client-remove': {
+      const result = store.removeRevokedClient(ctrl.clientId);
+      if (result === 'removed') {
+        reply(id, true, { removed: true, clientId: ctrl.clientId });
+      } else if (result === 'active') {
+        reply(id, false, undefined, { code: 'client_active', message: 'Revoke this client before removing it from the list.' });
+      } else {
+        reply(id, false, undefined, { code: 'not_found', message: 'Unknown client id' });
+      }
+      return;
+    }
     case 'ops-recent': {
       const limit = Math.max(1, Math.min(ctrl.limit ?? 12, 100));
       reply(id, true, { ops: store.recentOps(limit) });
@@ -113,6 +130,41 @@ function handleCtrl(msg: EditorInbound, reply: (id: string, ok: boolean, data?: 
     }
     case 'approvals-list': {
       reply(id, true, { approvals: host.approvals.list() });
+      return;
+    }
+    // second-brain orchestration: the editor (AI panel) queues a plan for
+    // IDE agents to claim, and reads board state for the UI
+    case 'brain-push': {
+      const tasks = Array.isArray(ctrl.tasks) ? ctrl.tasks : [];
+      reply(id, true, {
+        tasks: store.brainPush(tasks, {
+          replacePending: ctrl.replacePending === true,
+          planId: typeof ctrl.planId === 'string' ? ctrl.planId : undefined,
+        }),
+      });
+      return;
+    }
+    case 'brain-tasks': {
+      reply(id, true, { tasks: store.brainList() });
+      return;
+    }
+    case 'brain-clear': {
+      reply(id, true, { tasks: store.brainClearFinished() });
+      return;
+    }
+    case 'brain-retry': {
+      reply(id, true, { tasks: store.brainRetryFailed(typeof ctrl.id === 'string' ? ctrl.id : undefined) });
+      return;
+    }
+    case 'brain-cancel': {
+      // no requesterClient: the editor speaks for the human, who outranks agents
+      const cancelled = typeof ctrl.id === 'string' ? store.brainCancel(ctrl.id) : null;
+      reply(id, !!cancelled, cancelled ? { task: cancelled } : undefined, cancelled ? undefined : { code: 'not_found', message: 'Task not cancellable (unknown id or already finished)' });
+      return;
+    }
+    case 'tools-changed': {
+      host.broadcastToolsChanged();
+      reply(id, true, { broadcast: true });
       return;
     }
     default:

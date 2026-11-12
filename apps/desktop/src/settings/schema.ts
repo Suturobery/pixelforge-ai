@@ -60,6 +60,8 @@ export interface AppPreferences {
   onionPrevTint: string;
   onionNextTint: string;
   floatBtnSize: 'sm' | 'md' | 'lg';
+  /** compact PixelForge labels: default density or a one-step larger scale */
+  uiTextScale: 'normal' | 'large';
 }
 
 export interface WindowLayout {
@@ -109,6 +111,8 @@ export interface SettingsFile {
   ai: AiPrefs;
   aiProviders: StoredProvider[];
   activeProviderId: string;
+  /** provider the Brain (reasoning) uses — mirrored from the renderer (shared-Brain phase 3) */
+  brainProviderId: string;
 }
 
 // ------------------------------------------------------------------ defaults
@@ -125,6 +129,7 @@ export const DEFAULT_APP_PREFERENCES: AppPreferences = {
   onionPrevTint: '#ff5d5d',
   onionNextTint: '#3fbf7f',
   floatBtnSize: 'md',
+  uiTextScale: 'normal',
 };
 
 export const DEFAULT_MCP_PREFS: McpPrefs = {
@@ -143,7 +148,9 @@ export function defaultProviders(): StoredProvider[] {
   return [
     { id: 'zai', label: 'Z.AI (built-in)', kind: 'zai', baseUrl: '', model: 'auto', enabled: true },
     { id: 'openai', label: 'OpenAI · GPT', kind: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-image-1', enabled: false },
-    { id: 'gemini', label: 'Google · Gemini', kind: 'custom', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-2.5-flash-image', enabled: false },
+    { id: 'gemini', label: 'Google · Gemini', kind: 'custom', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-3.1-flash-image', enabled: false },
+    { id: 'cloudflare', label: 'Cloudflare · Workers AI', kind: 'custom', baseUrl: '', model: '@cf/black-forest-labs/flux-1-schnell', enabled: false },
+    { id: 'groq', label: 'Groq (second brain)', kind: 'custom', baseUrl: 'https://api.groq.com/openai/v1', model: 'openai/gpt-oss-120b', enabled: false },
     { id: 'custom', label: 'Custom / MCP endpoint', kind: 'custom', baseUrl: 'http://localhost:11434/v1', model: '', enabled: false },
   ];
 }
@@ -159,6 +166,7 @@ export function defaultSettingsFile(now = new Date()): SettingsFile {
     ai: { ...DEFAULT_AI_PREFS },
     aiProviders: defaultProviders(),
     activeProviderId: 'zai',
+    brainProviderId: 'groq',
   };
 }
 
@@ -166,6 +174,7 @@ export function defaultSettingsFile(now = new Date()): SettingsFile {
 
 const PROVIDER_KINDS: readonly AIProviderKind[] = ['zai', 'openai', 'anthropic', 'custom'];
 const FLOAT_SIZES: readonly AppPreferences['floatBtnSize'][] = ['sm', 'md', 'lg'];
+const UI_TEXT_SCALES: readonly AppPreferences['uiTextScale'][] = ['normal', 'large'];
 const PALETTE_ID_RE = /^[a-z0-9_-]{1,64}$/;
 const PROVIDER_ID_RE = /^[a-z0-9_-]{1,64}$/;
 const CSS_COLOR_RE = /^#[0-9a-fA-F]{3,8}$/;
@@ -231,6 +240,7 @@ function validateApp(raw: unknown): AppPreferences {
     onionPrevTint: pickString(r['onionPrevTint'], 32, d.onionPrevTint, CSS_COLOR_RE),
     onionNextTint: pickString(r['onionNextTint'], 32, d.onionNextTint, CSS_COLOR_RE),
     floatBtnSize: pickEnum(r['floatBtnSize'], FLOAT_SIZES, d.floatBtnSize),
+    uiTextScale: pickEnum(r['uiTextScale'], UI_TEXT_SCALES, d.uiTextScale),
   };
 }
 
@@ -381,6 +391,12 @@ export function validateAndMigrate(raw: unknown, now = new Date()): ValidateResu
     notes.push(`activeProviderId not found in providers — reset to ${activeProviderId}`);
   }
 
+  let brainProviderId = pickString(r['brainProviderId'], 64, 'groq', PROVIDER_ID_RE);
+  if (!aiProviders.some((p) => p.id === brainProviderId)) {
+    brainProviderId = 'groq';
+    notes.push('brainProviderId not found in providers — reset to groq');
+  }
+
   return {
     ok: notes.length === 0,
     file: {
@@ -393,6 +409,7 @@ export function validateAndMigrate(raw: unknown, now = new Date()): ValidateResu
       ai,
       aiProviders,
       activeProviderId,
+      brainProviderId,
     },
     notes,
   };

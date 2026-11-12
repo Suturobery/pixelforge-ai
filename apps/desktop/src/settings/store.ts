@@ -22,6 +22,7 @@
 
 import {
   SETTINGS_VERSION,
+  defaultProviders,
   defaultSettingsFile,
   toProviderView,
   validateAndMigrate,
@@ -89,6 +90,7 @@ export interface PublicSettings {
   ai: AiPrefs;
   aiProviders: ProviderView[];
   activeProviderId: string;
+  brainProviderId: string;
 }
 
 export class SettingsStore {
@@ -170,8 +172,13 @@ export class SettingsStore {
       panels: structuredClone(this.data.panels),
       mcp: { ...this.data.mcp },
       ai: { ...this.data.ai },
-      aiProviders: this.data.aiProviders.map(toProviderView),
+      aiProviders: this.data.aiProviders.map((p) => {
+        const view = toProviderView(p);
+        if (this.sessionKeys.has(p.id)) view.hasKey = true;
+        return view;
+      }),
       activeProviderId: this.data.activeProviderId,
+      brainProviderId: this.data.brainProviderId,
     };
   }
 
@@ -190,6 +197,7 @@ export class SettingsStore {
     ai?: Partial<AiPrefs>;
     panels?: Record<string, PanelLayout>;
     activeProviderId?: string;
+    brainProviderId?: string;
     aiProviders?: Array<Partial<Omit<StoredProvider, 'apiKeyEnc' | 'apiKeyStoredAt' | 'apiKeySessionOnly'>> & { id: string }>;
   }): PublicSettings {
     this.ensureLoaded();
@@ -257,6 +265,11 @@ export class SettingsStore {
         this.data.activeProviderId = patch.activeProviderId;
       }
     }
+    if (patch.brainProviderId && API_KEY_PROVIDER_RE.test(patch.brainProviderId)) {
+      if (this.data.aiProviders.some((p) => p.id === patch.brainProviderId)) {
+        this.data.brainProviderId = patch.brainProviderId;
+      }
+    }
     this.persist();
     return this.getPublic();
   }
@@ -289,6 +302,23 @@ export class SettingsStore {
   }
 
   /**
+   * Ensure the provider exists in `this.data.aiProviders` before storing a
+   * credential so keys saved for a newly introduced provider (e.g. `groq`)
+   * are never dropped if `setApiKey` runs before `update({ aiProviders })`.
+   */
+  private ensureProvider(id: string): StoredProvider {
+    let p = this.findProvider(id);
+    if (!p) {
+      const def = defaultProviders().find((d) => d.id === id);
+      p = def
+        ? { ...def }
+        : { id, label: id, kind: 'custom', baseUrl: '', model: '', enabled: false };
+      this.data.aiProviders.push(p);
+    }
+    return p;
+  }
+
+  /**
    * Store an API key. Plaintext goes main→cipher and is dropped; when the
    * OS keyring is unavailable the key lives in `sessionKeys` ONLY.
    * Returns whether the key is session-only.
@@ -305,26 +335,22 @@ export class SettingsStore {
     if (!this.box.isAvailable()) {
       // C13: session-only fallback — NO plaintext disk fallback, no obfuscation
       this.sessionKeys.set(providerId, key);
-      const p = this.findProvider(providerId);
-      if (p) {
-        delete p.apiKeyEnc;
-        delete p.apiKeyStoredAt;
-        p.apiKeySessionOnly = true;
-        this.persist(); // records the sessionOnly marker only
-      }
+      const p = this.ensureProvider(providerId);
+      delete p.apiKeyEnc;
+      delete p.apiKeyStoredAt;
+      p.apiKeySessionOnly = true;
+      this.persist(); // records the sessionOnly marker only
       return { ok: true, sessionOnly: true };
     }
 
     try {
       const enc = this.box.encrypt(key);
       this.sessionKeys.set(providerId, key); // in-process cache for the job runner
-      const p = this.findProvider(providerId);
-      if (p) {
-        p.apiKeyEnc = enc;
-        p.apiKeyStoredAt = this.now().toISOString();
-        p.apiKeySessionOnly = false;
-        this.persist();
-      }
+      const p = this.ensureProvider(providerId);
+      p.apiKeyEnc = enc;
+      p.apiKeyStoredAt = this.now().toISOString();
+      p.apiKeySessionOnly = false;
+      this.persist();
       return { ok: true, sessionOnly: false };
     } catch {
       return { ok: false, sessionOnly: false, error: 'encryption failed — key not stored' };
@@ -385,7 +411,11 @@ export class SettingsStore {
     return {
       encryptionAvailable: this.box.isAvailable(),
       backend: this.box.backendLabel(),
-      providers: this.data.aiProviders.map(toProviderView),
+      providers: this.data.aiProviders.map((p) => {
+        const view = toProviderView(p);
+        if (this.sessionKeys.has(p.id)) view.hasKey = true;
+        return view;
+      }),
       sessionOnlyKeys,
     };
   }

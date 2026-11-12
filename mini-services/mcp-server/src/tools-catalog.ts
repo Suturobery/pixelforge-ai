@@ -37,6 +37,27 @@ const staleGuard = {
   ),
 };
 
+/** Bounded project data, not a free-form agent-instruction channel. */
+const styleProfileSchema = z.object({
+  enabled: z.boolean(),
+  name: z.string().trim().min(1).max(48),
+  artDirection: z.string().trim().min(1).max(180),
+  lighting: z.enum(['top-left', 'top', 'front', 'flat']),
+  outline: z.enum(['dark-1px', 'light-1px', 'none']),
+  paletteMode: z.enum(['enforce', 'prefer', 'none']),
+  transparentBackground: z.boolean(),
+  notes: z.string().trim().max(480),
+  references: z.array(z.object({
+    clipId: z.string().regex(/^[a-z0-9_-]{1,80}$/i),
+    frameId: z.string().regex(/^[a-z0-9_-]{1,80}$/i),
+    label: z.string().trim().min(1).max(80),
+  }).strict()).max(6).optional().default([]),
+  feedback: z.object({
+    prefer: z.array(z.string().trim().min(1).max(72).regex(/^[^\u0000-\u001f\u007f]+$/)).max(4).optional().default([]),
+    avoid: z.array(z.string().trim().min(1).max(72).regex(/^[^\u0000-\u001f\u007f]+$/)).max(4).optional().default([]),
+  }).strict().optional().default({ prefer: [], avoid: [] }),
+}).strict();
+
 export interface ToolDef {
   name: string;
   title: string;
@@ -55,7 +76,7 @@ export const TOOL_CATALOG: ToolDef[] = [
     name: 'get_project_state',
     title: 'Get project state',
     description:
-      'Read the ACTIVE PixelForge project: name, canvas size, palette, clips (layers, frames, durations), ' +
+      'Read the ACTIVE PixelForge project: name, canvas size, palette, project Style Lock, clips (layers, frames, durations), ' +
       'trash count, dirty flag and the document stateHash. Call this first; ids and the stateHash it returns ' +
       'feed every other tool.',
     tier: 'L0',
@@ -102,6 +123,78 @@ export const TOOL_CATALOG: ToolDef[] = [
     tier: 'L0',
     relay: true,
     inputSchema: {},
+  },
+  {
+    name: 'validate_style',
+    title: 'Validate frame against style contract',
+    description:
+      'Deterministic technical checks on one frame (composited): canvas size, crisp alpha, project-palette ' +
+      'membership (when Style Lock enforces), transparent background and clear margins (when the profile asks ' +
+      'for them). Honest scope: technical constraints only — subject readability and pose clarity remain human ' +
+      'or vision-model critique. Run this BEFORE presenting work for review.',
+    tier: 'L0',
+    relay: true,
+    inputSchema: {
+      ...clipRef,
+      ...frameRef,
+      allowEdgeTouch: z.boolean().optional().describe(
+        'true = sprite may touch canvas edges (tilesets, full-bleed backgrounds). Default false.',
+      ),
+    },
+  },
+  {
+    name: 'validate_candidate',
+    title: 'Validate AI candidate against style contract',
+    description:
+      'Same deterministic checks as validate_style, but on a CANDIDATE in the AI review cache (before it is ' +
+      'accepted onto the canvas). Non-mutating: lets you score generation results for benchmarks or pre-review ' +
+      'without touching the document. Requires the candidate to be normalized already.',
+    tier: 'L0',
+    relay: true,
+    inputSchema: {
+      candidateId: z.string().min(1).max(128).describe('Candidate id from get_candidates or generate_sprite.'),
+      allowEdgeTouch: z.boolean().optional().describe(
+        'true = sprite may touch its canvas edges (tilesets, full-bleed backgrounds). Default false.',
+      ),
+    },
+  },
+  {
+    name: 'list_vfx',
+    title: 'List procedural VFX effects',
+    description:
+      'Catalog of deterministic procedural pixel-art VFX (pixelfx, MIT) renderable into a project clip by ' +
+      'generate_vfx. Filter by category (fire, explosions, ice, lightning, arcane, nature, ui, pickups, …). ' +
+      'Free — no cost, no document access.',
+    tier: 'L0',
+    relay: true,
+    inputSchema: {
+      category: z.string().min(1).max(40).optional().describe('Filter by category prefix, e.g. "fire".'),
+    },
+  },
+  {
+    name: 'generate_vfx',
+    title: 'Generate procedural VFX clip',
+    description:
+      'Render a procedural VFX effect (from list_vfx) into a NEW clip on the canvas — deterministic (seeded), ' +
+      'free, one undo transaction. Optional dark→bright palette ramp overrides the effect colors. After ' +
+      'generating, verify with preview_animation (invariants) and validate_style (VFX often touches canvas ' +
+      'edges — pass allowEdgeTouch:true there when appropriate).',
+    tier: 'L1',
+    relay: true,
+    inputSchema: {
+      effect: z.string().min(1).max(80).describe('Effect id from list_vfx, e.g. "fire/campfire".'),
+      seed: z.number().int().min(0).max(999999).optional().describe('Random seed. Same seed + options = identical frames.'),
+      frames: z.number().int().min(1).max(64).optional().describe('Frame count. Default: covers the effect duration at the chosen fps.'),
+      fps: z.number().int().min(1).max(60).optional().describe('Clip fps. Default 12.'),
+      fit: z.enum(['fit', 'crop']).optional().describe("'fit' = full effect downscaled to canvas (default). 'crop' = direct canvas render — original tighter, crisper composition."),
+      light: z.number().min(0).max(1).optional().describe('Additive-light intensity 0..1. Default 1. Lower = subtler glow and more transparency.'),
+      x: z.number().int().min(-4096).max(4096).optional().describe('Effect center X on canvas. Default: canvas center.'),
+      y: z.number().int().min(-4096).max(4096).optional().describe('Effect center Y on canvas. Default: canvas center.'),
+      palette: z.union([z.literal('project'), z.array(z.string().regex(/^#[0-9a-fA-F]{3,8}$/)).min(2).max(16)]).optional().describe(
+        'Optional dark→bright hex ramp replacing the effect colors.',
+      ),
+      name: z.string().min(1).max(120).optional().describe('New clip name. Default "vfx-<effect>".'),
+    },
   },
   {
     name: 'preview_animation',
@@ -559,6 +652,171 @@ export const TOOL_CATALOG: ToolDef[] = [
     },
   },
   {
+    name: 'brain_interpret_prompt',
+    title: 'Second Brain: Interpret & enhance prompt',
+    description:
+      'Second-brain reasoning helper (L0, free): automatically interpret short, incomplete, misspelled, or ambiguous prompts ' +
+      'using the active PixelForge project context (canvas dimensions, palette, Style Lock, clips, layers, and learned artist preferences). ' +
+      'Returns the typo-corrected prompt, fully enhanced pixel-art/animation prompt, detected intent, target clip/layer ids, and recommended tool sequence.',
+    tier: 'L0',
+    relay: true,
+    inputSchema: {
+      prompt: z.string().min(1).max(2000).describe('Raw user or agent prompt to interpret, correct, and enhance.'),
+    },
+  },
+  {
+    name: 'brain_get_tasks',
+    title: 'Get brain task board',
+    description:
+      'Second-brain orchestration: read the task board the Groq planner queued. Pending items are work an IDE ' +
+      'agent should claim (brain_claim_task), execute with the normal PixelForge workflow, then finish with ' +
+      'brain_complete_task / brain_fail_task. Free (L0).',
+    tier: 'L0',
+    relay: false,
+    inputSchema: {},
+  },
+  {
+    name: 'brain_get_task',
+    title: 'Get one brain task',
+    description: 'Read the full record of a single task board item (status, progress, claim owner, result). Free (L0).',
+    tier: 'L0',
+    relay: false,
+    inputSchema: {
+      id: z.string().min(1).max(80).describe('Task id from brain_get_tasks.'),
+    },
+  },
+  {
+    name: 'brain_get_status',
+    title: 'Brain service status',
+    description:
+      'Read: availability of the PixelForge Brain service — editor connection, task-board counts, session and client counts. ' +
+      'The reasoning provider itself resolves editor-side per call (keys never leave the editor/vault). Free (L0).',
+    tier: 'L0',
+    relay: false,
+    inputSchema: {},
+  },
+  {
+    name: 'brain_get_capabilities',
+    title: 'Brain capability catalog',
+    description:
+      'Read: the deterministic capability catalog — every MCP tool PixelForge exposes, filtered to YOUR permission tier, ' +
+      'plus board counts. Plans must only reference capabilities listed here. Free (L0).',
+    tier: 'L0',
+    relay: false,
+    inputSchema: {},
+  },
+  {
+    name: 'brain_ask',
+    title: 'Brain: project-aware advisory Q&A',
+    description:
+      'Ask the Second Brain a question about the open project (craft, palette ramps, what to build next, export choices). ' +
+      'The question is first normalized by the deterministic interpreter, then answered by the configured reasoning provider ' +
+      '(costs a small amount of the artist\'s provider quota — bounded, read-only, never executes anything).',
+    tier: 'L1',
+    relay: true,
+    inputSchema: {
+      question: z.string().min(1).max(2000).describe('Your question about the project or pixel-art workflow.'),
+    },
+  },
+  {
+    name: 'brain_plan_goal',
+    title: 'Brain: plan a goal (never executes)',
+    description:
+      'Turn a goal into a validated plan proposal: app-vfx / app-palette steps (deterministic app actions) plus agent steps ' +
+      'for hand-drawn work. STRICT schema + real VFX catalog grounding happen editor-side. PLANNING ONLY — nothing is ' +
+      'executed or queued; to delegate work, queue tasks on the board instead.',
+    tier: 'L1',
+    relay: true,
+    inputSchema: {
+      goal: z.string().min(1).max(800).describe('The goal to plan, rough phrasing and typos welcome.'),
+    },
+  },
+  {
+    name: 'brain_claim_task',
+    title: 'Claim a brain task',
+    description: 'Claim a pending board task for THIS agent. Only pending tasks can be claimed; the claim is exclusive.',
+    tier: 'L1',
+    relay: false,
+    inputSchema: {
+      id: z.string().min(1).max(80).describe('Task id from brain_get_tasks.'),
+    },
+  },
+  {
+    name: 'brain_complete_task',
+    title: 'Complete a brain task',
+    description: 'Mark a task you claimed as DONE with a short result summary. Run validate_style first — a failed validation belongs in brain_fail_task.',
+    tier: 'L1',
+    relay: false,
+    inputSchema: {
+      id: z.string().min(1).max(80),
+      result: z.string().min(1).max(2000).describe('What was done, validated.'),
+    },
+  },
+  {
+    name: 'brain_fail_task',
+    title: 'Fail a brain task',
+    description: 'Mark a claimed task FAILED with the reason (validation failed, blocked, ambiguous). The planner or the artist will re-plan.',
+    tier: 'L1',
+    relay: false,
+    inputSchema: {
+      id: z.string().min(1).max(80),
+      reason: z.string().min(1).max(2000),
+    },
+  },
+  {
+    name: 'brain_update_task_progress',
+    title: 'Update brain task progress',
+    description:
+      'Owner-only progress note on a task you claimed (moves it claimed → running and refreshes your claim lease). ' +
+      'Call periodically on long work so the lease does not expire and the task is not requeued.',
+    tier: 'L1',
+    relay: false,
+    inputSchema: {
+      id: z.string().min(1).max(80).describe('Task id from brain_get_tasks.'),
+      progress: z.string().min(1).max(200).describe('Short bounded progress note, e.g. "outline pass 2/3".'),
+    },
+  },
+  {
+    name: 'brain_cancel_task',
+    title: 'Cancel a brain task',
+    description:
+      'Cancel a task ONLY YOU claimed (pending tasks belong to the artist — they cancel from the editor). ' +
+      'Cancelled work is removed from your responsibility; the artist can re-queue it.',
+    tier: 'L1',
+    relay: false,
+    inputSchema: {
+      id: z.string().min(1).max(80).describe('Task id you claimed.'),
+    },
+  },
+  {
+    name: 'apply_library_palette',
+    title: 'Apply a library palette',
+    description:
+      'Pick a palette by id from the built-in library (2000+ console-classic and Lospec palettes — browse with ' +
+      "get_knowledge {topic:'palette_library', style:'<keyword>'}) and set it as the project palette in one step. " +
+      'Server-side: resolves the id locally, then performs the same undoable set_palette on the editor. ' +
+      'One call replaces search → copy → set_palette.',
+    tier: 'L2',
+    relay: false,
+    inputSchema: {
+      id: z.string().min(1).max(80).describe('Library palette id from the palette_library knowledge topic.'),
+    },
+  },
+  {
+    name: 'set_style_profile',
+    title: 'Set project style profile',
+    description:
+      'Set the shared PixelForge Style Lock: art direction, lighting, outline, palette behavior and bounded notes. ' +
+      'Optional references are pointers to existing project frames; call get_frame_png with their ids to view them. ' +
+      'This is an undoable project change. It does not expose credentials or bypass the paid-generation approval gate.',
+    tier: 'L1',
+    relay: true,
+    inputSchema: {
+      profile: styleProfileSchema.describe('Complete project Style Lock profile.'),
+      ...staleGuard,
+    },
+  },
+  {
     name: 'import_image_as_layer',
     title: 'Import image as layer',
     description:
@@ -598,6 +856,7 @@ export const TOOL_CATALOG: ToolDef[] = [
     title: 'Generate sprite (paid)',
     description:
       'L3 PAID (human approval required): text-to-image generation via the provider configured in Settings → AI. ' +
+      'The active project Style Lock is automatically applied to the prompt and normalization when enabled. ' +
       'The call PARKS until the user clicks Approve/Deny on the approval card in the editor — denied or timed-out ' +
       'requests spend nothing. Candidates land in the review cache — inspect with get_candidates, import with ' +
       'accept_candidate. Requires an L3-paired client.',
@@ -606,6 +865,7 @@ export const TOOL_CATALOG: ToolDef[] = [
     paid: true,
     inputSchema: {
       prompt: z.string().min(1).max(600).describe('Sprite description.'),
+      task: z.enum(['create', 'variation']).optional().describe('Optional generation task. variation creates a fresh alternate concept; it does not edit an existing image.'),
       count: z.number().int().min(1).max(4).optional().describe('How many candidates (1–4). Default 1.'),
       ...staleGuard,
     },
@@ -709,7 +969,7 @@ export const TOOL_CATALOG: ToolDef[] = [
     title: 'Get AI candidates',
     description:
       'List the AI sprite candidates in the review cache with full provenance (prompt, provider, model, seed, ' +
-      'duration, cost ESTIMATE) and a small normalized preview PNG. Paid generation itself is NOT exposed as a ' +
+      'duration, cost ESTIMATE), bounded edit lineage (source candidate id, instruction, mask type), and a small normalized preview PNG. Paid generation itself is NOT exposed as a ' +
       'tool — it stays in the editor UI until the Task 11 approval center (v3.1 §5.2 L3).',
     tier: 'L0',
     relay: true,
@@ -889,7 +1149,7 @@ export const TOOL_CATALOG: ToolDef[] = [
     relay: false,
     inputSchema: {
       topic: z
-        .enum(['methodology', 'patterns', 'palettes', 'animation', 'techniques', 'cleanup', 'sharp_edges', 'validations', 'export', 'lpc', 'shade', 'rig', 'tileset', 'concept', 'fix', 'palette_library', 'learned', 'agent'])
+        .enum(['methodology', 'patterns', 'palettes', 'animation', 'techniques', 'cleanup', 'sharp_edges', 'validations', 'export', 'lpc', 'shade', 'rig', 'tileset', 'concept', 'fix', 'palette_library', 'learned', 'agent', 'vfx', 'grids', 'characters'])
         .describe('Knowledge topic to read ("agent" = how to drive this editor efficiently).'),
       style: z.string().min(1).max(60).optional().describe('Learned-style file stem, or a palette-library keyword / exact id.'),
     },

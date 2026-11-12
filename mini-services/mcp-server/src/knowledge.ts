@@ -22,7 +22,7 @@ const TOPICS = [
   'methodology', 'patterns', 'palettes', 'animation', 'techniques',
   'cleanup', 'sharp_edges', 'validations', 'export', 'lpc',
   'shade', 'rig', 'tileset', 'concept', 'fix', 'palette_library', 'learned',
-  'agent',
+  'agent', 'vfx', 'grids', 'characters',
 ] as const;
 
 function fail(code: string, message: string, hint?: string): ToolEnvelope {
@@ -91,7 +91,7 @@ interface PalettePreset {
 
 let paletteLib: { presets: Record<string, PalettePreset> } | null = null;
 
-function loadPalettes(): { presets: Record<string, PalettePreset> } {
+export function loadPalettes(): { presets: Record<string, PalettePreset> } {
   if (paletteLib) return paletteLib;
   const parsed = JSON.parse(readFileSync(path.join(SHIPPED_DIR, 'palette-library.json'), 'utf8')) as {
     presets: Record<string, PalettePreset>;

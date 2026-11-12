@@ -110,6 +110,16 @@ function makeStore(opts: { fs?: FakeFs; box?: SecretBox } = {}): { store: Settin
 // -------------------------------------------------------------------- tests
 
 describe('settings schema — validation & recovery', () => {
+  test('defaults include the dedicated Cloudflare Workers AI profile', () => {
+    const cloudflare = defaultSettingsFile().aiProviders.find((provider) => provider.id === 'cloudflare');
+    expect(cloudflare).toMatchObject({
+      label: 'Cloudflare · Workers AI',
+      kind: 'custom',
+      model: '@cf/black-forest-labs/flux-1-schnell',
+      enabled: false,
+    });
+  });
+
   test('missing file → defaults, not recovered', () => {
     const { store } = makeStore();
     const res = store.load();
@@ -156,8 +166,24 @@ describe('settings schema — validation & recovery', () => {
     expect(openai?.apiKeyEnc).toBeUndefined();
     expect(res.file.aiProviders.some((p) => p.id === 'bogus')).toBe(false);
     expect(res.file.activeProviderId).toBe(res.file.aiProviders[0].id);
+    // unknown brainProviderId resets to the default reasoning profile
+    expect(res.file.brainProviderId).toBe('groq');
     // window 100×50 is clamped up to the 400×300 floor (recovery, not rejection)
     expect(res.file.window).toEqual({ x: 10, y: 20, width: 400, height: 300, isMaximized: false });
+  });
+
+  test('brainProviderId mirrors through update and persists', () => {
+    const { store, fs } = makeStore();
+    store.load();
+    store.update({ brainProviderId: 'openai' });
+    expect(store.getPublic().brainProviderId).toBe('openai');
+    // unknown profile id is ignored, value stays
+    store.update({ brainProviderId: 'does-not-exist' });
+    expect(store.getPublic().brainProviderId).toBe('openai');
+    // survives a reload from disk
+    const reloaded = makeStore({ fs });
+    reloaded.store.load();
+    expect(reloaded.store.getPublic().brainProviderId).toBe('openai');
   });
 
   test('legacy unversioned file migrates forward to v1', () => {
@@ -191,7 +217,7 @@ describe('settings store — persistence', () => {
   test('update → atomic write (tmp + rename) → reload keeps values', () => {
     const { store, fs } = makeStore();
     store.load();
-    store.update({ app: { autosaveDelay: 10000, floatBtnSize: 'lg' }, activeProviderId: 'openai' });
+    store.update({ app: { autosaveDelay: 10000, floatBtnSize: 'lg', uiTextScale: 'large' }, activeProviderId: 'openai' });
 
     // atomic write shape: a .tmp write followed by a rename onto the real file
     const lastWrite = fs.writeLog.filter((e) => e.op === 'write').at(-1);
@@ -205,6 +231,7 @@ describe('settings store — persistence', () => {
     expect(loaded.recovered).toBe(false);
     expect(store2.getPublic().app.autosaveDelay).toBe(10000);
     expect(store2.getPublic().app.floatBtnSize).toBe('lg');
+    expect(store2.getPublic().app.uiTextScale).toBe('large');
     expect(store2.getPublic().activeProviderId).toBe('openai');
   });
 
@@ -391,6 +418,40 @@ describe('credential vault — other settings interactions', () => {
     expect(store.getInternal().aiProviders.find((p) => p.id === 'openai')?.apiKeyEnc).toBeDefined();
     expect(store.revealApiKey('openai')).toBe('sk-keep-me');
     expect(store.getPublic().aiProviders.find((p) => p.id === 'openai')?.label).toBe('OpenAI · GPT (renamed)');
+  });
+
+  test('setApiKey on a provider missing from a legacy file (e.g. groq) creates the entry and persists apiKeyEnc', () => {
+    const fs = new FakeFs();
+    // Simulate a legacy v1 file written before 'groq' was added to defaultProviders
+    fs.writeFileSync(
+      FILE,
+      JSON.stringify({
+        version: 1,
+        updatedAt: '2026-01-01T00:00:00.000Z',
+        app: defaultSettingsFile().app,
+        window: null,
+        panels: {},
+        mcp: { agentApiEnabled: true, bridgeAutoConnect: true },
+        ai: { monthlyLimitUsd: 5, warnUsd: 1, cacheEnabled: true },
+        aiProviders: [{ id: 'zai', label: 'Z.AI', kind: 'zai', baseUrl: '', model: 'auto', enabled: true }],
+        activeProviderId: 'zai',
+      }),
+    );
+    const { store } = makeStore({ fs });
+    store.load();
+    expect(store.getInternal().aiProviders.find((p) => p.id === 'groq')).toBeUndefined();
+
+    const res = store.setApiKey('groq', 'gsk_test_groq_key_123');
+    expect(res.ok).toBe(true);
+    expect(store.hasKey('groq')).toBe(true);
+    expect(store.getPublic().aiProviders.find((p) => p.id === 'groq')?.hasKey).toBe(true);
+
+    // Reload from disk: groq entry and encrypted key survive
+    const { store: store2 } = makeStore({ fs });
+    store2.load();
+    expect(store2.hasKey('groq')).toBe(true);
+    expect(store2.revealApiKey('groq')).toBe('gsk_test_groq_key_123');
+    expect(store2.getPublic().aiProviders.find((p) => p.id === 'groq')?.hasKey).toBe(true);
   });
 
   test('mcp prefs update round-trips (master switch lives in the settings file)', () => {

@@ -98,6 +98,7 @@ export interface BridgeAppPreferences {
   onionPrevTint: string;
   onionNextTint: string;
   floatBtnSize: 'sm' | 'md' | 'lg';
+  uiTextScale: 'normal' | 'large';
 }
 
 export interface BridgeWindowLayout {
@@ -155,6 +156,7 @@ export interface BridgeSettingsView {
   ai: { monthlyLimitUsd: number; warnUsd: number; cacheEnabled: boolean };
   aiProviders: BridgeProviderView[];
   activeProviderId: string;
+  brainProviderId: string;
   credentials: BridgeCredentialStatus;
 }
 
@@ -165,6 +167,7 @@ export interface BridgeSettingsUpdate {
   ai?: Partial<{ monthlyLimitUsd: number; warnUsd: number; cacheEnabled: boolean }>;
   panels?: Record<string, BridgePanelLayout>;
   activeProviderId?: string;
+  brainProviderId?: string;
   aiProviders?: Array<{
     id: string;
     label?: string;
@@ -192,6 +195,9 @@ export interface BridgeAiJobRequest {
   count?: number;
   seed?: number;
   clientId?: string;
+  operation?: 'generate' | 'edit';
+  sourcePngBase64?: string;
+  maskPngBase64?: string;
 }
 
 export interface BridgeAiJobImage {
@@ -353,6 +359,10 @@ export interface PixelForgeBridge {
     usage(): Promise<{ records: BridgeAiUsageRecord[]; monthSpendUsd: number }>;
     /** Read-only provider probe; credentials remain in the main-process vault. */
     testConnection(providerId: string): Promise<BridgeAiConnectionTest>;
+    /** Second-brain request routed through main so vault-stored Groq keys work across restarts. */
+    brain(payload: unknown): Promise<unknown>;
+    /** Agent-console chat turn routed through main so vault-stored keys work across restarts. */
+    agent(payload: unknown): Promise<unknown>;
     /** Subscribe to job/spend events pushed from main. Returns an unsubscriber. */
     onEvent(listener: (event: BridgeAiEvent) => void): () => void;
   };

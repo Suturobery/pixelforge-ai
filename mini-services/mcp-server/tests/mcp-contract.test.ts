@@ -9,6 +9,9 @@
  * envelope contract are all exercised end-to-end.
  */
 
+import { readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { z } from 'zod';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -39,7 +42,14 @@ function connectMockEditor(): Promise<void> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`ws://127.0.0.1:${PORT}/`);
     ws.onopen = () => {
-      ws.send(JSON.stringify({ type: 'hello', bridgeVersion: 1, appVersion: 'test', mcpEnabled: true }));
+      // P0-1: the real editor must present the editor-auth token (the mock
+      // reads it from the same data dir the server generated it into)
+      let editorKey: string | null = null;
+      try {
+        editorKey = (JSON.parse(readFileSync(join(process.env.PF_MCP_DATA_DIR!, 'editor-auth.json'), 'utf8')) as { token: string }).token;
+      } catch {}
+      ws.send(JSON.stringify({ type: 'hello', bridgeVersion: 1, appVersion: 'test', mcpEnabled: true, editorKey: editorKey ?? undefined }));
+
     };
     ws.onerror = (e) => reject(new Error(`mock editor ws error: ${e}`));
     ws.onmessage = (ev) => {
@@ -126,7 +136,7 @@ function textEnvelope(result: unknown): Envelope {
 }
 
 beforeAll(async () => {
-  const tmp = `/tmp/mcp-test-${Date.now()}`;
+  const tmp = join(tmpdir(), `mcp-test-${Date.now()}`);
   process.env.PF_MCP_PORT = String(PORT);
   process.env.PF_MCP_DATA_DIR = tmp;
   const { createPixelForgeServer } = await import('../src/index');
@@ -1046,6 +1056,118 @@ describe('skill knowledge (get_knowledge / study_reference)', () => {
     const idx = textEnvelope(await client.callTool({ name: 'get_knowledge', arguments: { topic: 'learned' } }));
     expect(idx.ok).toBe(true);
     expect((idx.data as { markdown: string }).markdown).toContain(data.learnedId);
+    await client.close();
+  });
+});
+
+// ------------------------------------------------- shared-Brain phase 5 tools
+describe('shared-Brain phase 5 — status / capabilities / ask / plan / resources', () => {
+  // pairedClient lives inside another describe's scope — re-bind locally
+  async function pairedClient(tier: 'L0' | 'L1' | 'L2' | 'L3', name: string): Promise<Client> {
+    const { token } = await generatePairing(tier);
+    const pc = await sdkClient(token);
+    const paired = textEnvelope(await pc.callTool({ name: 'pair_client', arguments: { name } }));
+    const clientToken = (paired.data as { token: string }).token;
+    await pc.close();
+    return sdkClient(clientToken);
+  }
+
+  test('brain_get_status reads service + board facts (L0, no editor secrets)', async () => {
+    const client = await pairedClient('L0', 'brain-status');
+    const env = textEnvelope(await client.callTool({ name: 'brain_get_status', arguments: {} }));
+    expect(env.ok).toBe(true);
+    const data = env.data as {
+      editorConnected: boolean;
+      brain: { available: boolean; note: string };
+      board: { pending: number; claimed: number };
+    };
+    expect(data.editorConnected).toBe(true);
+    expect(data.brain.available).toBe(true);
+    expect(data.brain.note).not.toMatch(/key|token/i);
+    expect(typeof data.board.pending).toBe('number');
+    await client.close();
+  });
+
+  test('brain_get_capabilities filters the catalog to the caller tier', async () => {
+    const l0 = await pairedClient('L0', 'brain-caps-l0');
+    const envL0 = textEnvelope(await l0.callTool({ name: 'brain_get_capabilities', arguments: {} }));
+    expect(envL0.ok).toBe(true);
+    const dataL0 = envL0.data as { tier: string; tools: Array<{ name: string; tier: string }>; counts: { total: number; granted: number } };
+    expect(dataL0.tier).toBe('L0');
+    expect(dataL0.tools.every((t) => t.tier === 'L0')).toBe(true);
+    expect(dataL0.tools.some((t) => t.name === 'brain_get_status')).toBe(true);
+    expect(dataL0.tools.some((t) => t.name === 'brain_ask')).toBe(false);
+    expect(dataL0.counts.granted).toBeLessThan(dataL0.counts.total);
+    await l0.close();
+
+    const l1 = await pairedClient('L1', 'brain-caps-l1');
+    const envL1 = textEnvelope(await l1.callTool({ name: 'brain_get_capabilities', arguments: {} }));
+    const dataL1 = envL1.data as { tools: Array<{ name: string }>; counts: { granted: number } };
+    expect(dataL1.tools.some((t) => t.name === 'brain_ask')).toBe(true);
+    expect(dataL1.tools.some((t) => t.name === 'brain_plan_goal')).toBe(true);
+    expect(dataL1.counts.granted).toBeGreaterThan(dataL0.counts.granted);
+    await l1.close();
+  });
+
+  test('brain_get_task returns one record; unknown ids are rejected (L0)', async () => {
+    const pushed = await ctrl<{ data: { tasks: Array<{ id: string; title: string }> } }>({
+      kind: 'brain-push',
+      tasks: [{ title: 'Phase5 sample', detail: 'd' }],
+    });
+    const id = pushed.data.tasks[0]!.id;
+    const client = await pairedClient('L0', 'brain-get-task');
+    const env = textEnvelope(await client.callTool({ name: 'brain_get_task', arguments: { id } }));
+    expect(env.ok).toBe(true);
+    expect((env.data as { task: { id: string; title: string } }).task.title).toBe('Phase5 sample');
+    const missing = textEnvelope(await client.callTool({ name: 'brain_get_task', arguments: { id: 'bt_missing' } }));
+    expect(missing.ok).toBe(false);
+    await client.close();
+  });
+
+  test('brain_ask relays to the editor and never carries provider secrets', async () => {
+    let relayed: Record<string, unknown> | null = null;
+    toolResponders.set('brain_ask', (args) => {
+      relayed = args;
+      return { question: args.question, answer: 'Build the coin pickup next.' };
+    });
+    const client = await pairedClient('L1', 'brain-asker');
+    const env = textEnvelope(await client.callTool({ name: 'brain_ask', arguments: { question: 'what should I build next?' } }));
+    expect(env.ok).toBe(true);
+    expect((env.data as { answer: string }).answer).toContain('coin pickup');
+    expect(relayed && Object.values(relayed).join(' ')).not.toMatch(/pfm_|gsk_/);
+    await client.close();
+  });
+
+  test('brain_plan_goal returns a plan proposal that explicitly executes nothing', async () => {
+    // the mock mirrors the REAL editor-side handler's response shape
+    // (mcp-tools.ts brain_plan_goal) — including its execution disclaimer
+    toolResponders.set('brain_plan_goal', (args) => ({
+      plan: [{ kind: 'app-vfx', title: 'Campfire', effect: 'fire/campfire', light: 0.6, palette: 'project' }],
+      revision: 'rev-123',
+      note: 'Plan proposal only — NOTHING was executed or queued.',
+    }));
+    const client = await pairedClient('L1', 'brain-planner');
+    const env = textEnvelope(await client.callTool({ name: 'brain_plan_goal', arguments: { goal: 'add a warm campfire' } }));
+    expect(env.ok).toBe(true);
+    const data = env.data as { plan: unknown[]; revision: string; note: string };
+    expect(data.plan).toHaveLength(1);
+    expect(data.revision).toBe('rev-123');
+    expect(data.note).toContain('NOTHING was executed');
+    await client.close();
+  });
+
+  test('read-only resources: capabilities snapshot + live project summary', async () => {
+    const client = await pairedClient('L1', 'resource-reader');
+    const caps = await client.readResource({ uri: 'pixelforge://capabilities' });
+    const capsText = (caps.contents[0] as { text: string }).text;
+    const capsJson = JSON.parse(capsText) as { tier: string; tools: Array<{ name: string }> };
+    expect(capsJson.tier).toBe('L1');
+    expect(capsJson.tools.some((t) => t.name === 'brain_plan_goal')).toBe(true);
+
+    const proj = await client.readResource({ uri: 'pixelforge://project/active' });
+    const projJson = JSON.parse((proj.contents[0] as { text: string }).text) as { ok: boolean; data?: { name?: string } };
+    expect(projJson.ok).toBe(true);
+    expect(projJson.data?.name).toBe('test doc');
     await client.close();
   });
 });

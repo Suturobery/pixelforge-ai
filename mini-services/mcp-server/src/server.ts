@@ -21,7 +21,7 @@ import { sha256Hex, generateClientId, generateClientToken, hashesMatch, RateLimi
 import { PAIRING_ALLOWED_TOOLS, TOOL_CATALOG, type ToolDef } from './tools-catalog';
 import { TIER_RATE_LIMITS, tierGrants, type AuditEntry, type EditorEvent, type PairedClient, type Tier, type ToolEnvelope } from './types';
 import type { EditorLink } from './editor-link';
-import { getKnowledge, studyReference } from './knowledge';
+import { getKnowledge, loadPalettes, studyReference } from './knowledge';
 import { ApprovalCenter } from './approvals';
 import type { McpStore } from './store';
 
@@ -111,6 +111,22 @@ export class McpHost {
           method: 'notifications/pixelforge/projectChanged',
           params,
         });
+      } catch {
+        /* a dead session is cleaned up by its transport */
+      }
+    }
+  }
+
+  /**
+   * Standard `notifications/tools/list_changed` to every live session. The
+   * tool catalog is static per process today, so this is currently dormant —
+   * call it (ctrl 'tools-changed') whenever the catalog ever becomes dynamic
+   * (per-client tool shaping, feature flags, plugins).
+   */
+  broadcastToolsChanged(): void {
+    for (const entry of this.sessions.values()) {
+      try {
+        void entry.server.server.notification({ method: 'notifications/tools/list_changed' });
       } catch {
         /* a dead session is cleaned up by its transport */
       }
@@ -231,6 +247,61 @@ export class McpHost {
         }
       );
     }
+    // ---- read-only resources (shared-Brain phase 5) ------------------------
+    // Contents are plain JSON snapshots; both sit behind the same HTTP bearer
+    // auth as tools, and the catalog is filtered to the session's tier.
+    server.registerResource(
+      'capabilities',
+      'pixelforge://capabilities',
+      { title: 'PixelForge capability catalog', description: 'Every MCP tool PixelForge exposes, filtered to the reader tier', mimeType: 'application/json' },
+      async (uri, extra) => {
+        const entry = extra.sessionId ? this.sessions.get(extra.sessionId) : undefined;
+        const tier: Tier = entry?.identity && entry.identity.kind === 'client' ? entry.identity.tier : 'L0';
+        const granted = TOOL_CATALOG.filter((d) => tierGrants(tier, d.tier) && d.name !== 'pair_client');
+        return {
+          contents: [
+            {
+              uri: uri.toString(),
+              mimeType: 'application/json',
+              text: JSON.stringify(
+                {
+                  tier,
+                  tools: granted.map((d) => ({ name: d.name, title: d.title, tier: d.tier, relay: d.relay, paid: Boolean(d.paid) })),
+                  counts: { total: TOOL_CATALOG.length, granted: granted.length },
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      }
+    );
+    server.registerResource(
+      'project-active',
+      'pixelforge://project/active',
+      { title: 'Active project summary', description: 'Live summary of the open PixelForge project (get_project_state relay)', mimeType: 'application/json' },
+      async (uri, extra) => {
+        const entry = extra.sessionId ? this.sessions.get(extra.sessionId) : undefined;
+        const identity = entry?.identity && entry.identity.kind === 'client' ? entry.identity : null;
+        const envelope = await this.link.requestTool({
+          tool: 'get_project_state',
+          args: {},
+          clientId: identity?.clientId ?? 'resource-reader',
+          clientName: identity?.name ?? 'resource-reader',
+          tier: identity?.tier ?? 'L0',
+        });
+        return {
+          contents: [
+            {
+              uri: uri.toString(),
+              mimeType: 'application/json',
+              text: JSON.stringify(envelope, null, 2),
+            },
+          ],
+        };
+      }
+    );
     return server;
   }
 
@@ -378,7 +449,121 @@ export class McpHost {
       }
       if (def.name === 'get_knowledge') {
         return getKnowledge(String(args?.topic ?? ''), typeof args?.style === 'string' ? args.style : undefined);
-      }      if (def.name === 'study_reference') {
+      }
+      if (def.name === 'brain_get_tasks') {
+        const tasks = this.store.brainList();
+        return {
+          ok: true,
+          data: {
+            pending: tasks.filter((t) => t.status === 'pending'),
+            claimed: tasks.filter((t) => t.status === 'claimed' || t.status === 'running'),
+            finished: tasks.filter((t) => t.status === 'done' || t.status === 'failed' || t.status === 'cancelled').slice(0, 10),
+          },
+          summary: 'task board: ' + tasks.filter((t) => t.status === 'pending').length + ' pending',
+        };
+      }
+      if (def.name === 'brain_get_task') {
+        const task = this.store.brainList().find((t) => t.id === String(args?.id ?? ''));
+        if (!task) return fail(ERROR_CODES.BAD_REQUEST, `No task "${String(args?.id ?? '')}" on the board.`, 'List with brain_get_tasks.');
+        return { ok: true, data: { task }, summary: 'task: ' + task.title };
+      }
+      if (def.name === 'brain_get_status') {
+        const tasks = this.store.brainList();
+        return {
+          ok: true,
+          data: {
+            mcpEnabled: this.deps.isEnabled(),
+            editorConnected: this.link.connected,
+            lastProjectName: this.link.lastProjectName,
+            lastStateHash: this.link.lastStateHash,
+            sessions: this.sessionCount,
+            clientsPaired: this.store.listClients().filter((c) => !c.revoked).length,
+            board: {
+              pending: tasks.filter((t) => t.status === 'pending').length,
+              claimed: tasks.filter((t) => t.status === 'claimed' || t.status === 'running').length,
+            },
+            brain: {
+              available: true,
+              note: 'brain_ask / brain_plan_goal run editor-side with the artist\'s configured reasoning provider; interpretation (brain_interpret_prompt) is deterministic and free.',
+            },
+          },
+          summary: 'brain status: editor ' + (this.link.connected ? 'connected' : 'offline'),
+        };
+      }
+      if (def.name === 'brain_get_capabilities') {
+        // deterministic catalog, filtered to the caller's tier (doc §7: keep
+        // lists deterministic and filter by permission)
+        const granted = TOOL_CATALOG.filter((d) => tierGrants(identity.tier, d.tier) && d.name !== 'pair_client');
+        return {
+          ok: true,
+          data: {
+            tier: identity.tier,
+            tools: granted.map((d) => ({
+              name: d.name,
+              title: d.title,
+              tier: d.tier,
+              relay: d.relay,
+              paid: Boolean(d.paid),
+              description: d.description,
+            })),
+            counts: { total: TOOL_CATALOG.length, granted: granted.length },
+          },
+          summary: `capabilities: ${granted.length}/${TOOL_CATALOG.length} tools at tier ${identity.tier}`,
+        };
+      }
+      if (def.name === 'brain_claim_task') {
+        // anchor the claim to the CURRENT document fingerprint so completion
+        // can later be verified against actual state change
+        const claimed = this.store.brainClaim(String(args?.id ?? ''), identity.name, identity.clientId, this.link.lastStateHash);
+        if (!claimed) return fail(ERROR_CODES.BAD_REQUEST, 'Task not claimable (unknown id or not pending).');
+        return { ok: true, data: { task: claimed }, summary: 'claimed: ' + claimed.title };
+      }
+      if (def.name === 'brain_complete_task') {
+        const done = this.store.brainFinish(String(args?.id ?? ''), identity.clientId, true, String(args?.result ?? ''), this.link.lastStateHash);
+        if (!done) return fail(ERROR_CODES.BAD_REQUEST, 'Task not completable (unknown id, not claimed, or claimed by another agent).');
+        const verification = done.verified === true ? ' (state verified)' : done.verified === false ? ' (UNVERIFIED — document unchanged since claim)' : '';
+        return { ok: true, data: { task: done }, summary: 'done: ' + done.title + verification };
+      }
+      if (def.name === 'brain_fail_task') {
+        const failed = this.store.brainFinish(String(args?.id ?? ''), identity.clientId, false, String(args?.reason ?? ''), this.link.lastStateHash);
+        if (!failed) return fail(ERROR_CODES.BAD_REQUEST, 'Task not failable (unknown id, not claimed, or claimed by another agent).');
+        return { ok: true, data: { task: failed }, summary: 'failed: ' + failed.title };
+      }
+      if (def.name === 'brain_update_task_progress') {
+        const updated = this.store.brainProgress(String(args?.id ?? ''), identity.clientId, String(args?.progress ?? ''));
+        if (!updated) return fail(ERROR_CODES.BAD_REQUEST, 'Task not updatable (unknown id, not claimed/running, or claimed by another agent).');
+        return { ok: true, data: { task: updated }, summary: 'progress: ' + updated.title };
+      }
+      if (def.name === 'brain_cancel_task') {
+        // requesterClient set: agents may cancel ONLY their own claimed/running work
+        const cancelled = this.store.brainCancel(String(args?.id ?? ''), identity.clientId);
+        if (!cancelled) return fail(ERROR_CODES.BAD_REQUEST, 'Task not cancellable (unknown id, not yours, or already finished).');
+        return { ok: true, data: { task: cancelled }, summary: 'cancelled: ' + cancelled.title };
+      }
+      if (def.name === 'apply_library_palette') {
+        // server-side composite: resolve the library id here (the JSON lives
+        // on the server), then perform the SAME undoable set_palette on the
+        // editor — one agent call instead of search → copy → set_palette.
+        const id = String(args?.id ?? '').trim();
+        const preset = loadPalettes().presets?.[id];
+        if (!preset) {
+          return fail(ERROR_CODES.BAD_REQUEST, `Unknown library palette "${id}".`, "Browse with get_knowledge {topic:'palette_library', style:'<keyword>'}.");
+        }
+        const relayed = await this.link.requestTool({
+          tool: 'set_palette',
+          args: { colors: preset.colors },
+          clientId: identity.clientId,
+          clientName: identity.name,
+          tier: identity.tier,
+        });
+        if (!relayed.ok) return relayed;
+        return {
+          ok: true,
+          data: { applied: id, name: preset.name, size: preset.size, colors: preset.colors },
+          summary: `Library palette "${preset.name}" applied (${preset.size} colors)`,
+        };
+      }
+      if (def.name === 'study_reference') {
         return studyReference({
           pngBase64: String(args?.pngBase64 ?? ''),
           styleName: typeof args?.styleName === 'string' ? args.styleName : undefined,

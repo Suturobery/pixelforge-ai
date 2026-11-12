@@ -30,11 +30,11 @@
 // this is opportunistic hardening, NOT authentication (Task 8).
 
 import { NextRequest, NextResponse } from 'next/server'
-import { AGENT_HEADER } from './agent-headers'
+import { AGENT_HEADER, checkWebToken } from './agent-headers'
 
 export { AGENT_HEADER, AGENT_FETCH_HEADERS } from './agent-headers'
 
-export type GuardErrorCode = 'UNTRUSTED_ORIGIN' | 'MISSING_AGENT_HEADER' | 'LOCAL_ONLY'
+export type GuardErrorCode = 'UNTRUSTED_ORIGIN' | 'MISSING_AGENT_HEADER' | 'LOCAL_ONLY' | 'WEB_TOKEN_REQUIRED'
 
 function deny(code: GuardErrorCode, message: string, hint: string): NextResponse {
   return NextResponse.json(
@@ -63,6 +63,19 @@ export function guardStateChange(req: NextRequest): NextResponse | null {
       'Use the packaged desktop app, or add authenticated multi-user API routes before deploying it publicly.',
     )
   }
+
+  // S1 hardening: real bearer auth for web deployments. When PF_WEB_TOKEN is
+  // set, EVERY guarded route demands it — one switch upgrades the whole
+  // surface from tripwire-only to token-gated. Unset (default) → unchanged.
+  const expectedToken = process.env.PF_WEB_TOKEN
+  if (!checkWebToken(req.headers.get('authorization'), expectedToken)) {
+    return deny(
+      'WEB_TOKEN_REQUIRED',
+      'This deployment requires an Authorization: Bearer token.',
+      'Send "Authorization: Bearer <PF_WEB_TOKEN>" — the token is configured server-side.',
+    )
+  }
+
   const agentOk = req.headers.get(AGENT_HEADER) === '1'
 
   // 1) Origin diagnostics (NOT the gate — see module header): when a request

@@ -29,6 +29,10 @@ import {
   composeSheetRgba,
   crc32,
   createProject as coreCreateProject,
+  defaultStyleProfile,
+  isGenerationTaskSkill,
+  parseStyleProfile,
+  styleProfilePromptTags,
   decodePng,
   encodePng,
   harvestPalette,
@@ -42,6 +46,8 @@ import {
   type RGBA,
 } from '@pixelforge/core'
 import { getBus, useEditor } from './store'
+import { useAppSettings } from './settings'
+import { MCP_TOOLS } from './mcp-tool-catalog'
 import { hexToRgba } from './color'
 import { importLegacyProjectJson, isSerializedProject } from './project-io'
 import { saveProjectFile } from './project-files'
@@ -50,6 +56,18 @@ import { rememberLastProject } from './last-session'
 import { followCommandTarget } from './mcp-follow'
 import { importFrameStrip } from './mcp-strip'
 import { AGENT_FETCH_HEADERS } from './agent-headers'
+import {
+  buildBrainProjectContext,
+  callBrain,
+  resolveBrainProvider,
+} from './brain-core'
+import {
+  fuzzyFindByName,
+  interpretAndEnhancePrompt,
+  readBrainMemory,
+  recordAgentContextEvent,
+  resolveMotionPresetSynonym,
+} from './second-brain-intelligence'
 
 export interface ToolExecResult {
   ok: boolean
@@ -113,6 +131,33 @@ function fail(code: string, message: string, hint?: string): ToolExecResult {
   return { ok: false, error: { code, message, ...(hint ? { hint } : {}) } }
 }
 
+/** Real editor tool names — registry-lite source for interpreter recommendations. */
+const MCP_TOOL_NAMES = MCP_TOOLS.map((t) => t.name)
+
+/**
+ * Reasoning-provider resolution for the relayed Brain tools (brain_ask /
+ * brain_plan_goal). The provider key NEVER travels through the MCP server:
+ * callBrain uses the desktop bridge (vault key injected in main) or the local
+ * route, so only "is one configured?" is checked here.
+ */
+function resolveBrainProviderOrFail():
+  | { ok: true; provider: { id: string; baseUrl: string; apiKey: string; model: string } }
+  | { ok: false; error: { code: string; message: string; hint?: string } } {
+  const s = useAppSettings.getState()
+  const { provider, hasKey } = resolveBrainProvider(s.aiProviders, s.secureMode, s.keyStatus, s.brainProviderId)
+  if (!provider || !hasKey) {
+    return {
+      ok: false,
+      error: {
+        code: 'no_provider',
+        message: 'No usable Brain (reasoning) provider is configured.',
+        hint: 'The artist must enable a reasoning provider and save its API key in Settings → AI.',
+      },
+    }
+  }
+  return { ok: true, provider }
+}
+
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
 }
@@ -129,10 +174,16 @@ function optInt(v: unknown, what: string, min: number, max: number): number | un
 }
 
 function asHex(v: unknown, what: string): string {
-  if (typeof v !== 'string' || !HEX_RE.test(v)) {
-    throw new CommandError('VALIDATION_FAILED', `${what} must be a hex color like #rrggbb`)
+  if (typeof v === 'string') {
+    const trimmed = v.trim()
+    const normalized = !trimmed.startsWith('#') && /^(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(trimmed)
+      ? `#${trimmed}`
+      : trimmed
+    if (HEX_RE.test(normalized)) {
+      return normalized.toLowerCase()
+    }
   }
-  return v.toLowerCase()
+  throw new CommandError('VALIDATION_FAILED', `${what} must be a hex color like #rrggbb`)
 }
 
 function asString(v: unknown, what: string, max: number, min = 1): string {
@@ -150,12 +201,12 @@ function resolveClipRef(project: Project, args: Record<string, unknown>): Clip {
   const clipId = typeof args.clipId === 'string' ? args.clipId : undefined
   const clipName = typeof args.clipName === 'string' ? args.clipName : undefined
   if (clipId) {
-    const clip = project.clips.find((c) => c.id === clipId)
+    const clip = project.clips.find((c) => c.id === clipId) ?? fuzzyFindByName(project.clips, clipId)?.item
     if (!clip) throw new CommandError('NOT_FOUND', `clip "${clipId}" not found`)
     return clip
   }
   if (clipName) {
-    const clip = project.clips.find((c) => c.name === clipName)
+    const clip = project.clips.find((c) => c.name === clipName) ?? fuzzyFindByName(project.clips, clipName)?.item
     if (!clip) throw new CommandError('NOT_FOUND', `clip named "${clipName}" not found`)
     return clip
   }
@@ -185,13 +236,13 @@ function resolveFrameRef(clip: Clip, args: Record<string, unknown>): { frame: Fr
 function resolveLayerRef(clip: Clip, args: Record<string, unknown>): Layer {
   const layerId = typeof args.layerId === 'string' ? args.layerId : undefined
   if (layerId) {
-    const layer = clip.layers.find((l) => l.id === layerId)
+    const layer = clip.layers.find((l) => l.id === layerId) ?? fuzzyFindByName(clip.layers, layerId)?.item
     if (!layer) throw new CommandError('NOT_FOUND', `layer "${layerId}" not found in clip "${clip.name}"`)
     return layer
   }
   const layerName = typeof args.layerName === 'string' ? args.layerName : undefined
   if (layerName) {
-    const layer = clip.layers.find((l) => l.name === layerName)
+    const layer = clip.layers.find((l) => l.name === layerName) ?? fuzzyFindByName(clip.layers, layerName)?.item
     if (!layer) throw new CommandError('NOT_FOUND', `layer named "${layerName}" not found in clip "${clip.name}"`)
     return layer
   }
@@ -329,7 +380,14 @@ const handlers: Record<string, ToolHandler> = {
       height: project.height,
       dirty: bus.isDirty(),
       palette: [...project.palette],
-      settings: { paletteEnforce: project.settings.paletteEnforce, onion: { ...project.settings.onion } },
+      settings: {
+        paletteEnforce: project.settings.paletteEnforce,
+        // never display a phantom enabled profile: docs saved before style
+        // profiles have none — show it as what it is (disabled until the
+        // artist enables it), not as the enabled default
+        styleProfile: project.settings.styleProfile ?? { ...defaultStyleProfile(), enabled: false },
+        onion: { ...project.settings.onion },
+      },
       trash: project.trash.map((t) => ({ id: t.id, label: t.label, kind: t.item.kind, deletedAt: t.deletedAt })),
       clips: project.clips.map(clipSummary),
       activePointers: {
@@ -378,10 +436,129 @@ const handlers: Record<string, ToolHandler> = {
 
   async get_palette() {
     const project = getBus().getProject()
+    const profile = project.settings.styleProfile
     return withStateHash({
       palette: [...project.palette],
-      paletteEnforce: project.settings.paletteEnforce,
+      // single source of truth: when a Style Lock profile exists it owns the
+      // palette decision — the legacy settings flag only applies without one.
+      // (Two flags once made validate_style and this read disagree.)
+      paletteEnforce: profile?.enabled ? profile.paletteMode === 'enforce' : project.settings.paletteEnforce,
+      styleProfile: profile ?? { ...defaultStyleProfile(), enabled: false },
     })
+  },
+
+  async validate_style(args) {
+    const project = getBus().getProject()
+    const clip = resolveClipRef(project, args)
+    const { frame } = resolveFrameRef(clip, args)
+    const { validateStyleCandidate } = await import('@pixelforge/core')
+    const checks = validateStyleCandidate({
+      buffer: composeFrameRgba(project, clip, frame),
+      width: project.width,
+      height: project.height,
+      targetWidth: project.width,
+      targetHeight: project.height,
+      palette: [...project.palette],
+      profile: project.settings.styleProfile ?? undefined,
+      allowEdgeTouch: args.allowEdgeTouch === true,
+    })
+    const warnings = checks.filter((c) => c.status === 'warning').length
+    return withStateHash(
+      {
+        clipId: clip.id,
+        frameId: frame.id,
+        pass: warnings === 0,
+        // objective/deterministic only — readability critique stays human
+        checks,
+      },
+      {
+        summary: warnings === 0
+          ? `Style checks pass for "${clip.name}" frame ${frame.id}`
+          : `${warnings} style warning(s) on "${clip.name}" frame ${frame.id} — fix before candidate review`,
+      },
+    )
+  },
+
+  async validate_candidate(args) {
+    const project = getBus().getProject()
+    const { aiCandidateStore } = await import('./ai/candidates')
+    const id = asString(args.candidateId, 'candidateId', 128)
+    const candidate = aiCandidateStore.getState().get(id)
+    if (!candidate) {
+      return fail('not_found', `Candidate "${id}" is not in the review cache.`, 'Call get_candidates for the current ids.')
+    }
+    if (!candidate.normalized) {
+      return fail('not_ready', 'Candidate has no normalized buffer yet — wait for normalization or call apply_normalize.')
+    }
+    const { validateStyleCandidate } = await import('@pixelforge/core')
+    const checks = validateStyleCandidate({
+      buffer: candidate.normalized.buffer,
+      width: candidate.normalized.w,
+      height: candidate.normalized.h,
+      targetWidth: project.width,
+      targetHeight: project.height,
+      palette: [...project.palette],
+      profile: project.settings.styleProfile ?? undefined,
+      allowEdgeTouch: args.allowEdgeTouch === true,
+    })
+    const warnings = checks.filter((c) => c.status === 'warning').length
+    return withStateHash(
+      {
+        candidateId: id,
+        width: candidate.normalized.w,
+        height: candidate.normalized.h,
+        pass: warnings === 0,
+        checks,
+      },
+      {
+        summary: warnings === 0
+          ? `Candidate ${id} passes style checks (${candidate.normalized.w}×${candidate.normalized.h})`
+          : `${warnings} style warning(s) on candidate ${id} — fix or regenerate before accepting`,
+      },
+    )
+  },
+
+  async list_vfx(args) {
+    const { listVfx } = await import('./vfx')
+    const category = typeof args.category === 'string' ? args.category : undefined
+    const effects = await listVfx(category)
+    return withStateHash(
+      { count: effects.length, effects },
+      { summary: `${effects.length} procedural VFX effect(s) available — render with generate_vfx (free, L1)` },
+    )
+  },
+
+  async generate_vfx(args) {
+    const { generateVfx } = await import('./vfx')
+    const res = await generateVfx({
+      effect: asString(args.effect, 'effect', 80),
+      seed: typeof args.seed === 'number' ? args.seed : undefined,
+      frames: optInt(args.frames, 'frames', 1, 64) ?? undefined,
+      fps: optInt(args.fps, 'fps', 1, 60) ?? undefined,
+      light: typeof args.light === 'number' ? args.light : undefined,
+      fit: args.fit === 'crop' ? 'crop' : 'fit',
+      x: typeof args.x === 'number' ? args.x : undefined,
+      y: typeof args.y === 'number' ? args.y : undefined,
+      palette: args.palette === 'project' ? 'project' : Array.isArray(args.palette) ? (args.palette as string[]) : undefined,
+      name: typeof args.name === 'string' ? args.name : undefined,
+    })
+    if (!res.ok) {
+      return fail('vfx_failed', res.error?.message ?? 'VFX render failed.', res.error?.hint)
+    }
+    return withStateHash(
+      {
+        clipId: res.clipId,
+        clipName: res.clipName,
+        frames: res.frames,
+        fps: res.fps,
+        previewPng: res.previewPng ?? null,
+        resolvedEffect: res.resolvedEffect ?? null,
+        paletteApplied: res.paletteApplied ?? null,
+      },
+      {
+        summary: `VFX "${args.effect}" rendered into new clip "${res.clipName}" (${res.frames}f @ ${res.fps}fps) — verify with preview_animation invariants, then validate_style`,
+      },
+    )
   },
 
   async preview_animation(args) {
@@ -392,9 +569,23 @@ const handlers: Record<string, ToolHandler> = {
     const cycle = buildPlaybackCycle(clip)
     const count = Math.min(clip.frames.length, maxFrames)
     const frames: string[] = []
+    const emptyFrames: number[] = []
+    let minDuration = Number.POSITIVE_INFINITY
+    let maxDuration = 0
     let bytes = 0
     for (let i = 0; i < count; i++) {
-      const dataUrl = await framePng(project, clip, clip.frames[i]!, 1)
+      const frame = clip.frames[i]!
+      // deterministic animation invariant (audit #6): a fully transparent
+      // in-between means the pose was never drawn — surface it, don't guess
+      const rgba = composeFrameRgba(project, clip, frame)
+      let opaque = false
+      for (let o = 3; o < rgba.length; o += 4) {
+        if (rgba[o] !== 0) { opaque = true; break }
+      }
+      if (!opaque) emptyFrames.push(i)
+      minDuration = Math.min(minDuration, frame.durationMs)
+      maxDuration = Math.max(maxDuration, frame.durationMs)
+      const dataUrl = await framePng(project, clip, frame, 1)
       bytes += dataUrl.length
       if (bytes > MAX_PREVIEW_BYTES) {
         return fail('response_too_large', `Preview exceeded ${MAX_PREVIEW_BYTES} bytes after ${i} frames — use get_frame_png per frame or a smaller canvas.`)
@@ -413,6 +604,11 @@ const handlers: Record<string, ToolHandler> = {
       schedule: cycle.entries,
       renderedFrames: frames.length,
       totalFrames: clip.frames.length,
+      invariants: {
+        emptyFrames,
+        allFramesHaveContent: emptyFrames.length === 0,
+        uniformTiming: minDuration === maxDuration,
+      },
       frames,
     })
   },
@@ -922,6 +1118,18 @@ const handlers: Record<string, ToolHandler> = {
     return withStateHash({ palette: colors }, { undoable: true, summary: `Replaced the palette (${colors.length} colors)` })
   },
 
+  async set_style_profile(args) {
+    const profile = parseStyleProfile(args.profile)
+    if (!profile) {
+      throw new CommandError('VALIDATION_FAILED', 'profile must contain a valid bounded PixelForge style profile')
+    }
+    execCommand('settings.setStyleProfile', { profile })
+    return withStateHash(
+      { styleProfile: profile },
+      { undoable: true, summary: `Updated style profile "${profile.name}"` },
+    )
+  },
+
   async import_image_as_layer(args) {
     const project = getBus().getProject()
     const clip = resolveClipRef(project, args)
@@ -1067,71 +1275,86 @@ const handlers: Record<string, ToolHandler> = {
 
   async generate_sprite(args) {
     // L3 — paid generation. Approval gating lives in the callers (agent gate
-    // always asks; server tierGrants enforces the L3 credential).
-    const prompt = asString(args.prompt, 'prompt', 600)
+    // always asks; server tierGrants enforces the L3 credential). Reuse the
+    // AI Studio submission path so desktop generation stays in Electron main
+    // and can resolve the encrypted provider key from its vault.
+    const prompt = asString(args.prompt, 'prompt', 4000)
     const count = typeof args.count === 'number' ? Math.max(1, Math.min(4, Math.floor(args.count))) : 1
+    const task = args.task === undefined ? 'create' : args.task
+    if (!isGenerationTaskSkill(task)) {
+      throw new CommandError('VALIDATION_FAILED', 'task must be "create" or "variation"')
+    }
     const { getActiveProvider, useAppSettings } = await import('./settings')
     const s = useAppSettings.getState()
-    const provider = getActiveProvider(s)
-    const { aiCandidateStore, newCandidateId } = await import('./ai/candidates')
-    const { normalizeCandidate } = await import('./ai/generate')
+    const selectedProvider = s.aiProviders.find((item) => item.id === s.activeProviderId) ?? null
+    // In desktop secure mode the renderer deliberately has no plaintext key.
+    // Accept the main-process credential-status mirror instead of mistaking an
+    // empty renderer-side key for an unusable configured provider.
+    const provider = getActiveProvider(s) ?? (
+      s.secureMode && selectedProvider?.enabled && selectedProvider.id !== 'groq' &&
+      (selectedProvider.kind as string) !== 'anthropic' && s.keyStatus[selectedProvider.id]?.hasKey
+        ? selectedProvider
+        : null
+    )
+    const { aiCandidateStore } = await import('./ai/candidates')
+    const { submitGeneration, GenerationCancelledError } = await import('./ai/generate')
     const project = getBus().getProject()
-    const res = await fetch('/api/ai/sprite', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...AGENT_FETCH_HEADERS },
-      body: JSON.stringify({
+    const profile = project.settings.styleProfile
+    const enforcePalette = profile?.enabled && profile.paletteMode === 'enforce'
+    const candidateIdsBefore = new Set(aiCandidateStore.getState().candidates.map((candidate) => candidate.id))
+    try {
+      await submitGeneration({
         prompt,
-        count,
-        provider: provider
-          ? { kind: provider.kind, baseUrl: provider.baseUrl, apiKey: provider.apiKey, model: provider.model }
-          : undefined,
-      }),
-    })
-    const json = (await res.json()) as {
-      ok: boolean; images?: string[]; image?: string; note?: string; error?: unknown
-    }
-    if (!json.ok) {
-      return fail('generation_failed', describeApiErrorInline(json.error, `Generation failed (HTTP ${res.status})`))
-    }
-    const images = json.images && json.images.length > 0 ? json.images : json.image ? [json.image] : []
-    if (images.length === 0) return fail('generation_failed', 'Generation returned no images')
-    const ids: string[] = []
-    for (const src of images) {
-      const candidate = {
-        id: newCandidateId(),
-        prompt,
+        recipeId: 'free',
+        taskSkill: task,
+        styleTags: styleProfilePromptTags(profile),
         providerId: provider?.id ?? 'zai',
         providerLabel: provider?.label ?? 'Z.AI (built-in)',
         model: provider?.model ?? 'auto',
-        seed: null,
-        requestSize: '—',
         width: project.width,
         height: project.height,
-        createdAt: new Date().toISOString(),
-        jobDurationMs: null,
-        costEstimateUsd: null,
-        cacheHit: false,
-        recipe: 'free',
-        originalSrc: src,
-        originalW: 0,
-        originalH: 0,
-        normalizeOpts: {},
-        normalized: null,
-        status: 'normalizing' as const,
-        error: null,
-      }
-      aiCandidateStore.getState().upsert(candidate)
-      ids.push(candidate.id)
-      await normalizeCandidate(candidate.id, {
-        targetW: project.width, targetH: project.height,
-        removeBg: true, bgTolerance: 48, paletteMode: 'auto',
-        palette: [], maxColors: 16, outlineCleanup: true,
+        count,
+        normalize: {
+          targetW: project.width,
+          targetH: project.height,
+          removeBg: true,
+          bgTolerance: 48,
+          paletteMode: enforcePalette ? 'project' : 'auto',
+          palette: enforcePalette ? project.palette : [],
+          maxColors: 16,
+          outlineCleanup: true,
+        },
+      }, {
+        webApiKey: provider?.apiKey,
+        webBaseUrl: provider?.baseUrl,
+        webProviderKind: provider?.kind,
       })
+    } catch (err) {
+      // a user cancel is not a provider failure — report it as its own code
+      // so the agent never reads the leftover error candidate as a result
+      if (err instanceof GenerationCancelledError) {
+        return fail('cancelled', 'Generation cancelled by the user before any candidate was produced')
+      }
+      return fail('generation_failed', err instanceof Error ? err.message : 'Generation failed')
     }
+    const ids = aiCandidateStore.getState().candidates
+      .filter((candidate) => !candidateIdsBefore.has(candidate.id) && (candidate.status === 'review' || candidate.status === 'accepted'))
+      .map((candidate) => candidate.id)
+    if (ids.length === 0) return fail('generation_failed', 'Generation finished without usable candidates')
     return withStateHash(
-      { candidateIds: ids, count: ids.length, note: json.note ?? null },
       {
-        summary: `Generated ${ids.length} candidate(s) — review with get_candidates, accept with accept_candidate`,
+        candidateIds: ids,
+        count: ids.length,
+        // structured style contract facts (audit #2) — distinct from the
+        // provider output; agents self-check against these instead of guessing
+        styleLock: {
+          enabled: profile?.enabled === true,
+          name: profile?.enabled ? profile.name : null,
+          paletteEnforced: enforcePalette,
+        },
+      },
+      {
+        summary: `Generated ${ids.length} ${task === 'variation' ? 'variation ' : ''}candidate(s)${profile?.enabled ? ` using Style Lock "${profile.name}"` : ''} — review with get_candidates, accept with accept_candidate`,
       },
     )
   },
@@ -1211,6 +1434,18 @@ const handlers: Record<string, ToolHandler> = {
         hasNormalized: !!c.normalized,
         normalizedSize: c.normalized ? { w: c.normalized.w, h: c.normalized.h, colors: c.normalized.colors } : null,
         error: c.error,
+      }
+      if (c.editSource) {
+        // Deliberately expose identifiers and bounded artist text only. The
+        // source thumbnail is not returned when its candidate has aged out of
+        // the live review cache; a paired IDE must not gain an extra image
+        // channel beyond the candidate previews this tool already returns.
+        item.editSource = {
+          candidateId: c.editSource.candidateId,
+          instruction: c.editSource.instruction.slice(0, 240),
+          maskMode: c.editSource.maskMode,
+          sourceStillInReview: state.candidates.some((item) => item.id === c.editSource!.candidateId),
+        }
       }
       if (c.normalized) {
         // bounded preview: the normalized buffer at 1:1 (≤512² by pipeline rule)
@@ -1427,7 +1662,10 @@ const handlers: Record<string, ToolHandler> = {
       clipId: typeof args.sourceClipId === 'string' ? args.sourceClipId : undefined,
       clipName: typeof args.sourceClipName === 'string' ? args.sourceClipName : undefined,
     })
-    const presetId = typeof args.preset === 'string' ? args.preset : ''
+    const rawPreset = typeof args.preset === 'string' ? args.preset.trim() : ''
+    const presetId = (PRESET_IDS as readonly string[]).includes(rawPreset)
+      ? rawPreset
+      : (resolveMotionPresetSynonym(rawPreset) ?? rawPreset)
     const preset = getPreset(presetId)
     if (!preset || !(PRESET_IDS as readonly string[]).includes(presetId)) {
       throw new CommandError('VALIDATION_FAILED', `preset must be one of ${PRESET_IDS.join(' | ')}`)
@@ -1602,6 +1840,105 @@ const handlers: Record<string, ToolHandler> = {
     }
     return withStateHash({}, { undoable: false, summary: 'Project saved to its .pixelforgeproj file' })
   },
+
+  async brain_interpret_prompt(args) {
+    const prompt = asString(args.prompt, 'prompt', 2000)
+    const project = getBus().getProject()
+    const st = useEditor.getState()
+    const mem = readBrainMemory()
+    // recommendations filtered against the real editor catalog (registry-lite)
+    const interpreted = interpretAndEnhancePrompt(
+      prompt,
+      project,
+      {
+        clipId: st.activeClipId,
+        layerId: st.activeLayerId,
+        frameIndex: st.activeFrameIndex,
+      },
+      mem,
+      MCP_TOOL_NAMES,
+    )
+    return withStateHash(
+      {
+        interpreted,
+        learnedPreferences: { prefer: mem.prefer, avoid: mem.avoid },
+      },
+      {
+        undoable: false,
+        summary: `Second Brain interpreted "${prompt.slice(0, 48)}" → intent=${interpreted.detectedIntent} (${interpreted.corrections.length} correction(s))`,
+      },
+    )
+  },
+
+  async brain_ask(args) {
+    const question = asString(args.question, 'question', 2000)
+    const prov = resolveBrainProviderOrFail()
+    if (!prov.ok) return prov
+    const bus = getBus()
+    const st = useEditor.getState()
+    const mem = readBrainMemory()
+    const interpreted = interpretAndEnhancePrompt(
+      question,
+      bus.getProject(),
+      { clipId: st.activeClipId, layerId: st.activeLayerId, frameIndex: st.activeFrameIndex },
+      mem,
+    )
+    const json = await callBrain<{
+      ok: boolean
+      answer?: string
+      error?: string
+      usage?: { tokensIn: number; tokensOut: number }
+    }>({
+      question: interpreted.correctedPrompt,
+      provider: { id: prov.provider.id, baseUrl: prov.provider.baseUrl, apiKey: prov.provider.apiKey, model: prov.provider.model },
+      project: buildBrainProjectContext(bus.getProject(), mem),
+    })
+    if (!json.ok) return fail('brain_error', describeApiErrorInline(json.error, 'Brain advisory failed'))
+    return withStateHash(
+      { question: interpreted.correctedPrompt, answer: json.answer ?? '', intent: interpreted.detectedIntent },
+      { undoable: false, summary: `Brain advisory answered "${question.slice(0, 48)}"` },
+    )
+  },
+
+  async brain_plan_goal(args) {
+    const goal = asString(args.goal, 'goal', 800)
+    const prov = resolveBrainProviderOrFail()
+    if (!prov.ok) return prov
+    const bus = getBus()
+    const st = useEditor.getState()
+    const mem = readBrainMemory()
+    const interpreted = interpretAndEnhancePrompt(
+      goal,
+      bus.getProject(),
+      { clipId: st.activeClipId, layerId: st.activeLayerId, frameIndex: st.activeFrameIndex },
+      mem,
+    )
+    const revision = await computeStateHash()
+    const json = await callBrain<{
+      ok: boolean
+      steps?: unknown[]
+      error?: string
+      projectId?: string | null
+      revision?: string | null
+    }>({
+      action: 'plan',
+      goal: interpreted.correctedPrompt,
+      provider: { id: prov.provider.id, baseUrl: prov.provider.baseUrl, apiKey: prov.provider.apiKey, model: prov.provider.model },
+      project: buildBrainProjectContext(bus.getProject(), mem, { projectId: st.project.id, revision }),
+    })
+    if (!json.ok) return fail('brain_error', describeApiErrorInline(json.error, 'Brain planning failed'))
+    const steps = Array.isArray(json.steps) ? json.steps : []
+    return withStateHash(
+      {
+        plan: steps,
+        intent: interpreted.detectedIntent,
+        projectId: json.projectId ?? st.project.id,
+        revision: json.revision ?? revision,
+        note: 'Plan proposal only — NOTHING was executed or queued. The artist runs it in the Brain Panel, or work is delegated via claimable board tasks.',
+      },
+      { undoable: false, summary: `Brain planned "${goal.slice(0, 48)}" (${steps.length} steps)` },
+    )
+  },
 }
 
 /** Shared executor for flip/rotate/shift (single-cel transforms). */
@@ -1656,7 +1993,11 @@ export async function executeMcpTool(tool: string, args: unknown, ctx: ToolExecC
     }
   }
   try {
-    return await handler(safeArgs, ctx)
+    const res = await handler(safeArgs, ctx)
+    if (res.ok && tool !== 'get_project_state' && tool !== 'get_clip' && tool !== 'get_palette' && tool !== 'get_frame_png') {
+      recordAgentContextEvent(ctx.clientName || 'mcp-agent', tool, res.summary ?? `Executed ${tool}`)
+    }
+    return res
   } catch (err) {
     if (err instanceof CommandError) {
       return fail(err.code.toLowerCase(), err.message)

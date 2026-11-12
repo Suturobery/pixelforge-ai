@@ -109,6 +109,7 @@ interface PfSettingsView {
     onionPrevTint: string;
     onionNextTint: string;
     floatBtnSize: 'sm' | 'md' | 'lg';
+    uiTextScale: 'normal' | 'large';
   };
   window: { x: number; y: number; width: number; height: number; isMaximized: boolean } | null;
   panels: Record<string, { pos?: { x: number; y: number }; open?: boolean; hidden?: boolean; pillPos?: { x: number; y: number } }>;
@@ -116,6 +117,7 @@ interface PfSettingsView {
   ai: { monthlyLimitUsd: number; warnUsd: number; cacheEnabled: boolean };
   aiProviders: PfProviderView[];
   activeProviderId: string;
+  brainProviderId: string;
   credentials: {
     encryptionAvailable: boolean;
     backend: string;
@@ -134,6 +136,9 @@ interface PfAiJobRequest {
   count?: number;
   seed?: number;
   clientId?: string;
+  operation?: 'generate' | 'edit';
+  sourcePngBase64?: string;
+  maskPngBase64?: string;
 }
 
 interface PfAiJobView {
@@ -219,6 +224,7 @@ interface PixelForgeBridge {
       ai?: Partial<PfSettingsView['ai']>;
       panels?: PfSettingsView['panels'];
       activeProviderId?: string;
+      brainProviderId?: string;
       aiProviders?: Array<{
         id: string;
         label?: string;
@@ -242,6 +248,8 @@ interface PixelForgeBridge {
     list(): Promise<PfAiJobView[]>;
     usage(): Promise<{ records: PfAiUsageRecord[]; monthSpendUsd: number }>;
     testConnection(providerId: string): Promise<PfAiConnectionTest>;
+    brain(payload: unknown): Promise<unknown>;
+    agent(payload: unknown): Promise<unknown>;
     onEvent(listener: (event: PfAiEvent) => void): () => void;
   };
   /** Packaging milestone: guarded software updates (no-op without a feed). */

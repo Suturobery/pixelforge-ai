@@ -12,7 +12,7 @@
  * every document tool returns the structured `editor_not_connected` error.
  */
 
-import { randomUUID } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import type { EditorEvent, EditorInbound, EditorOutbound, EditorServerStatus, ToolEnvelope } from './types';
 
 export interface EditorSocket {
@@ -37,6 +37,9 @@ interface PendingCall {
 }
 
 export class EditorLink {
+  /** Shared secret the editor must present in hello (see editor-auth.ts). */
+  private readonly editorToken: string;
+
   private socket: EditorSocket | null = null;
   private helloTimer: ReturnType<typeof setTimeout> | null = null;
   /** a second connection awaiting its hello (takeover or reject) */
@@ -47,6 +50,10 @@ export class EditorLink {
   private helloListeners = new Set<() => void>();
   /** last sign of life from the attached editor (hello or ping) */
   private lastAliveAt = 0;
+
+  constructor(opts: { editorToken?: string } = {}) {
+    this.editorToken = opts.editorToken ?? '';
+  }
 
   appVersion: string | null = null;
   bridgeVersion: number | null = null;
@@ -190,6 +197,24 @@ export class EditorLink {
     }
     switch (msg.type) {
       case 'hello': {
+        // AUTH: every hello must present the editor token (see editor-auth.ts).
+        const keyOk =
+          this.editorToken !== '' &&
+          typeof msg.editorKey === 'string' &&
+          msg.editorKey.length === this.editorToken.length &&
+          timingSafeEqual(Buffer.from(msg.editorKey), Buffer.from(this.editorToken));
+        if (!keyOk) {
+          const unauthorized = from;
+          console.error(`[pf-mcp] editor REJECTED (unauthorized) at ${new Date().toISOString()} — missing/invalid editor key`);
+          try {
+            unauthorized?.close?.(4003, 'unauthorized editor');
+          } catch {
+            /* already gone */
+          }
+          if (from) this.detach(from); // never leave an unauthorized socket in the slot
+          this.clearCandidate();
+          return;
+        }
         if (from && from !== this.socket) {
           this.clearCandidate();
           if (msg.takeover === true) {

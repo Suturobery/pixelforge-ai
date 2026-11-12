@@ -11,3 +11,19 @@ export const AGENT_HEADER = 'x-pixelforge-agent';
 export const AGENT_FETCH_HEADERS: Record<string, string> = {
   'X-PixelForge-Agent': '1',
 };
+
+/**
+ * Real (optional) web-deployment auth, audit finding S1: when the server sets
+ * PF_WEB_TOKEN, every guarded route additionally requires
+ * `Authorization: Bearer <token>`. Pure client-safe check; enforcement lives
+ * in api-guard.ts. No token configured (local dev / desktop) → legacy
+ * tripwire behavior unchanged. Plain comparison by design — the threat model
+ * is drive-by pages, not timing attacks; use a constant-time compare before
+ * full internet exposure.
+ */
+export function checkWebToken(authHeader: string | null | undefined, expected: string | undefined): boolean {
+  if (expected === undefined || expected === '') return true
+  if (!authHeader) return false
+  const match = /^Bearer\s+(.+)$/i.exec(authHeader.trim())
+  return match?.[1] === expected
+}
