@@ -1,9 +1,9 @@
 {
   "name": "@pixelforge/desktop",
   "productName": "PixelForge AI",
-  "version": "0.1.11",
+  "version": "0.2.1",
   "private": true,
-  "description": "PixelForge AI desktop shell — Electron main + secure preload (v3.1 Plan §12 Task 1). Interim renderer: existing web prototype via dev server; renderer port lands in Task 4.",
+  "description": "PixelForge AI desktop shell \u2014 Electron main + secure preload (v3.1 Plan \u00a712 Task 1). Interim renderer: existing web prototype via dev server; renderer port lands in Task 4.",
   "main": "dist/main/index.js",
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -17,12 +17,14 @@
     "dist": "npm run build && npm run stage:renderer && node scripts/dist.cjs",
     "dist:dir": "npm run build && npm run stage:renderer && electron-builder --dir --config electron-builder.yml"
   },
+  "dependencies": {
+    "electron-updater": "6.8.11"
+  },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "cross-env": "^7.0.3",
     "electron": "^45.0.0",
     "electron-builder": "25.1.8",
-    "electron-updater": "6.8.11",
     "typescript": "^5"
   },
   "trustedDependencies": [
