@@ -63,6 +63,12 @@
       "namedRegex": "^/api/ai/agent(?:/)?$"
     },
     {
+      "page": "/api/ai/brain",
+      "regex": "^/api/ai/brain(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/api/ai/brain(?:/)?$"
+    },
+    {
       "page": "/api/ai/sprite",
       "regex": "^/api/ai/sprite(?:/)?$",
       "routeKeys": {},
@@ -79,6 +85,12 @@
       "regex": "^/api/generate(?:/)?$",
       "routeKeys": {},
       "namedRegex": "^/api/generate(?:/)?$"
+    },
+    {
+      "page": "/api/mcp/editor-key",
+      "regex": "^/api/mcp/editor\\-key(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/api/mcp/editor\\-key(?:/)?$"
     },
     {
       "page": "/api/mcp/ops",

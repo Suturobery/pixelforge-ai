@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>PixelForge AI — loading screens comparison</title>
+<style>
+  :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: #18181b; color: #f4f4f5; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 28px; }
+  h1 { font-size: 18px; margin: 0 0 6px; }
+  p.note { color: #a1a1aa; font-size: 12px; margin: 0 0 24px; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; max-width: 1100px; margin: 0 auto; }
+  .card { border: 1px solid #3f3f46; border-radius: 12px; overflow: hidden; }
+  .card h2 { font-size: 13px; margin: 0; padding: 10px 14px; background: #27272a; color: #e4e4e7; }
+  .card h2 code { color: #5eead4; }
+  .card .where { padding: 8px 14px 12px; font-size: 11px; color: #a1a1aa; background: #1c1c1f; }
+  .stage { height: 320px; position: relative; }
+
+  /* ---- SCREEN A: in-app hydration screen (src/app/page.tsx) ---- */
+  .screenA { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: #09090b; }
+  .screenA .brand { display: flex; align-items: center; gap: 8px; }
+  .screenA .brand span { font-size: 14px; font-weight: 600; color: #f4f4f5; font-family: ui-monospace, monospace; }
+  .screenA svg.brandIcon { width: 20px; height: 20px; color: #5eead4; }
+  .screenA .spin { width: 16px; height: 16px; border: 2px solid #3f3f46; border-top-color: #a1a1aa; border-radius: 999px; animation: rot 1s linear infinite; }
+  @keyframes rot { to { transform: rotate(360deg); } }
+
+  /* ---- SCREEN B: desktop splash (apps/desktop/static/splash.html) ---- */
+  .screenB { height: 100%; display: grid; place-items: center; background: #09090b; color: #f4f4f5; }
+  .screenB main { width: min(100%, 440px); padding: 32px 36px; text-align: center; }
+  .screenB .mark { width: 46px; height: 46px; margin: 0 auto 18px; border: 3px solid #7d74ff; border-radius: 12px; box-shadow: 0 0 28px #7d74ff55; position: relative; }
+  .screenB .mark::after { content: ''; position: absolute; inset: 10px; border: 3px solid #4b47c8; border-radius: 5px; }
+  .screenB h3 { margin: 0; font-size: 21px; letter-spacing: -.02em; }
+  .screenB p { margin: 8px 0 0; color: #a1a1aa; font-size: 13px; }
+  .screenB .spin { width: 16px; height: 16px; margin: 14px auto 0; border: 2px solid #3f3f46; border-top-color: #7d74ff; border-radius: 999px; animation: rot 1s linear infinite; }
+  @keyframes rot { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+  <h1>PixelForge AI — the two loading screens</h1>
+  <p class="note">Live replicas (same markup/styles as production). Pick which one goes away.</p>
+  <div class="row">
+    <div class="card">
+      <h2>SCREEN A — in-app <code>"Loading studio"</code></h2>
+      <div class="stage">
+        <div class="screenA">
+          <div class="brand">
+            <svg viewBox="0 0 256 256" width="26" height="26" aria-hidden="true" style="filter: drop-shadow(0 0 10px #5eead433);"><defs><linearGradient id="glowA" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#5eead4"/><stop offset="1" stop-color="#0d9488"/></linearGradient></defs><rect width="256" height="256" rx="56" fill="#09090b"/><rect x="50" y="50" width="70" height="70" rx="16" fill="none" stroke="#3f3f46" stroke-width="11"/><rect x="50" y="136" width="70" height="70" rx="16" fill="none" stroke="#52525b" stroke-width="11"/><rect x="136" y="50" width="70" height="70" rx="16" fill="#5eead4"/><rect x="136" y="136" width="70" height="70" rx="16" fill="url(#glowA)"/></svg>
+            <span>PixelForge AI</span>
+          </div>
+          <div class="spin"></div>
+        </div>
+      </div>
+      <div class="where">Shown by: the web/dev app while React hydrates — and by the DESKTOP app after the splash, until the studio UI is ready.<br>Code: <code>src/app/page.tsx (~line 274)</code></div>
+    </div>
+    <div class="card">
+      <h2>SCREEN B — desktop splash <code>"Preparing your pixel studio…"</code></h2>
+      <div class="stage">
+        <div class="screenB">
+          <main aria-label="PixelForge AI is starting">
+            <svg viewBox="0 0 256 256" width="56" height="56" aria-hidden="true" style="filter: drop-shadow(0 0 18px #5eead433); margin: 0 auto 18px; display: block;"><defs><linearGradient id="glowB" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#5eead4"/><stop offset="1" stop-color="#0d9488"/></linearGradient></defs><rect width="256" height="256" rx="56" fill="#09090b"/><rect x="50" y="50" width="70" height="70" rx="16" fill="none" stroke="#3f3f46" stroke-width="11"/><rect x="50" y="136" width="70" height="70" rx="16" fill="none" stroke="#52525b" stroke-width="11"/><rect x="136" y="50" width="70" height="70" rx="16" fill="#5eead4"/><rect x="136" y="136" width="70" height="70" rx="16" fill="url(#glowB)"/></svg>
+            <h3>PixelForge AI</h3>
+            <p>Preparing your pixel studio…</p>
+            <div class="spin" aria-hidden="true"></div>
+          </main>
+        </div>
+      </div>
+      <div class="where">Shown by: the DESKTOP app only (Electron) while the Next server boots — before SCREEN A ever appears.<br>Code: <code>apps/desktop/static/splash.html</code></div>
+    </div>
+  </div>
+</body>
+</html>
