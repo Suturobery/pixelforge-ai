@@ -15,8 +15,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
+import { McpServer, WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/server';
 import { sha256Hex, generateClientId, generateClientToken, hashesMatch, RateLimiter } from './auth';
 import { PAIRING_ALLOWED_TOOLS, TOOL_CATALOG, type ToolDef } from './tools-catalog';
 import { TIER_RATE_LIMITS, tierGrants, type AuditEntry, type EditorEvent, type PairedClient, type Tier, type ToolEnvelope } from './types';
@@ -226,9 +225,9 @@ export class McpHost {
           description: def.description,
           inputSchema: def.inputSchema,
         },
-        async (args: Record<string, unknown>, extra) => {
+        async (args: Record<string, unknown>, ctx) => {
           const started = Date.now();
-          const sid = extra.sessionId;
+          const sid = ctx.sessionId;
           const entry = sid ? this.sessions.get(sid) : undefined;
           const identity = entry?.identity ?? this.initializing;
           const envelope = await this.runTool(def, args, identity);
@@ -254,8 +253,8 @@ export class McpHost {
       'capabilities',
       'pixelforge://capabilities',
       { title: 'PixelForge capability catalog', description: 'Every MCP tool PixelForge exposes, filtered to the reader tier', mimeType: 'application/json' },
-      async (uri, extra) => {
-        const entry = extra.sessionId ? this.sessions.get(extra.sessionId) : undefined;
+      async (uri, ctx) => {
+        const entry = ctx.sessionId ? this.sessions.get(ctx.sessionId) : undefined;
         const tier: Tier = entry?.identity && entry.identity.kind === 'client' ? entry.identity.tier : 'L0';
         const granted = TOOL_CATALOG.filter((d) => tierGrants(tier, d.tier) && d.name !== 'pair_client');
         return {
@@ -281,8 +280,8 @@ export class McpHost {
       'project-active',
       'pixelforge://project/active',
       { title: 'Active project summary', description: 'Live summary of the open PixelForge project (get_project_state relay)', mimeType: 'application/json' },
-      async (uri, extra) => {
-        const entry = extra.sessionId ? this.sessions.get(extra.sessionId) : undefined;
+      async (uri, ctx) => {
+        const entry = ctx.sessionId ? this.sessions.get(ctx.sessionId) : undefined;
         const identity = entry?.identity && entry.identity.kind === 'client' ? entry.identity : null;
         const envelope = await this.link.requestTool({
           tool: 'get_project_state',

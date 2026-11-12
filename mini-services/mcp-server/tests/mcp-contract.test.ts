@@ -14,8 +14,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { z } from 'zod';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { Client } from '@modelcontextprotocol/client';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { encodePng } from '../../../packages/core/src/persist/png';
 
 const PORT = 3030 + (Number(Bun.hash(process.env.HF_WORKER_ID ?? String(process.pid))) % 400);
@@ -117,7 +117,8 @@ async function sdkClient(bearer: string): Promise<Client> {
 }
 
 async function rawPost(body: string, headers: Record<string, string>): Promise<Response> {
-  return fetch(MCP_URL, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json', ...headers }, body });
+  // real MCP clients (v1 and v2 alike) MUST accept both content types (spec)
+  return fetch(MCP_URL, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', ...headers }, body });
 }
 
 interface Envelope {
@@ -463,12 +464,14 @@ describe('editor events → MCP notifications', () => {
 
     const client = await sdkClient(clientToken);
     const got: Array<Record<string, unknown>> = [];
+    // v2: method string + Standard Schema params (method is lifted by the protocol layer)
     const ProjectChanged = z.object({
-      method: z.literal('notifications/pixelforge/projectChanged'),
-      params: z.object({ stateHash: z.string().nullable(), name: z.string().nullable(), dirty: z.boolean().nullable() }).optional(),
+      stateHash: z.string().nullable(),
+      name: z.string().nullable(),
+      dirty: z.boolean().nullable(),
     });
-    client.setNotificationHandler(ProjectChanged, (n) => {
-      got.push((n.params ?? {}) as Record<string, unknown>);
+    client.setNotificationHandler('notifications/pixelforge/projectChanged', { params: ProjectChanged }, (params) => {
+      got.push(params as unknown as Record<string, unknown>);
     });
     // wait for the subscription to register, then push an event from the editor
     await Bun.sleep(150);
@@ -1170,4 +1173,77 @@ describe('shared-Brain phase 5 — status / capabilities / ask / plan / resource
     expect(projJson.data?.name).toBe('test doc');
     await client.close();
   });
+});
+
+// ------------------------------------------- SDK-v1-era client compatibility
+// Current IDE clients ship on TypeScript SDK 1.x (protocol 2025-03-26 /
+// 2025-06-18, session-based). This probe speaks that EXACT raw dialect —
+// no SDK client, hand-rolled JSON-RPC — against the v2 server to prove the
+// migration does not strand existing clients.
+describe('SDK-v1-era client compatibility (raw 2025-06-18 dialect)', () => {
+  /** Streamable HTTP lets the server answer JSON or SSE — parse either. */
+  async function readRpc(res: Response): Promise<Record<string, unknown>> {
+    const text = await res.text();
+    if (text.startsWith('event:') || text.includes('\ndata:')) {
+      for (const line of text.split('\n')) {
+        if (line.startsWith('data:')) {
+          try {
+            const msg = JSON.parse(line.slice(5).trim()) as Record<string, unknown>;
+            if (msg && typeof msg === 'object' && 'result' in msg) return msg;
+          } catch { /* keep scanning frames */ }
+        }
+      }
+      throw new Error('no JSON-RPC result frame in SSE body: ' + text.slice(0, 200));
+    }
+    return JSON.parse(text) as Record<string, unknown>;
+  }
+
+  async function legacyHandshake(protocolVersion: string): Promise<{ ok: boolean; tools: string[]; negotiated: string | null }> {
+    const { token } = await generatePairing('L1');
+    const init = await rawPost(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: { protocolVersion, capabilities: {}, clientInfo: { name: 'legacy-probe', version: '1.0.0' } },
+      }),
+      { authorization: `Bearer ${token}` },
+    );
+    if (!init.ok) {
+      console.error(`[probe ${protocolVersion}] initialize HTTP ${init.status}:`, (await init.text()).slice(0, 300));
+      return { ok: false, tools: [], negotiated: null };
+    }
+    const sid = init.headers.get('mcp-session-id');
+    const initBody = (await readRpc(init)) as { result?: { protocolVersion?: string } };
+    console.info(`[probe] client offered ${protocolVersion}, server answered: ${initBody.result?.protocolVersion}`);
+
+    // legacy clients announce themselves, then start calling
+    await rawPost(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }), {
+      authorization: `Bearer ${token}`,
+      ...(sid ? { 'mcp-session-id': sid } : {}),
+    });
+    const list = await rawPost(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }), {
+      authorization: `Bearer ${token}`,
+      ...(sid ? { 'mcp-session-id': sid } : {}),
+    });
+    if (!list.ok) console.error(`[probe ${protocolVersion}] tools/list HTTP ${list.status}:`, (await list.text()).slice(0, 300));
+    const listBody = (await readRpc(list)) as { result?: { tools?: Array<{ name: string }> } };
+    return {
+      ok: list.ok && Array.isArray(listBody.result?.tools),
+      tools: (listBody.result?.tools ?? []).map((t) => t.name),
+      negotiated: initBody.result?.protocolVersion ?? null,
+    };
+  }
+
+  for (const rev of ['2025-06-18', '2025-03-26']) {
+    test(`initialize + tools/list handshake with protocolVersion ${rev}`, async () => {
+      const probe = await legacyHandshake(rev);
+      expect(probe.ok).toBe(true);
+      expect(probe.tools).toContain('get_project_state');
+      expect(probe.tools).toContain('brain_get_tasks');
+      // server negotiates: echoes a supported version (never silently upgrades the client)
+      expect(probe.negotiated, 'server must answer with a negotiated protocol version').toBeTruthy();
+      expect(['2025-03-26', '2025-06-18', '2026-07-28']).toContain(probe.negotiated as string);
+    });
+  }
 });
