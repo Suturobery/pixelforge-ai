@@ -118,19 +118,33 @@ export async function callProvider(
   const model = resolveModel(cfg)
 
   // OpenAI-compatible
-  const res = await fetch(`${base}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      authorization: `Bearer ${cfg.apiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      messages: toOpenAIMessages(system, messages),
-      tools: agentTools().map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } })),
-    }),
-    signal: AbortSignal.timeout(60_000),
-  })
+  let res: Response
+  try {
+    res = await fetch(`${base}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${cfg.apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: toOpenAIMessages(system, messages),
+        tools: agentTools().map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } })),
+        // reasoning models burn most of the wall-clock thinking before the
+        // giant pixel-batch tool call; low effort keeps agent turns snappy
+        ...(model.startsWith('openai/gpt-oss-') ? { reasoning_effort: 'low' } : {}),
+      }),
+      // big pixel batches + reasoning models routinely exceed 60 s
+      signal: AbortSignal.timeout(180_000),
+    })
+  } catch (err) {
+    if (err instanceof Error && /abort|timeout/i.test(err.message)) {
+      throw new Error(
+        'Provider call timed out after 180 s — the model was still generating its tool batch. Retry, or make the goal smaller (fewer pixels per turn).',
+      )
+    }
+    throw err
+  }
   if (!res.ok) throw new Error(`Provider ${res.status}: ${(await res.text()).slice(0, 300)}`)
   const json = (await res.json()) as {
     choices?: Array<{ message?: { content?: string | null; tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }> } }>
