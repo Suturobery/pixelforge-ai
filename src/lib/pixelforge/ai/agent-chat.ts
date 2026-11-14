@@ -158,6 +158,7 @@ export function buildAgentInstructions(endpoint: string): string {
     'Auth: pair once — Settings → MCP in the app shows a pairing code; call `pair_client {name}` with it to receive your client token. Include it as a Bearer token afterward.',
     'Tiers: L0 tools are read-only (safe to call freely). L1 tools EDIT the document — confirm with the user before running them. Deleted work is trash-restorable; merges/resizes are NOT undoable via trash.',
     'All pixel coordinates are canvas pixels. Absent clip/frame/layer refs resolve to the ACTIVE ones.',
+    'Coordinates MUST be whole integers — never fractions or arithmetic expressions (compute and round first: Math.round). String numbers like "16" are tolerated, but prefer plain numbers.',
     '',
     '## Tools',
     '',

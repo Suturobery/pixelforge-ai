@@ -169,6 +169,30 @@ function asInt(v: unknown, what: string, min: number, max: number): number {
   return v
 }
 
+/**
+ * Pixel-coordinate validator for model-generated calls. LLMs frequently slip
+ * two harmless forms into big batches: numeric strings ("16") and fractional
+ * arithmetic results (12.5). Strings are unambiguous — parsed. Fractions are
+ * REJECTED (rounding would silently move pixels) but the error prints the
+ * received value and the fix so the model corrects itself in one retry.
+ */
+function asCoord(v: unknown, what: string, min: number, max: number): number {
+  if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) {
+    v = Number(v)
+  }
+  if (typeof v === 'number' && Number.isFinite(v)) {
+    if (Number.isInteger(v) && v >= min && v <= max) return v
+    if (Number.isInteger(v)) {
+      throw new CommandError('VALIDATION_FAILED', `${what} is ${v} — outside the allowed range [${min}, ${max}]. Use coordinates inside the canvas.`)
+    }
+    throw new CommandError(
+      'VALIDATION_FAILED',
+      `${what} must be an INTEGER pixel coordinate — you sent ${v}. Round it (e.g. Math.round) and retry; pixel centers are whole numbers.`,
+    )
+  }
+  throw new CommandError('VALIDATION_FAILED', `${what} must be an integer in [${min}, ${max}] (received: ${JSON.stringify(v) ?? 'undefined'})`)
+}
+
 function optInt(v: unknown, what: string, min: number, max: number): number | undefined {
   return v === undefined ? undefined : asInt(v, what, min, max)
 }
@@ -880,8 +904,8 @@ const handlers: Record<string, ToolHandler> = {
     let color: RGBA | null = null
     const ops = pixels.map((p, i) => {
       if (!isRecord(p)) throw new CommandError('VALIDATION_FAILED', `pixels[${i}] must be an object`)
-      const x = asInt(p.x, `pixels[${i}].x`, -100000, 100000)
-      const y = asInt(p.y, `pixels[${i}].y`, -100000, 100000)
+      const x = asCoord(p.x, `pixels[${i}].x`, -100000, 100000)
+      const y = asCoord(p.y, `pixels[${i}].y`, -100000, 100000)
       if (x < 0 || y < 0 || x >= project.width || y >= project.height) {
         throw new CommandError('VALIDATION_FAILED', `pixels[${i}] (${x},${y}) is outside the canvas (${project.width}×${project.height})`)
       }
@@ -903,8 +927,8 @@ const handlers: Record<string, ToolHandler> = {
     const { frame } = resolveFrameRef(clip, args)
     const layer = resolveLayerRef(clip, args)
     if (!isRecord(args.from) || !isRecord(args.to)) throw new CommandError('VALIDATION_FAILED', 'from/to must be {x, y} points')
-    const from = { x: asInt(args.from.x, 'from.x', -100000, 100000), y: asInt(args.from.y, 'from.y', -100000, 100000) }
-    const to = { x: asInt(args.to.x, 'to.x', -100000, 100000), y: asInt(args.to.y, 'to.y', -100000, 100000) }
+    const from = { x: asCoord(args.from.x, 'from.x', -100000, 100000), y: asCoord(args.from.y, 'from.y', -100000, 100000) }
+    const to = { x: asCoord(args.to.x, 'to.x', -100000, 100000), y: asCoord(args.to.y, 'to.y', -100000, 100000) }
     const hex = asHex(args.color, 'color')
     const filled = args.filled === undefined ? true : args.filled === true
     execCommand('pixels.applyOp', {
