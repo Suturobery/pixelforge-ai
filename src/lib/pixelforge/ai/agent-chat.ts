@@ -70,29 +70,38 @@ interface OpenAIMessage {
   tool_call_id?: string
 }
 
-function toOpenAIMessages(system: string, messages: AgentMsg[]): OpenAIMessage[] {
+export function toOpenAIMessages(system: string, messages: AgentMsg[]): OpenAIMessage[] {
   const out: OpenAIMessage[] = [{ role: 'system', content: system }]
+  // Harmony (gpt-oss) correlates each tool result to its call by id; some
+  // providers emit tool_calls WITHOUT ids. Backfill stable ids here so
+  // turn-2+ history always pairs assistant tool_calls with their results —
+  // otherwise Groq 400s with harmony "Tools should have a name!".
+  let pendingIds: string[] = []
   for (const m of messages) {
     if (m.role === 'user') {
       if (m.toolResults) {
-        for (const r of m.toolResults) {
-          out.push({ role: 'tool', tool_call_id: r.id, content: r.content })
-        }
+        m.toolResults.forEach((r, i) => {
+          const id = r.id || pendingIds[i] || `call_${out.length}_${i}`
+          out.push({ role: 'tool', tool_call_id: id, content: r.content })
+        })
+        pendingIds = []
       } else {
         out.push({ role: 'user', content: m.text ?? '' })
       }
     } else {
+      pendingIds = []
+      const calls = (m.toolCalls ?? [])
+        .filter((tc) => Boolean(tc.name))
+        .map((tc, i) => {
+          const id = tc.id || `call_${out.length}_${i}`
+          pendingIds.push(id)
+          return { id, type: 'function' as const, function: { name: tc.name, arguments: JSON.stringify(tc.args) } }
+        })
       out.push({
         role: 'assistant',
         content: m.text ?? null,
-        ...(m.toolCalls
-          ? {
-              tool_calls: m.toolCalls.map((tc) => ({
-                id: tc.id,
-                type: 'function' as const,
-                function: { name: tc.name, arguments: JSON.stringify(tc.args) },
-              })),
-            }
+        ...(calls.length > 0
+          ? { tool_calls: calls }
           : {}),
       })
     }
@@ -150,14 +159,16 @@ export async function callProvider(
     choices?: Array<{ message?: { content?: string | null; tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }> } }>
   }
   const msg = json.choices?.[0]?.message
-  const toolCalls: AgentToolCall[] = (msg?.tool_calls ?? []).map((tc) => {
+  const toolCalls: AgentToolCall[] = (msg?.tool_calls ?? []).map((tc, i) => {
     let args: Record<string, unknown> = {}
     try {
       args = JSON.parse(tc.function.arguments) as Record<string, unknown>
     } catch {
       args = {}
     }
-    return { id: tc.id, name: tc.function.name, args }
+    // harmony providers (gpt-oss) sometimes omit tool_call ids — backfill so
+    // result correlation in toOpenAIMessages always has an anchor
+    return { id: tc.id || `call_resp_${i}`, name: tc.function.name, args }
   })
   return { text: msg?.content ?? '', toolCalls }
 }
