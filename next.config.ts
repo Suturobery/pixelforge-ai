@@ -16,6 +16,9 @@ const nextConfig: NextConfig = {
   reactStrictMode: false,
   // keep the studio chrome clean — no dev-mode badge/icon overlays
   devIndicators: false,
+  experimental: {
+    agentUpgrade: "security",
+  },
   turbopack: {
     resolveAlias: {
       "@pixelforge/core": CORE_ALIAS,
