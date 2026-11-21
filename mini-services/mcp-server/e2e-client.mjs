@@ -10,8 +10,7 @@
  * Usage: bun e2e-client.mjs <pairing-code>
  */
 
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 
 const MCP = process.env.PF_MCP_URL ?? 'http://127.0.0.1:3030/mcp';
 // pairing code: argv[2] or PF_E2E_PAIRING_CODE (env preferred by automation —

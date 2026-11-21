@@ -14,6 +14,7 @@ import {
 } from '@/lib/pixelforge/mcp-bridge'
 import { useAppSettings } from '@/lib/pixelforge/settings'
 import { copyText, desktopConfirm } from '@/lib/pixelforge/desktop-bridge'
+import { buildIdeGuide, tierSummary } from '@/lib/pixelforge/ide-guide'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import {
@@ -187,21 +188,14 @@ export function McpConnections() {
   const secsLeft = pairing ? Math.max(0, Math.floor((new Date(pairing.expiresAt).getTime() - Date.now()) / 1000)) : 0
   const activeClients = clients.filter((c) => !c.revoked)
   const serverReady = bridge.status === 'connected' && bridge.server?.mcpEnabled === true
+  // tier-accurate guide - the copied text must describe the tier the code
+  // was generated for, never a hardcoded 'full control'
   const ideGuide = pairing
-    ? [
-        'PixelForge AI MCP — Full project control',
-        `Endpoint: ${bridge.server?.endpoint ?? 'http://127.0.0.1:3030/mcp'}`,
-        'Transport: Streamable HTTP',
-        `Temporary Authorization header: Bearer ${pairing.token}`,
-        '',
-        'Connect steps:',
-        '1. Add the endpoint as an MCP server in your IDE assistant.',
-        '2. Call pair_client with a friendly name (for example "Codex" or "Claude Desktop").',
-        '3. Replace the temporary Authorization value with the returned persistent token.',
-        '4. Call get_project_state first, then use the returned ids/stateHash for tools.',
-        '',
-        'Permission: L3 — full PixelForge project tools (read, edit, layers, animation, procedural VFX, export and project actions). No image generation exists and none is planned.',
-      ].join('\n')
+    ? buildIdeGuide({
+        tier: pairing.tier,
+        endpoint: bridge.server?.endpoint ?? 'http://127.0.0.1:3030/mcp',
+        token: pairing.token,
+      })
     : null
 
   return (
@@ -375,7 +369,7 @@ export function McpConnections() {
               </div>
             </div>
             <p className="font-mono text-[10px] text-zinc-400">
-              tier {pairing.tier} · expires in{' '}
+              {tierSummary(pairing.tier)} · expires in{' '}
               <span className={secsLeft < 60 ? 'text-amber-400' : 'text-zinc-300'}>
                 {Math.floor(secsLeft / 60)}:{String(secsLeft % 60).padStart(2, '0')}
               </span>
