@@ -34,11 +34,16 @@ import {
   type PartRect,
   type Project,
   type QAIssue,
+  type StyleProfile,
   type StrokeHandle as CoreStrokeHandle,
+  insertCharacter,
+  type KitSelection,
 } from '@pixelforge/core'
 import { DEFAULT_PALETTE } from './palettes'
 import { useAppSettings } from './settings'
+
 import { toast } from '@/hooks/use-toast'
+import { friendlyError } from '@/lib/utils'
 import {
   composeSelectionMove,
   extractClipboard,
@@ -46,7 +51,6 @@ import {
 } from './selection-ops'
 import type { PlaybackMode } from './playback'
 import type { PresetVersion } from './presets'
-import { reconcileAcceptedCandidates, type AcceptedRef } from './ai/candidates'
 import type {
   ClipboardContent,
   PresetId,
@@ -60,7 +64,7 @@ export type { SelectionRect, ClipboardContent, TransformKind }
 export const MIN_ZOOM = 0.25 // 25% — lets big canvases fit small screens
 export const MAX_ZOOM = 64 // 6400% — 1 canvas px = 64 screen px
 
-export type RightTab = 'layers' | 'ai' | 'motion' | 'agent'
+export type RightTab = 'layers' | 'create' | 'reference' | 'brain' | 'motion' | 'agent'
 
 /** Draft motion part (Motion Composer panel → part.set command). */
 export interface MotionPartDraft {
@@ -114,11 +118,13 @@ export function getRecorder(): JournalRecorder {
 /** Settings `historyLimit` presets map onto v3.1 byte budgets (§2.5). */
 function historyBudgetBytes(limit: number): number {
   switch (limit) {
+    case 8: return 8 * 1024 * 1024
     case 20: return 16 * 1024 * 1024
     case 40: return 32 * 1024 * 1024
     case 100: return 64 * 1024 * 1024
     case 200: return 128 * 1024 * 1024
-    default: return 64 * 1024 * 1024
+    case 500: return 256 * 1024 * 1024
+    default: return 32 * 1024 * 1024
   }
 }
 bus.setHistoryBudget(historyBudgetBytes(useAppSettings.getState().historyLimit))
@@ -250,6 +256,7 @@ export interface EditorState {
   brushSize: number
   brushShape: 'square' | 'circle'
   mirrorX: boolean
+  mirrorY: boolean
   /** fill tool: 2×2 Bayer dither between primary and secondary */
   dither: boolean
   ellipseFilled: boolean
@@ -296,6 +303,8 @@ export interface EditorState {
    *  panel (frame-scoped) — the timeline badges these frames while a motion
    *  preview is active. Cleared by the panel on unmount / accept. */
   motionPreviewIssues: QAIssue[]
+  /** Live draft parts from MotionPanel so CanvasStage renders part overlays in real time. */
+  motionDraftParts: MotionPartDraft[]
   paletteOpen: boolean
   rightOpen: boolean
   rightWidth: number
@@ -333,6 +342,8 @@ export interface EditorState {
   setFrameDuration: (frameIndex: number, durationMs: number) => void
   /** Document onion-skin range (Task 6): undoable via settings.setOnion. */
   setOnionRange: (patch: { prev?: number; next?: number }) => void
+  /** Shared project contract for AI panel and future MCP clients. */
+  setStyleProfile: (profile: StyleProfile) => void
   addLayer: () => void
   deleteLayer: (layerId: string) => void
   duplicateLayer: (layerId: string) => void
@@ -348,19 +359,34 @@ export interface EditorState {
   ) => void
   addPaletteColor: (hex: string) => void
   removePaletteColor: (hex: string) => void
+  // --- image / frame import (drop-to-canvas, frame clipboard) — returns where
+  // the import landed. Formerly AI-candidate reconciliation; the generation
+  // review cache was removed (subscription-only), the import path stays. ---
+  importCandidateAsLayer: (buffer: Uint8ClampedArray, name: string) => { kind: 'layer'; clipId: string; targetId: string } | null
+  importCandidateAsFrame: (buffer: Uint8ClampedArray, name: string) => { kind: 'frame'; clipId: string; targetId: string } | null
   /** Replace the whole palette in one undoable step (palette presets). */
   setPalette: (colors: string[], label: string) => void
-
-  // --- AI candidate import (candidates are proposals; never silent replace) ---
-  /** Returns where the import landed (for accepted-candidate reconciliation). */
-  importCandidateAsLayer: (buffer: Uint8ClampedArray, name: string) => AcceptedRef | null
-  importCandidateAsFrame: (buffer: Uint8ClampedArray, name: string) => AcceptedRef | null
 
   // --- motion composer (Task 10: part.set / motion.apply) ---
   /** Replace a clip's whole parts array in ONE undoable step. False = rejected. */
   setClipParts: (clipId: string, parts: MotionPartDraft[]) => boolean
   /** Run a motion preset through the composer; returns the created/target clip id. */
   applyMotionPreset: (payload: MotionApplyPayload) => string | null
+
+  // --- character creator (Create Character panel) ---
+  /** Draft part selection handed to the creator panel (Brain → Open in Create
+   *  Character); the panel adopts it when the reference changes. */
+  creatorDraft: KitSelection | null
+  setCreatorDraft: (selection: KitSelection | null) => void
+  /** Mobile slide-over drawer for the panels dock (desktop uses rightOpen). */
+  rightDrawerOpen: boolean
+  setRightDrawerOpen: (v: boolean) => void
+  /** Focus a right-dock tab from outside the dock (header, Brain, etc.).
+   *  Event-handler context only — opens the dock/drawer with the tab. */
+  requestRightTab: (tab: RightTab) => void
+  /** Insert a kit character as a new clip (one undoable transaction).
+   *  Returns the clip id, or null when insertion failed. */
+  addCharacterToCanvas: (selection: KitSelection) => string | null
 
   // --- selection & ui ---
   selectClip: (id: string) => void
@@ -383,7 +409,11 @@ export interface EditorState {
   /** AI Agent conversation memory — survives panel tab switches */
   agentChat: import('./ai/agent-chat').AgentMsg[]
   setAgentChat: (m: import('./ai/agent-chat').AgentMsg[]) => void
+  /** A one-shot request from another in-app surface (for example, Brain) to
+   * start the built-in Agent.  Keeping it in the editor store means the
+   * request survives the tab switch that mounts AgentPanel. */
   setMirrorX: (v: boolean) => void
+  setMirrorY: (v: boolean) => void
   setDither: (v: boolean) => void
   setEllipseFilled: (v: boolean) => void
   // --- selection ops (Task 5a) ---
@@ -420,6 +450,7 @@ export interface EditorState {
   setPlaybackMode: (m: PlaybackMode) => void
   setRightTab: (t: RightTab) => void
   setMotionPreviewIssues: (issues: QAIssue[]) => void
+  setMotionDraftParts: (parts: MotionPartDraft[]) => void
   setPaletteOpen: (v: boolean) => void
   setRightOpen: (v: boolean) => void
   setRightWidth: (w: number) => void
@@ -456,9 +487,6 @@ function syncFromBus(extra: Partial<EditorState> = {}): void {
     historyBytes: stats.bytes,
     ...extra,
   })
-  // Accepted AI imports flip back to 'review' when their target layer/frame
-  // disappears (undo / delete / load) — see ai/candidates.ts.
-  reconcileAcceptedCandidates(bus.getProject())
   revalidatePointers()
 }
 
@@ -495,6 +523,7 @@ export const useEditor = create<EditorState>()((set, get) => ({
   loadEpoch: 0,
   projectId: null,
   motionPreviewIssues: [],
+  motionDraftParts: [],
   activeClipId: initialDoc.clips[0]?.id ?? '',
   activeFrameIndex: 0,
   activeLayerId: initialDoc.clips[0]?.layers[0]?.id ?? '',
@@ -507,6 +536,7 @@ export const useEditor = create<EditorState>()((set, get) => ({
   agentAutoL1: false,
   agentChat: [],
   mirrorX: false,
+  mirrorY: false,
   dither: false,
   ellipseFilled: false,
   selection: null,
@@ -1070,12 +1100,20 @@ export const useEditor = create<EditorState>()((set, get) => ({
     }
   },
 
+  setStyleProfile: (profile) => {
+    try {
+      bus.execute('settings.setStyleProfile', { profile }, ORIGIN)
+    } catch {
+      /* style profile is validated again by the core command boundary */
+    }
+  },
+
   addLayer: () => {
     const refs = activeRefs(get())
     if (!refs) return
     const clip = bus.getProject().clips.find((c) => c.id === refs.clipId)
     if (!clip) return
-    const name = `layer ${clip.layers.length + 1}`
+    const name = `Layer ${clip.layers.length + 1}`
     try {
       bus.execute('layer.add', { clipId: refs.clipId, name }, ORIGIN)
     } catch {
@@ -1239,25 +1277,25 @@ export const useEditor = create<EditorState>()((set, get) => ({
     }
   },
 
-  // --- AI candidate import (one undoable transaction each) ---
+  // --- image / frame import (one undoable transaction each) ---
 
   importCandidateAsLayer: (buffer, name) => {
     const refs = activeRefs(get())
     if (!refs) return null
     let newLayerId: string | null = null
     try {
-      bus.transaction('Import AI candidate as layer', 'ai', () => {
-        bus.execute('layer.add', { clipId: refs.clipId, name }, 'ai')
+      bus.transaction('Import image as layer', 'ui', () => {
+        bus.execute('layer.add', { clipId: refs.clipId, name }, 'ui')
         newLayerId = bus.getProject().clips.find((c) => c.id === refs.clipId)?.layers.at(-1)?.id ?? null
         if (!newLayerId) throw new CommandError('INVALID_STATE', 'layer add produced no id')
         bus.execute(
           'pixels.applyOp',
           { clipId: refs.clipId, frameId: refs.frameId, layerId: newLayerId, ops: [{ op: 'setBuffer', buffer: new Uint8ClampedArray(buffer) }] },
-          'ai'
+          'ui'
         )
       })
     } catch {
-      toast({ title: 'Import failed', description: 'The candidate could not be imported.', variant: 'destructive' })
+      toast({ title: 'Import failed', description: 'The image could not be imported.', variant: 'destructive' })
       return null
     }
     if (newLayerId) {
@@ -1274,8 +1312,8 @@ export const useEditor = create<EditorState>()((set, get) => ({
     let ok = false
     let newFrameId: string | null = null
     try {
-      bus.transaction('Import AI candidate as frame', 'ai', () => {
-        bus.execute('frame.add', { clipId: refs.clipId, afterIndex: refs.frameIndex, copy: false }, 'ai')
+      bus.transaction('Import image as frame', 'ui', () => {
+        bus.execute('frame.add', { clipId: refs.clipId, afterIndex: refs.frameIndex, copy: false }, 'ui')
         const clip = bus.getProject().clips.find((c) => c.id === refs.clipId)
         const newFrame = clip?.frames[insertAt]
         if (!newFrame) throw new CommandError('INVALID_STATE', 'frame add produced no frame')
@@ -1283,12 +1321,12 @@ export const useEditor = create<EditorState>()((set, get) => ({
         bus.execute(
           'pixels.applyOp',
           { clipId: refs.clipId, frameId: newFrame.id, layerId: refs.layerId, ops: [{ op: 'setBuffer', buffer: new Uint8ClampedArray(buffer) }] },
-          'ai'
+          'ui'
         )
         ok = true
       })
     } catch {
-      toast({ title: 'Import failed', description: 'The candidate could not be imported.', variant: 'destructive' })
+      toast({ title: 'Import failed', description: 'The image could not be imported.', variant: 'destructive' })
       return null
     }
     if (ok) set({ activeFrameIndex: insertAt, playing: false })
@@ -1317,6 +1355,34 @@ export const useEditor = create<EditorState>()((set, get) => ({
     }
     if (payload.target.kind === 'existing') return payload.target.clipId
     return bus.getProject().clips.at(-1)?.id ?? null
+  },
+
+  // --- character creator ---
+  creatorDraft: null,
+  rightDrawerOpen: false,
+
+  setCreatorDraft: (selection) => set({ creatorDraft: selection }),
+
+  requestRightTab: (tab) => set({ rightTab: tab, rightOpen: true, rightDrawerOpen: true }),
+
+  addCharacterToCanvas: (selection) => {
+    let clipId: string | null = null
+    try {
+      const inserted = insertCharacter(bus, selection, { origin: ORIGIN })
+      clipId = inserted.clipId
+    } catch (err) {
+      toast({ title: 'Could not add character', description: friendlyError(err), variant: 'destructive' })
+      return null
+    }
+    const clip = bus.getProject().clips.find((c) => c.id === clipId)
+    set({
+      activeClipId: clipId,
+      activeFrameIndex: 0,
+      activeLayerId: clip?.layers.at(-1)?.id ?? '',
+      playing: false,
+    })
+    toast({ title: 'Character added', description: `"${clip?.name ?? 'Character'}" clip created with 4 editable layers — parts are pre-tagged for Motion.` })
+    return clipId
   },
 
   // --- selection & ui ---
@@ -1363,6 +1429,7 @@ export const useEditor = create<EditorState>()((set, get) => ({
   setAgentAutoL1: (v) => set({ agentAutoL1: v }),
   setAgentChat: (m) => set({ agentChat: m }),
   setMirrorX: (v) => set({ mirrorX: v }),
+  setMirrorY: (v) => set({ mirrorY: v }),
   setDither: (v) => set({ dither: v }),
   setEllipseFilled: (v) => set({ ellipseFilled: v }),
   setZoom: (z) => set({ zoom: Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z)) }),
@@ -1384,15 +1451,17 @@ export const useEditor = create<EditorState>()((set, get) => ({
   setPlaybackMode: (m) => set({ playbackMode: m }),
   setRightTab: (t) => set({ rightTab: t }),
   setMotionPreviewIssues: (issues) => set({ motionPreviewIssues: issues }),
+  setMotionDraftParts: (parts) => set({ motionDraftParts: parts }),
   setPaletteOpen: (v) => set({ paletteOpen: v }),
   setRightOpen: (v) => set({ rightOpen: v }),
+  setRightDrawerOpen: (v) => set({ rightDrawerOpen: v }),
   setRightWidth: (w) => set({ rightWidth: Math.min(560, Math.max(260, Math.round(w))) }),
   setTimelineOpen: (v) => set({ timelineOpen: v }),
   setAutosave: (v) => set({ autosave: v }),
 
   // --- persistence ---
 
-  setProjectId: (id) => set({ projectId: id, dirty: true }),
+  setProjectId: (id) => set({ projectId: id }),
   setFilePath: (path) => set({ filePath: path }),
   setSavingFile: (v) => set({ savingFile: v }),
   markSaved: () => {

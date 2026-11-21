@@ -66,6 +66,29 @@ function validateOp(op, hasColor, ctx, i) {
                 validateRect(rect, what);
             break;
         }
+        case 'scale': {
+            const f = op.factor;
+            if (f !== 0.5 && !(typeof f === 'number' && Number.isInteger(f) && f >= 2 && f <= 8)) {
+                (0, errors_1.fail)(`${what} factor must be 0.5 or an integer 2–8`);
+            }
+            const rect = op.rect;
+            if (rect !== undefined)
+                validateRect(rect, what);
+            break;
+        }
+        case 'scaleTo': {
+            const r = op.rect;
+            const to = op.to;
+            if (!r)
+                (0, errors_1.fail)(`${what} requires a source rect`);
+            else
+                validateRect(r, what);
+            if (!to)
+                (0, errors_1.fail)(`${what} requires a "to" destination rect`);
+            else
+                validateRect(to, what);
+            break;
+        }
         case 'shift':
             (0, validate_1.getInt)(op, 'dx', what);
             (0, validate_1.getInt)(op, 'dy', what);
@@ -158,6 +181,17 @@ exports.applyPixelOpsCommand = {
                         (0, region_1.rotateRegionCCWInPlace)(base, width, height, scope);
                     break;
                 }
+                case 'scale': {
+                    const rect = op.rect;
+                    const scope = rect ? (0, region_1.clampRect)(rect, width, height) : { x: 0, y: 0, w: width, h: height };
+                    if (!scope)
+                        break; // rect fully outside the canvas → visual no-op
+                    (0, region_1.scaleRegionInPlace)(base, width, height, scope, op.factor);
+                    break;
+                }
+                case 'scaleTo':
+                    (0, region_1.scaleRegionToInPlace)(base, width, height, op.rect, op.to);
+                    break;
                 case 'shift': {
                     const moved = (0, ops_1.moveBuffer)(base, width, height, op.dx, op.dy);
                     base.set(moved);
@@ -199,6 +233,8 @@ function describeOp(op) {
         case 'flipV': return 'Flip vertical' + scope;
         case 'rotateCW': return 'Rotate 90° CW' + scope;
         case 'rotateCCW': return 'Rotate 90° CCW' + scope;
+        case 'scale': return `Scale ${op.factor === 0.5 ? '÷2' : `×${op.factor}`}` + scope;
+        case 'scaleTo': return `Scale to ${op.to.w}×${op.to.h}` + scope;
         case 'shift': return 'Move layer';
         case 'clear': return 'Clear cel';
         case 'setBuffer': return 'Replace cel';

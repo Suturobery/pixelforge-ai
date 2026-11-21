@@ -18,6 +18,7 @@ import type {
   LoopMode,
 } from '../types/document';
 import { ONION_MAX } from '../types/document';
+import { parseStyleProfile, type StyleProfile } from '../style-profile';
 import type { CommandDefinition } from '../types/commands';
 import {
   findClip,
@@ -319,7 +320,7 @@ export const layerAdd: CommandDefinition<{ clipId: string; name?: string }> = {
   },
   apply(payload, ctx) {
     const clip = findClip(ctx.project, payload.clipId) as Clip;
-    const layer = createLayer(payload.name?.trim() || `layer ${clip.layers.length + 1}`);
+    const layer = createLayer(payload.name?.trim() || `Layer ${clip.layers.length + 1}`);
     const layers = [...clip.layers, layer]; // top
     const project = mapClip(ctx.project, clip.id, (c) => ({
       ...c,
@@ -937,6 +938,29 @@ export const settingsSetOnion: CommandDefinition<{
   },
 };
 
+/** Persist the shared AI/style contract as an undoable document setting. */
+export const settingsSetStyleProfile: CommandDefinition<{ profile: StyleProfile }> = {
+  type: 'settings.setStyleProfile',
+  defaultLabel: 'Update style profile',
+  validate(payload) {
+    const p = assertObject(payload, 'settings.setStyleProfile');
+    if (!parseStyleProfile(p.profile)) {
+      fail('settings.setStyleProfile: "profile" must be a valid bounded style profile');
+    }
+  },
+  apply(payload, ctx) {
+    const profile = parseStyleProfile(payload.profile);
+    if (!profile) fail('settings.setStyleProfile: invalid profile');
+    return {
+      project: {
+        ...ctx.project,
+        settings: { ...ctx.project.settings, styleProfile: profile },
+      },
+      label: 'Update style profile',
+    };
+  },
+};
+
 // ---------------------------------------------------------------------------
 // registry
 // ---------------------------------------------------------------------------
@@ -963,6 +987,7 @@ export function builtinCommands(): CommandDefinition<never>[] {
     paletteRemoveColor,
     paletteReplaceAll,
     settingsSetOnion,
+    settingsSetStyleProfile,
     trashRestore,
     trashPurge,
     canvasResize,

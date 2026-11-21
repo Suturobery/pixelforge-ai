@@ -2,7 +2,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { isSerializedProject } from '@/lib/pixelforge/project-io'
+import { validateProjectPayload } from '@/lib/pixelforge/project-validate'
 import { guardStateChange, guardRead } from '@/lib/pixelforge/api-guard'
 import type { SerializedProject } from '@/lib/pixelforge/types'
 
@@ -30,8 +30,12 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = (await req.json()) as { id?: string | null; project: SerializedProject }
-    if (!isSerializedProject(body.project)) {
-      return NextResponse.json({ ok: false, error: 'Invalid project payload' }, { status: 400 })
+    const issues = validateProjectPayload(body.project)
+    if (issues.length > 0) {
+      return NextResponse.json(
+        { ok: false, error: 'Invalid project payload: ' + issues.map((i) => i.path + ' ' + i.message).join('; ').slice(0, 400) },
+        { status: 400 },
+      )
     }
     const data = JSON.stringify(body.project)
     const palette = JSON.stringify(body.project.palette)

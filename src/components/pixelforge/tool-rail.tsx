@@ -28,6 +28,7 @@ import {
   Pipette,
   Move,
   FlipHorizontal2,
+  FlipVertical2,
   LayoutGrid,
   Grid2x2,
   ArrowLeftRight,
@@ -59,6 +60,8 @@ export function ToolRail() {
   const setCustomBrush = useEditor((s) => s.setCustomBrush)
   const mirrorX = useEditor((s) => s.mirrorX)
   const setMirrorX = useEditor((s) => s.setMirrorX)
+  const mirrorY = useEditor((s) => s.mirrorY)
+  const setMirrorY = useEditor((s) => s.setMirrorY)
   const dither = useEditor((s) => s.dither)
   const setDither = useEditor((s) => s.setDither)
   const swapColors = useEditor((s) => s.swapColors)
@@ -209,6 +212,24 @@ export function ToolRail() {
           </TooltipTrigger>
           <TooltipContent side="right" className="font-mono text-xs">
             Symmetry (mirror X) <kbd className="ml-1 rounded bg-white/20 px-1 font-sans text-[10px] font-semibold text-white">Y</kbd>
+          </TooltipContent>
+        </Tooltip>
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant={mirrorY ? 'secondary' : 'ghost'}
+              size="icon"
+              className={`h-9 w-9 ${mirrorY ? 'bg-teal-500/15 text-teal-300 ring-1 ring-teal-500/40' : 'text-zinc-400'}`}
+              onClick={() => setMirrorY(!mirrorY)}
+              aria-label="Symmetry Y (horizontal mirror)"
+              aria-pressed={mirrorY}
+            >
+              <FlipVertical2 className="h-4 w-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="right" className="font-mono text-xs">
+            Symmetry (mirror Y) <kbd className="ml-1 rounded bg-white/20 px-1 font-sans text-[10px] font-semibold text-white">Shift+Y</kbd>
           </TooltipContent>
         </Tooltip>
 

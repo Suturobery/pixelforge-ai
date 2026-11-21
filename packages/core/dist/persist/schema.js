@@ -12,6 +12,7 @@ exports.validateSerializedProjectV2 = validateSerializedProjectV2;
 const document_1 = require("../types/document");
 const errors_1 = require("./errors");
 const paths_1 = require("./paths");
+const style_profile_1 = require("../style-profile");
 const HEX = /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
 const LOOP_MODES = ['forward', 'reverse', 'pingpong'];
 function isRecord(v) {
@@ -64,6 +65,9 @@ function validateSerializedProjectV2(doc) {
         const s = p.settings;
         if (typeof s.paletteEnforce !== 'boolean')
             add('settings.paletteEnforce', 'must be a boolean');
+        if (s.styleProfile !== undefined && !(0, style_profile_1.parseStyleProfile)(s.styleProfile)) {
+            add('settings.styleProfile', 'must be a valid bounded style profile');
+        }
         if (!isRecord(s.onion)) {
             add('settings.onion', 'must be an object');
         }

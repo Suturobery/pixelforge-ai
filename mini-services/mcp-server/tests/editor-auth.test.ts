@@ -99,25 +99,6 @@ describe('editor-link authentication (P0-1)', () => {
     expect(holder.closed.some((c) => c.code === 4005)).toBe(true);
   });
 
-  test('unauthorized approval-response from a non-owner socket is ignored', () => {
-    const link = makeLink();
-    const holder = new FakeSocket();
-    link.attach(holder);
-    link.handleInbound(hello(TOKEN), holder);
-
-    let seen: { id: string; approve: boolean } | null = null;
-    link.onApprovalResponse((m) => {
-      seen = m;
-    });
-    const attacker = new FakeSocket();
-    attacker.send = () => {
-      /* attacker never owns the slot — its sends go nowhere */
-    };
-    // attacker never authenticated; drive its message with fromSocket=attacker
-    link.handleInbound({ type: 'approval-response', id: 'ap_1', approve: true }, attacker);
-    expect(seen).toBeNull();
-  });
-
   test('legit workflow still works: authorized editor relays tool-results', async () => {
     const link = makeLink();
     const holder = new FakeSocket();

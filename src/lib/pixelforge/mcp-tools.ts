@@ -46,7 +46,6 @@ import {
   type RGBA,
 } from '@pixelforge/core'
 import { getBus, useEditor } from './store'
-import { useAppSettings } from './settings'
 import { MCP_TOOLS } from './mcp-tool-catalog'
 import { hexToRgba } from './color'
 import { importLegacyProjectJson, isSerializedProject } from './project-io'
@@ -56,11 +55,6 @@ import { rememberLastProject } from './last-session'
 import { followCommandTarget } from './mcp-follow'
 import { importFrameStrip } from './mcp-strip'
 import { AGENT_FETCH_HEADERS } from './agent-headers'
-import {
-  buildBrainProjectContext,
-  callBrain,
-  resolveBrainProvider,
-} from './brain-core'
 import {
   fuzzyFindByName,
   interpretAndEnhancePrompt,
@@ -133,30 +127,6 @@ function fail(code: string, message: string, hint?: string): ToolExecResult {
 
 /** Real editor tool names — registry-lite source for interpreter recommendations. */
 const MCP_TOOL_NAMES = MCP_TOOLS.map((t) => t.name)
-
-/**
- * Reasoning-provider resolution for the relayed Brain tools (brain_ask /
- * brain_plan_goal). The provider key NEVER travels through the MCP server:
- * callBrain uses the desktop bridge (vault key injected in main) or the local
- * route, so only "is one configured?" is checked here.
- */
-function resolveBrainProviderOrFail():
-  | { ok: true; provider: { id: string; baseUrl: string; apiKey: string; model: string } }
-  | { ok: false; error: { code: string; message: string; hint?: string } } {
-  const s = useAppSettings.getState()
-  const { provider, hasKey } = resolveBrainProvider(s.aiProviders, s.secureMode, s.keyStatus, s.brainProviderId)
-  if (!provider || !hasKey) {
-    return {
-      ok: false,
-      error: {
-        code: 'no_provider',
-        message: 'No usable Brain (reasoning) provider is configured.',
-        hint: 'The artist must enable a reasoning provider and save its API key in Settings → AI.',
-      },
-    }
-  }
-  return { ok: true, provider }
-}
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -499,45 +469,6 @@ const handlers: Record<string, ToolHandler> = {
         summary: warnings === 0
           ? `Style checks pass for "${clip.name}" frame ${frame.id}`
           : `${warnings} style warning(s) on "${clip.name}" frame ${frame.id} — fix before candidate review`,
-      },
-    )
-  },
-
-  async validate_candidate(args) {
-    const project = getBus().getProject()
-    const { aiCandidateStore } = await import('./ai/candidates')
-    const id = asString(args.candidateId, 'candidateId', 128)
-    const candidate = aiCandidateStore.getState().get(id)
-    if (!candidate) {
-      return fail('not_found', `Candidate "${id}" is not in the review cache.`, 'Call get_candidates for the current ids.')
-    }
-    if (!candidate.normalized) {
-      return fail('not_ready', 'Candidate has no normalized buffer yet — wait for normalization or call apply_normalize.')
-    }
-    const { validateStyleCandidate } = await import('@pixelforge/core')
-    const checks = validateStyleCandidate({
-      buffer: candidate.normalized.buffer,
-      width: candidate.normalized.w,
-      height: candidate.normalized.h,
-      targetWidth: project.width,
-      targetHeight: project.height,
-      palette: [...project.palette],
-      profile: project.settings.styleProfile ?? undefined,
-      allowEdgeTouch: args.allowEdgeTouch === true,
-    })
-    const warnings = checks.filter((c) => c.status === 'warning').length
-    return withStateHash(
-      {
-        candidateId: id,
-        width: candidate.normalized.w,
-        height: candidate.normalized.h,
-        pass: warnings === 0,
-        checks,
-      },
-      {
-        summary: warnings === 0
-          ? `Candidate ${id} passes style checks (${candidate.normalized.w}×${candidate.normalized.h})`
-          : `${warnings} style warning(s) on candidate ${id} — fix or regenerate before accepting`,
       },
     )
   },
@@ -1297,92 +1228,6 @@ const handlers: Record<string, ToolHandler> = {
     return withStateHash({ deleted: name }, { summary: `Macro "${name}" deleted` })
   },
 
-  async generate_sprite(args) {
-    // L3 — paid generation. Approval gating lives in the callers (agent gate
-    // always asks; server tierGrants enforces the L3 credential). Reuse the
-    // AI Studio submission path so desktop generation stays in Electron main
-    // and can resolve the encrypted provider key from its vault.
-    const prompt = asString(args.prompt, 'prompt', 4000)
-    const count = typeof args.count === 'number' ? Math.max(1, Math.min(4, Math.floor(args.count))) : 1
-    const task = args.task === undefined ? 'create' : args.task
-    if (!isGenerationTaskSkill(task)) {
-      throw new CommandError('VALIDATION_FAILED', 'task must be "create" or "variation"')
-    }
-    const { getActiveProvider, useAppSettings } = await import('./settings')
-    const s = useAppSettings.getState()
-    const selectedProvider = s.aiProviders.find((item) => item.id === s.activeProviderId) ?? null
-    // In desktop secure mode the renderer deliberately has no plaintext key.
-    // Accept the main-process credential-status mirror instead of mistaking an
-    // empty renderer-side key for an unusable configured provider.
-    const provider = getActiveProvider(s) ?? (
-      s.secureMode && selectedProvider?.enabled && selectedProvider.id !== 'groq' &&
-      (selectedProvider.kind as string) !== 'anthropic' && s.keyStatus[selectedProvider.id]?.hasKey
-        ? selectedProvider
-        : null
-    )
-    const { aiCandidateStore } = await import('./ai/candidates')
-    const { submitGeneration, GenerationCancelledError } = await import('./ai/generate')
-    const project = getBus().getProject()
-    const profile = project.settings.styleProfile
-    const enforcePalette = profile?.enabled && profile.paletteMode === 'enforce'
-    const candidateIdsBefore = new Set(aiCandidateStore.getState().candidates.map((candidate) => candidate.id))
-    try {
-      await submitGeneration({
-        prompt,
-        recipeId: 'free',
-        taskSkill: task,
-        styleTags: styleProfilePromptTags(profile),
-        providerId: provider?.id ?? 'zai',
-        providerLabel: provider?.label ?? 'Z.AI (built-in)',
-        model: provider?.model ?? 'auto',
-        width: project.width,
-        height: project.height,
-        count,
-        normalize: {
-          targetW: project.width,
-          targetH: project.height,
-          removeBg: true,
-          bgTolerance: 48,
-          paletteMode: enforcePalette ? 'project' : 'auto',
-          palette: enforcePalette ? project.palette : [],
-          maxColors: 16,
-          outlineCleanup: true,
-        },
-      }, {
-        webApiKey: provider?.apiKey,
-        webBaseUrl: provider?.baseUrl,
-        webProviderKind: provider?.kind,
-      })
-    } catch (err) {
-      // a user cancel is not a provider failure — report it as its own code
-      // so the agent never reads the leftover error candidate as a result
-      if (err instanceof GenerationCancelledError) {
-        return fail('cancelled', 'Generation cancelled by the user before any candidate was produced')
-      }
-      return fail('generation_failed', err instanceof Error ? err.message : 'Generation failed')
-    }
-    const ids = aiCandidateStore.getState().candidates
-      .filter((candidate) => !candidateIdsBefore.has(candidate.id) && (candidate.status === 'review' || candidate.status === 'accepted'))
-      .map((candidate) => candidate.id)
-    if (ids.length === 0) return fail('generation_failed', 'Generation finished without usable candidates')
-    return withStateHash(
-      {
-        candidateIds: ids,
-        count: ids.length,
-        // structured style contract facts (audit #2) — distinct from the
-        // provider output; agents self-check against these instead of guessing
-        styleLock: {
-          enabled: profile?.enabled === true,
-          name: profile?.enabled ? profile.name : null,
-          paletteEnforced: enforcePalette,
-        },
-      },
-      {
-        summary: `Generated ${ids.length} ${task === 'variation' ? 'variation ' : ''}candidate(s)${profile?.enabled ? ` using Style Lock "${profile.name}"` : ''} — review with get_candidates, accept with accept_candidate`,
-      },
-    )
-  },
-
   async beautify_layer(args) {
     const project = getBus().getProject()
     const clip = resolveClipRef(project, args)
@@ -1428,152 +1273,6 @@ const handlers: Record<string, ToolHandler> = {
     return withStateHash(
       { colors, count: colors.length },
       { summary: `Harvested ${colors.length} colors (dark → light) — apply with set_palette` },
-    )
-  },
-
-  async get_candidates(args) {
-    const { aiCandidateStore } = await import('./ai/candidates')
-    const state = aiCandidateStore.getState()
-    const limit = optInt(args.limit, 'limit', 1, 8) ?? 8
-    const includeImages = args.includeImages === true
-    const candidates = state.candidates.slice(0, limit)
-    const out: Record<string, unknown>[] = []
-    for (const c of candidates) {
-      const item: Record<string, unknown> = {
-        id: c.id,
-        status: c.status,
-        prompt: c.prompt,
-        providerId: c.providerId,
-        providerLabel: c.providerLabel,
-        model: c.model,
-        recipe: c.recipe,
-        requestSize: c.requestSize,
-        width: c.width,
-        height: c.height,
-        seed: c.seed,
-        createdAt: c.createdAt,
-        jobDurationMs: c.jobDurationMs,
-        costEstimateUsd: c.costEstimateUsd,
-        cacheHit: c.cacheHit,
-        hasNormalized: !!c.normalized,
-        normalizedSize: c.normalized ? { w: c.normalized.w, h: c.normalized.h, colors: c.normalized.colors } : null,
-        error: c.error,
-      }
-      if (c.editSource) {
-        // Deliberately expose identifiers and bounded artist text only. The
-        // source thumbnail is not returned when its candidate has aged out of
-        // the live review cache; a paired IDE must not gain an extra image
-        // channel beyond the candidate previews this tool already returns.
-        item.editSource = {
-          candidateId: c.editSource.candidateId,
-          instruction: c.editSource.instruction.slice(0, 240),
-          maskMode: c.editSource.maskMode,
-          sourceStillInReview: state.candidates.some((item) => item.id === c.editSource!.candidateId),
-        }
-      }
-      if (c.normalized) {
-        // bounded preview: the normalized buffer at 1:1 (≤512² by pipeline rule)
-        item.normalizedPng = await pngDataUrl(c.normalized.w, c.normalized.h, c.normalized.buffer)
-      }
-      if (includeImages && c.originalSrc && c.originalSrc.length <= 2_600_000) {
-        item.originalSrc = c.originalSrc
-      }
-      out.push(item)
-    }
-    return withStateHash(
-      { candidates: out, historyCount: state.history.length },
-      { summary: `${out.length} AI candidate(s) in review cache` },
-    )
-  },
-
-  async accept_candidate(args) {
-    const { aiCandidateStore, registerAcceptedTarget } = await import('./ai/candidates')
-    const { fitBufferToCanvas } = await import('@pixelforge/core')
-    const id = asString(args.candidateId, 'candidateId', 128)
-    const mode = args.mode === 'frame' ? 'frame' : args.mode === 'layer' ? 'layer' : null
-    if (!mode) throw new CommandError('VALIDATION_FAILED', "mode must be 'layer' or 'frame'")
-    const candidate = aiCandidateStore.getState().get(id)
-    if (!candidate) {
-      return fail('not_found', `Candidate "${id}" is not in the review cache.`, 'Call get_candidates for the current ids.')
-    }
-    if (!candidate.normalized) {
-      return fail('not_ready', 'Candidate has no normalized buffer yet — wait for normalization or call apply_normalize.')
-    }
-    const project = getBus().getProject()
-    // candidates may be normalized at any sprite size — center 1:1 onto the cel
-    let buffer: Uint8ClampedArray
-    try {
-      buffer = fitBufferToCanvas(candidate.normalized.buffer, candidate.normalized.w, candidate.normalized.h, project.width, project.height)
-    } catch {
-      return fail(
-        'dimension_mismatch',
-        `Normalized candidate is ${candidate.normalized.w}×${candidate.normalized.h} but the canvas is ${project.width}×${project.height} — re-normalize with apply_normalize first.`,
-      )
-    }
-    const clip = resolveClipRef(project, args)
-    const { frame } = resolveFrameRef(clip, args)
-    const name = `AI: ${candidate.prompt.slice(0, 24)}`
-
-    if (mode === 'layer') {
-      execTransaction(`Import AI candidate as layer (${id})`, () => {
-        getBus().execute('layer.add', { clipId: clip.id, name }, 'mcp')
-        const created = getBus().getProject().clips.find((c) => c.id === clip.id)!.layers.slice(-1)[0]!
-        getBus().execute(
-          'pixels.applyOp',
-          { clipId: clip.id, frameId: frame.id, layerId: created.id, ops: [{ op: 'setBuffer', buffer }] },
-          'mcp',
-        )
-      })
-      const after = getBus().getProject().clips.find((c) => c.id === clip.id)!
-      const created = after.layers[after.layers.length - 1]!
-      // undo/delete of this layer unlocks the candidate again (reconcile)
-      registerAcceptedTarget(id, { kind: 'layer', clipId: clip.id, targetId: created.id })
-      aiCandidateStore.getState().patch(id, { status: 'accepted' })
-      return withStateHash(
-        { candidateId: id, mode, clipId: clip.id, frameId: frame.id, layerId: created.id, layerName: created.name },
-        { undoable: true, summary: `Accepted AI candidate "${id}" as layer "${created.name}"` },
-      )
-    }
-
-    // frame mode: new empty frame right after the target + buffer on the frame's top layer
-    const frameIndex = clip.frames.findIndex((f) => f.id === frame.id)
-    let newFrameId: string | null = null
-    execTransaction(`Import AI candidate as frame (${id})`, () => {
-      getBus().execute('frame.add', { clipId: clip.id, afterIndex: frameIndex, copy: false }, 'mcp')
-      const after = getBus().getProject().clips.find((c) => c.id === clip.id)!
-      const newFrame = after.frames[frameIndex + 1]
-      if (!newFrame) throw new CommandError('INVALID_STATE', 'frame add produced no frame')
-      newFrameId = newFrame.id
-      const layer = resolveLayerRef(after, { ...args, layerId: undefined, layerName: undefined })
-      getBus().execute(
-        'pixels.applyOp',
-        { clipId: clip.id, frameId: newFrame.id, layerId: layer.id, ops: [{ op: 'setBuffer', buffer }] },
-        'mcp',
-      )
-    })
-    if (newFrameId) {
-      // undo/delete of this frame unlocks the candidate again (reconcile)
-      registerAcceptedTarget(id, { kind: 'frame', clipId: clip.id, targetId: newFrameId })
-    }
-    aiCandidateStore.getState().patch(id, { status: 'accepted' })
-    return withStateHash(
-      { candidateId: id, mode, clipId: clip.id, frameId: newFrameId, frameIndex: frameIndex + 1 },
-      { undoable: true, summary: `Accepted AI candidate "${id}" as frame ${frameIndex + 2} in "${clip.name}"` },
-    )
-  },
-
-  async reject_candidate(args) {
-    const { aiCandidateStore } = await import('./ai/candidates')
-    const id = asString(args.candidateId, 'candidateId', 128)
-    const candidate = aiCandidateStore.getState().get(id)
-    if (!candidate) {
-      return fail('not_found', `Candidate "${id}" is not in the review cache.`)
-    }
-    aiCandidateStore.getState().patch(id, { status: 'rejected' })
-    aiCandidateStore.getState().remove(id)
-    return withStateHash(
-      { candidateId: id, rejected: true },
-      { undoable: false, summary: `Rejected AI candidate "${id}" (review cache only — document untouched)` },
     )
   },
 
@@ -1769,78 +1468,6 @@ const handlers: Record<string, ToolHandler> = {
     )
   },
 
-  async apply_normalize(args) {
-    const { aiCandidateStore } = await import('./ai/candidates')
-    const { normalizeV2, parseHexColor } = await import('@pixelforge/core')
-    const id = asString(args.candidateId, 'candidateId', 128)
-    const candidate = aiCandidateStore.getState().get(id)
-    if (!candidate) {
-      return fail('not_found', `Candidate "${id}" is not in the review cache.`)
-    }
-    if (!candidate.originalSrc) {
-      return fail('not_ready', 'Candidate has no source image to normalize.')
-    }
-    const project = getBus().getProject()
-    // options (all optional; defaults mirror the AI panel)
-    const width = optInt(args.width, 'width', 8, 512) ?? project.width
-    const height = optInt(args.height, 'height', 8, 512) ?? project.height
-    const removeBg = args.removeBg !== false
-    const bgTolerance = optInt(args.bgTolerance, 'bgTolerance', 0, 255) ?? 48
-    const modeRaw = args.paletteMode
-    const paletteMode = modeRaw === 'project' || modeRaw === 'auto' || modeRaw === 'off' ? modeRaw : 'auto'
-    const maxColors = optInt(args.maxColors, 'maxColors', 2, 64) ?? 16
-    const outlineCleanup = args.outlineCleanup !== false
-    let palette: string[] = project.palette
-    if (Array.isArray(args.palette)) {
-      palette = (args.palette as unknown[]).filter((x): x is string => typeof x === 'string' && parseHexColor(x) !== null)
-    }
-    // decode the ORIGINAL image (PNG data URL) — the executor runs in the
-    // renderer, same process as the store; the pipeline is the deterministic
-    // core function (identical output to the panel's worker path)
-    const raw = candidate.originalSrc
-    const b64 = raw.includes(',') ? raw.slice(raw.indexOf(',') + 1) : raw
-    let binary: Uint8Array
-    try {
-      const bin = atob(b64)
-      binary = new Uint8Array(bin.length)
-      for (let i = 0; i < bin.length; i++) binary[i] = bin.charCodeAt(i)
-    } catch {
-      return fail('validation_failed', 'candidate source is not valid base64')
-    }
-    let decoded
-    try {
-      decoded = await decodePng(binary)
-    } catch {
-      return fail('validation_failed', 'candidate source is not a decodable PNG (use a PNG candidate or normalize from the AI panel)')
-    }
-    const res = normalizeV2(decoded.rgba, decoded.width, decoded.height, {
-      targetW: width,
-      targetH: height,
-      removeBg,
-      bgTolerance,
-      paletteMode,
-      palette,
-      maxColors,
-      outlineCleanup,
-    })
-    const updated = aiCandidateStore.getState().patch(id, {
-      normalized: { buffer: res.buffer, w: res.width, h: res.height, colors: res.stats.colorsOut },
-      status: 'review',
-      error: null,
-    })
-    return withStateHash(
-      {
-        candidateId: id,
-        width: res.width,
-        height: res.height,
-        stats: res.stats,
-        previewPng: await pngDataUrl(res.width, res.height, res.buffer),
-        ok: !!updated,
-      },
-      { undoable: false, summary: `Re-normalized candidate "${id}" → ${res.width}×${res.height} (${res.stats.paletteUsed} palette, ${res.stats.colorsOut} colors)` },
-    )
-  },
-
   async undo() {
     const result = getBus().undo()
     return withStateHash(
@@ -1894,75 +1521,6 @@ const handlers: Record<string, ToolHandler> = {
     )
   },
 
-  async brain_ask(args) {
-    const question = asString(args.question, 'question', 2000)
-    const prov = resolveBrainProviderOrFail()
-    if (!prov.ok) return prov
-    const bus = getBus()
-    const st = useEditor.getState()
-    const mem = readBrainMemory()
-    const interpreted = interpretAndEnhancePrompt(
-      question,
-      bus.getProject(),
-      { clipId: st.activeClipId, layerId: st.activeLayerId, frameIndex: st.activeFrameIndex },
-      mem,
-    )
-    const json = await callBrain<{
-      ok: boolean
-      answer?: string
-      error?: string
-      usage?: { tokensIn: number; tokensOut: number }
-    }>({
-      question: interpreted.correctedPrompt,
-      provider: { id: prov.provider.id, baseUrl: prov.provider.baseUrl, apiKey: prov.provider.apiKey, model: prov.provider.model },
-      project: buildBrainProjectContext(bus.getProject(), mem),
-    })
-    if (!json.ok) return fail('brain_error', describeApiErrorInline(json.error, 'Brain advisory failed'))
-    return withStateHash(
-      { question: interpreted.correctedPrompt, answer: json.answer ?? '', intent: interpreted.detectedIntent },
-      { undoable: false, summary: `Brain advisory answered "${question.slice(0, 48)}"` },
-    )
-  },
-
-  async brain_plan_goal(args) {
-    const goal = asString(args.goal, 'goal', 800)
-    const prov = resolveBrainProviderOrFail()
-    if (!prov.ok) return prov
-    const bus = getBus()
-    const st = useEditor.getState()
-    const mem = readBrainMemory()
-    const interpreted = interpretAndEnhancePrompt(
-      goal,
-      bus.getProject(),
-      { clipId: st.activeClipId, layerId: st.activeLayerId, frameIndex: st.activeFrameIndex },
-      mem,
-    )
-    const revision = await computeStateHash()
-    const json = await callBrain<{
-      ok: boolean
-      steps?: unknown[]
-      error?: string
-      projectId?: string | null
-      revision?: string | null
-    }>({
-      action: 'plan',
-      goal: interpreted.correctedPrompt,
-      provider: { id: prov.provider.id, baseUrl: prov.provider.baseUrl, apiKey: prov.provider.apiKey, model: prov.provider.model },
-      project: buildBrainProjectContext(bus.getProject(), mem, { projectId: st.project.id, revision }),
-    })
-    if (!json.ok) return fail('brain_error', describeApiErrorInline(json.error, 'Brain planning failed'))
-    const steps = Array.isArray(json.steps) ? json.steps : []
-    return withStateHash(
-      {
-        plan: steps,
-        intent: interpreted.detectedIntent,
-        projectId: json.projectId ?? st.project.id,
-        revision: json.revision ?? revision,
-        note: 'Plan proposal only — NOTHING was executed or queued. The artist runs it in the Brain Panel, or work is delegated via claimable board tasks.',
-      },
-      { undoable: false, summary: `Brain planned "${goal.slice(0, 48)}" (${steps.length} steps)` },
-    )
-  },
 }
 
 /** Shared executor for flip/rotate/shift (single-cel transforms). */

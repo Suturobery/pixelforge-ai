@@ -13,6 +13,7 @@ import {
   ExportError,
   buildAllArtifacts,
   decodePng,
+  encodeExportPng,
   planExport,
   writeExportPlan,
   type ExportRequest,
@@ -21,6 +22,7 @@ import {
 import { getBridge, isDesktop, makeBridgeFs } from './desktop-bridge'
 
 export type { ExportRequest } from '@pixelforge/core'
+export type ExportScale = 1 | 2 | 4 | 8
 
 /** Result of a user-facing export run (dialog maps these to toasts). */
 export type ExportOutcome =
@@ -31,6 +33,27 @@ export type ExportOutcome =
 export interface ExportRunOptions extends ExportRequest {
   /** Desktop only: replace existing files in the chosen destination. */
   overwrite?: boolean
+  /** Nearest-neighbor integer export scale factor (default 1 = native resolution). */
+  scale?: ExportScale
+}
+
+function upscaleRgbaNearest(src: Uint8ClampedArray, w: number, h: number, scale: number): Uint8ClampedArray {
+  const sw = w * scale
+  const sh = h * scale
+  const out = new Uint8ClampedArray(sw * sh * 4)
+  for (let y = 0; y < sh; y++) {
+    const sy = Math.floor(y / scale)
+    for (let x = 0; x < sw; x++) {
+      const sx = Math.floor(x / scale)
+      const si = (sy * w + sx) * 4
+      const di = (y * sw + x) * 4
+      out[di] = src[si]
+      out[di + 1] = src[si + 1]
+      out[di + 2] = src[si + 2]
+      out[di + 3] = src[si + 3]
+    }
+  }
+  return out
 }
 
 const PNG_FILTERS = [{ name: 'PNG image', extensions: ['png'] }]
@@ -52,9 +75,40 @@ function dirnameOf(path: string): string {
 export async function buildExportArtifacts(
   project: Project,
   request: ExportRequest,
+  scale: ExportScale = 1,
 ): Promise<{ filename: string; kind: 'png' | 'json'; bytes: Uint8Array }[]> {
   const plan = planExport(project, request)
-  return buildAllArtifacts(plan)
+  const artifacts = await buildAllArtifacts(plan)
+  if (!scale || scale === 1) return artifacts
+  return Promise.all(
+    artifacts.map(async (f) => {
+      if (f.kind === 'png') {
+        const decoded = await decodePng(f.bytes)
+        const scaled = upscaleRgbaNearest(decoded.rgba, decoded.width, decoded.height, scale)
+        const pngBytes = await encodeExportPng(decoded.width * scale, decoded.height * scale, scaled)
+        return { ...f, bytes: pngBytes }
+      }
+      try {
+        const meta = JSON.parse(new TextDecoder().decode(f.bytes)) as Record<string, unknown>
+        if (typeof meta.frameWidth === 'number') meta.frameWidth *= scale
+        if (typeof meta.frameHeight === 'number') meta.frameHeight *= scale
+        if (typeof meta.sheetWidth === 'number') meta.sheetWidth *= scale
+        if (typeof meta.sheetHeight === 'number') meta.sheetHeight *= scale
+        if (Array.isArray(meta.frames)) {
+          meta.frames = meta.frames.map((fr: Record<string, unknown>) => ({
+            ...fr,
+            ...(typeof fr.x === 'number' ? { x: fr.x * scale } : {}),
+            ...(typeof fr.y === 'number' ? { y: fr.y * scale } : {}),
+            ...(typeof fr.w === 'number' ? { w: fr.w * scale } : {}),
+            ...(typeof fr.h === 'number' ? { h: fr.h * scale } : {}),
+          }))
+        }
+        return { ...f, bytes: new TextEncoder().encode(JSON.stringify(meta, null, 2) + '\n') }
+      } catch {
+        return f
+      }
+    }),
+  )
 }
 
 /**
@@ -63,8 +117,8 @@ export async function buildExportArtifacts(
  * never mutates the project.
  */
 export async function runExport(project: Project, options: ExportRunOptions): Promise<ExportOutcome> {
-  const { overwrite, ...request } = options
-  const files = await buildExportArtifacts(project, request)
+  const { overwrite, scale = 1, ...request } = options
+  const files = await buildExportArtifacts(project, request, scale)
 
   // --- web prototype: browser downloads (browser names/conflict UI its own) ---
   if (!isDesktop()) {

@@ -30,6 +30,7 @@ import type {
 import { decodePng, encodePng } from './png';
 import { PersistError } from './errors';
 import { celSrc, sharedCelSrc, trashCelSrc, trashClipCelSrc } from './paths';
+import { cloneStyleProfile, parseStyleProfile } from '../style-profile';
 
 export interface SerializedWithCels {
   projectJson: SerializedProjectV2;
@@ -144,6 +145,7 @@ export async function serializeProjectV2(project: Project): Promise<SerializedWi
       clips,
       settings: {
         paletteEnforce: project.settings.paletteEnforce,
+        ...(project.settings.styleProfile ? { styleProfile: cloneStyleProfile(project.settings.styleProfile) } : {}),
         onion: { prev: project.settings.onion.prev, next: project.settings.onion.next },
       },
     },
@@ -327,6 +329,7 @@ export async function projectFromSerialized(
     trash.push(await trashEntryFromSerialized(doc.trash[ti], ti, celBytes, decodeCache, doc));
   }
 
+  const styleProfile = parseStyleProfile(doc.settings.styleProfile);
   return {
     id: opts.id ?? null,
     schemaVersion: 2,
@@ -336,6 +339,7 @@ export async function projectFromSerialized(
     palette: [...doc.palette],
     settings: {
       paletteEnforce: doc.settings.paletteEnforce,
+      ...(styleProfile ? { styleProfile } : {}),
       onion: { prev: doc.settings.onion.prev, next: doc.settings.onion.next },
     },
     clips,

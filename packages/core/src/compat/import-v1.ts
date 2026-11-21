@@ -34,6 +34,7 @@ import { v1ClipSkeleton, v2ProjectShell } from './v1';
 import { decodePng, peekPngSize } from '../persist/png';
 import { base64Decode } from '../persist/base64';
 import { PersistError } from '../persist/errors';
+import { parseStyleProfile } from '../style-profile';
 
 export class V1ProjectImporter implements V1ToV2Importer {
   async import(
@@ -66,6 +67,14 @@ export class V1ProjectImporter implements V1ToV2Importer {
       } else if (v1Onion.prev !== undefined || v1Onion.next !== undefined) {
         warnings.push('project.settings.onion: invalid values ignored — using defaults');
       }
+    }
+
+    // Optional style contract added by PixelForge. Classic v1 readers ignore
+    // the field, while the importer validates it before AI can use it.
+    if (v1.settings?.styleProfile !== undefined) {
+      const profile = parseStyleProfile(v1.settings.styleProfile);
+      if (profile) project.settings.styleProfile = profile;
+      else warnings.push('project.settings.styleProfile: invalid profile ignored');
     }
 
     for (const v1Clip of v1.clips) {

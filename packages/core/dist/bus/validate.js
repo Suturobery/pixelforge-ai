@@ -4,6 +4,7 @@
  * package where the prototype already uses it, v3.1 §5.3).
  */
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.HEX_RE = void 0;
 exports.assertObject = assertObject;
 exports.getString = getString;
 exports.getOptionalString = getOptionalString;
@@ -83,10 +84,10 @@ function getOptionalLoopMode(o, key, what) {
         return undefined;
     return getLoopMode(o, key, what);
 }
-const HEX_RE = /^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
+exports.HEX_RE = /^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
 function getHexColor(o, key, what) {
     const v = getString(o, key, what);
-    if (!HEX_RE.test(v))
+    if (!exports.HEX_RE.test(v))
         (0, errors_1.fail)(`${what}: "${key}" must be a hex color like #rrggbb`);
     return v.toLowerCase();
 }

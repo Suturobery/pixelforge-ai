@@ -20,6 +20,7 @@
  */
 
 import type { SCHEMA_VERSION } from '../version';
+import type { StyleProfile } from '../style-profile';
 
 /** RGBA tuple, channels 0–255 (matches prototype color.ts). */
 export type RGBA = [number, number, number, number];
@@ -141,6 +142,8 @@ export interface TrashEntry {
 /** Document-level settings serialized in project.json (v3.1 §6). */
 export interface DocumentSettings {
   paletteEnforce: boolean;
+  /** Optional so older v2 and v1 projects remain readable without migration. */
+  styleProfile?: StyleProfile;
   onion: {
     /** How many previous frames to onion-skin (0–3). */
     prev: number;

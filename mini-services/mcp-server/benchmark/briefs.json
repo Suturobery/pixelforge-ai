@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "note": "Identical briefs for cross-client consistency measurement (audit #5). Every supported client runs the SAME list; results are compared on deterministic checks, never on aesthetic scores.",
+  "briefs": [
+    {
+      "id": "slime-idle",
+      "prompt": "small friendly green slime monster, idle pose, chunky rounded body with two eyes, game enemy sprite",
+      "task": "create",
+      "expect": "single creature, centered, transparent background"
+    },
+    {
+      "id": "chest-mimic",
+      "prompt": "treasure chest mimic monster, slightly open with teeth, fantasy RPG prop enemy, front view",
+      "task": "create",
+      "expect": "prop-sized creature, clear silhouette, dark 1px outline"
+    },
+    {
+      "id": "potion-item",
+      "prompt": "red health potion in a round glass bottle with cork, RPG inventory item icon, front view",
+      "task": "create",
+      "expect": "small item, symmetric-ish, isolated subject"
+    }
+  ]
+}

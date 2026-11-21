@@ -135,6 +135,9 @@ export function CanvasStage() {
   const [dragOver, setDragOver] = useState(false)
   const { toast } = useToast()
   const mirrorX = useEditor((s) => s.mirrorX)
+  const mirrorY = useEditor((s) => s.mirrorY)
+  const rightTab = useEditor((s) => s.rightTab)
+  const motionDraftParts = useEditor((s) => s.motionDraftParts)
   const ellipseFilled = useEditor((s) => s.ellipseFilled)
   const selection = useEditor((s) => s.selection)
   const playing = useEditor((s) => s.playing)
@@ -320,6 +323,57 @@ export function CanvasStage() {
       ctx.stroke()
     }
 
+    // Symmetry centerline guides (Mirror X / Mirror Y)
+    if ((mirrorX || mirrorY) && !playing) {
+      ctx.save()
+      ctx.lineWidth = 1
+      ctx.setLineDash([4, 4])
+      ctx.strokeStyle = 'rgba(45, 212, 191, 0.65)'
+      ctx.beginPath()
+      if (mirrorX) {
+        const mx = Math.round((W / 2) * zoom * dpr) / dpr + 0.5 / dpr
+        ctx.moveTo(mx, 0)
+        ctx.lineTo(mx, ch)
+      }
+      if (mirrorY) {
+        const my = Math.round((H / 2) * zoom * dpr) / dpr + 0.5 / dpr
+        ctx.moveTo(0, my)
+        ctx.lineTo(cw, my)
+      }
+      ctx.stroke()
+      ctx.restore()
+    }
+
+    // Motion part bounding boxes overlay when the Motion tab is active
+    if (rightTab === 'motion' && !playing) {
+      const clip = getActiveClip(useEditor.getState())
+      const parts = motionDraftParts.length > 0 ? motionDraftParts : clip.parts
+      const partColors = ['#2ce8f5', '#a7f070', '#ffcd75', '#ef7d57', '#f4f4f4', '#73eff7', '#b13e53', '#38b764']
+      ctx.save()
+      parts.forEach((p, idx) => {
+        const r = p.rect ?? { x: 0, y: 0, w: W, h: H }
+        const color = partColors[idx % partColors.length]
+        const rx = r.x * zoom
+        const ry = r.y * zoom
+        const rw = r.w * zoom
+        const rh = r.h * zoom
+        ctx.strokeStyle = color
+        ctx.lineWidth = 1.5
+        ctx.setLineDash([3, 2])
+        ctx.strokeRect(rx + 0.5, ry + 0.5, Math.max(1, rw - 1), Math.max(1, rh - 1))
+        if (zoom >= 4) {
+          ctx.setLineDash([])
+          ctx.font = '600 9px monospace'
+          const tw = ctx.measureText(p.name).width + 6
+          ctx.fillStyle = 'rgba(9, 9, 11, 0.82)'
+          ctx.fillRect(rx, Math.max(0, ry - 12), tw, 12)
+          ctx.fillStyle = color
+          ctx.fillText(p.name, rx + 3, Math.max(9, ry - 3))
+        }
+      })
+      ctx.restore()
+    }
+
     // hover cursor (paint tools), grey like the frame-thumb hover border
     if (hover && !playing && tool !== 'eyedropper' && tool !== 'move' && tool !== 'marquee') {
       const size = tool === 'fill' ? 1 : brushSize
@@ -371,7 +425,7 @@ export function CanvasStage() {
     // NOTE: the onion values must be deps too — toggling the switch or changing
     // opacity/tints re-composites the offscreen buffer only; without these deps
     // the visible canvas keeps showing the pre-onion blit (stale ghosts).
-  }, [project, W, H, zoom, panX, panY, showGrid, tileSnap, tileSize, renderTick, hover, tool, brushSize, brushShape, customBrush, playing, activeFrameIndex, selection, scaleDraft, ellipseFilled, antsTick, onionSkin, onionOpacity, onionPrevTint, onionNextTint])
+  }, [project, W, H, zoom, panX, panY, showGrid, tileSnap, tileSize, mirrorX, mirrorY, rightTab, motionDraftParts, renderTick, hover, tool, brushSize, brushShape, customBrush, playing, activeFrameIndex, selection, scaleDraft, ellipseFilled, antsTick, onionSkin, onionOpacity, onionPrevTint, onionNextTint])
 
   // ------------------------------------------------------------ fit / zoom
   const fitView = useCallback(() => {
@@ -548,6 +602,9 @@ export function CanvasStage() {
       // stampCustomBuffer centers the brush on (cx, cy) — offset to the tile's
       // center so the whole tile fills exactly
       stampCustomBuffer(handle.buffer, w, h, px.x + Math.floor(t / 2), px.y + Math.floor(t / 2), { w: t, h: t, data: tile }, st.mirrorX, st.tool === 'eraser')
+      if (st.mirrorY) {
+        stampCustomBuffer(handle.buffer, w, h, px.x + Math.floor(t / 2), h - 1 - (px.y + Math.floor(t / 2)), { w: t, h: t, data: tile }, st.mirrorX, st.tool === 'eraser')
+      }
       interactionRef.current = {
         mode: 'paint',
         tool: st.tool,
@@ -569,8 +626,14 @@ export function CanvasStage() {
         const c: [number, number, number, number] = st.tool === 'eraser' ? [0, 0, 0, 0] : color
         if (st.customBrush) {
           stampCustomBuffer(handle.buffer, w, h, px.x, px.y, st.customBrush, st.mirrorX, st.tool === 'eraser')
+          if (st.mirrorY) {
+            stampCustomBuffer(handle.buffer, w, h, px.x, h - 1 - px.y, st.customBrush, st.mirrorX, st.tool === 'eraser')
+          }
         } else {
           stampBrush(handle.buffer, w, h, px.x, px.y, st.brushSize, c, st.mirrorX, st.brushShape)
+          if (st.mirrorY) {
+            stampBrush(handle.buffer, w, h, px.x, h - 1 - px.y, st.brushSize, c, st.mirrorX, st.brushShape)
+          }
         }
         interactionRef.current = {
           mode: 'paint',
@@ -580,7 +643,7 @@ export function CanvasStage() {
           handle,
           changed: true,
           btn: e.button,
-          pp: st.brushSize === 1 && !st.customBrush && !st.mirrorX && !st.dither
+          pp: st.brushSize === 1 && !st.customBrush && !st.mirrorX && !st.mirrorY && !st.dither
             ? { p2: null, p1: px, patch: new Map() }
             : undefined,
         }
@@ -590,9 +653,17 @@ export function CanvasStage() {
       case 'fill': {
         const handle = st.beginStroke()
         if (!handle) return
-        const changed = st.dither
-          ? floodFillDither(handle.buffer, w, h, px.x, px.y, color, hexToRgba(st.secondary), st.mirrorX)
+        const sec = hexToRgba(st.secondary)
+        let changed = st.dither
+          ? floodFillDither(handle.buffer, w, h, px.x, px.y, color, sec, st.mirrorX)
           : floodFill(handle.buffer, w, h, px.x, px.y, color, st.mirrorX)
+        if (st.mirrorY) {
+          const my = h - 1 - px.y
+          const changedY = st.dither
+            ? floodFillDither(handle.buffer, w, h, px.x, my, color, sec, st.mirrorX)
+            : floodFill(handle.buffer, w, h, px.x, my, color, st.mirrorX)
+          changed = changed || changedY
+        }
         st.endStroke('Fill', changed)
         break
       }
@@ -768,7 +839,7 @@ export function CanvasStage() {
         : hexToRgba(it.btn === 2 ? st.secondary : st.primary)
       // dither pencil/eraser: 1px + dither ON → checker stamps (own path —
       // the pixel-perfect tracker assumes every adjacent cell)
-      if (st.dither && st.brushSize === 1 && !st.customBrush && !st.mirrorX &&
+      if (st.dither && st.brushSize === 1 && !st.customBrush && !st.mirrorX && !st.mirrorY &&
         (it.tool === 'pencil' || it.tool === 'eraser')) {
         const pts: Array<{ x: number; y: number }> = []
         let x = it.last.x, y = it.last.y
@@ -789,7 +860,7 @@ export function CanvasStage() {
         return
       }
       // pixel-perfect freehand: 1px pencil/eraser, no custom brush, no mirror
-      if (it.pp && !st.customBrush && !st.mirrorX && st.brushSize === 1) {
+      if (it.pp && !st.customBrush && !st.mirrorX && !st.mirrorY && st.brushSize === 1) {
         pixelPerfectStroke(it.pp, px, handle.buffer, w, h, c, st.brushShape)
         it.last = px
         it.changed = true
@@ -800,16 +871,27 @@ export function CanvasStage() {
         // interpolate stamps along the segment so fast strokes stay connected
         const steps = Math.max(1, Math.hypot(px.x - it.last.x, px.y - it.last.y))
         for (let s = 0; s <= steps; s++) {
+          const sx = Math.round(it.last.x + ((px.x - it.last.x) * s) / steps)
+          const sy = Math.round(it.last.y + ((px.y - it.last.y) * s) / steps)
           stampCustomBuffer(
             handle.buffer, w, h,
-            Math.round(it.last.x + ((px.x - it.last.x) * s) / steps),
-            Math.round(it.last.y + ((px.y - it.last.y) * s) / steps),
+            sx, sy,
             st.customBrush, st.mirrorX, st.tool === 'eraser',
           )
+          if (st.mirrorY) {
+            stampCustomBuffer(
+              handle.buffer, w, h,
+              sx, h - 1 - sy,
+              st.customBrush, st.mirrorX, st.tool === 'eraser',
+            )
+          }
         }
       } else {
         const lineC: [number, number, number, number] = it.tool === 'eraser' ? [0, 0, 0, 0] : c
         drawLinePixels(handle.buffer, w, h, it.last.x, it.last.y, px.x, px.y, st.brushSize, lineC, st.mirrorX, st.brushShape)
+        if (st.mirrorY) {
+          drawLinePixels(handle.buffer, w, h, it.last.x, h - 1 - it.last.y, px.x, h - 1 - px.y, st.brushSize, lineC, st.mirrorX, st.brushShape)
+        }
       }
       it.last = px
       it.changed = true
@@ -822,15 +904,25 @@ export function CanvasStage() {
       if (it.tool === 'line') {
         const c = hexToRgba(st.primary)
         drawLinePixels(handle.buffer, w, h, it.start.x, it.start.y, px.x, px.y, st.brushSize, c, st.mirrorX, st.brushShape)
+        if (st.mirrorY) {
+          drawLinePixels(handle.buffer, w, h, it.start.x, h - 1 - it.start.y, px.x, h - 1 - px.y, st.brushSize, c, st.mirrorX, st.brushShape)
+        }
       } else if (it.tool === 'rect') {
-        const c = hexToRgba(st.primary)
-        drawRectPixels(handle.buffer, w, h, it.start.x, it.start.y, px.x, px.y, st.brushSize, c, e.shiftKey, st.mirrorX, st.brushShape)
+        const filled = e.shiftKey ? !st.ellipseFilled : st.ellipseFilled
+        const c = hexToRgba(filled ? st.secondary : st.primary)
+        drawRectPixels(handle.buffer, w, h, it.start.x, it.start.y, px.x, px.y, st.brushSize, c, filled, st.mirrorX, st.brushShape)
+        if (st.mirrorY) {
+          drawRectPixels(handle.buffer, w, h, it.start.x, h - 1 - it.start.y, px.x, h - 1 - px.y, st.brushSize, c, filled, st.mirrorX, st.brushShape)
+        }
       } else {
         // ellipse: outline uses the primary color; filled uses the secondary
         // (v3.1 §2.1 shape convention). Shift inverts the fill toggle.
         const filled = e.shiftKey ? !st.ellipseFilled : st.ellipseFilled
         const c = hexToRgba(filled ? st.secondary : st.primary)
         drawEllipsePixels(handle.buffer, w, h, it.start.x, it.start.y, px.x, px.y, st.brushSize, c, filled, st.mirrorX)
+        if (st.mirrorY) {
+          drawEllipsePixels(handle.buffer, w, h, it.start.x, h - 1 - it.start.y, px.x, h - 1 - px.y, st.brushSize, c, filled, st.mirrorX)
+        }
       }
       it.last = px
       it.changed = true

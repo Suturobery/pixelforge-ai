@@ -241,7 +241,6 @@ export function ReferenceOverlay() {
         {/* image — locked: pointer-events none, strokes pass under the
             translucent ref. Unlocked (lock button off): the image itself is
             the drag grip for moving the panel. */}
-        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={imgSrc}
           alt="Reference"

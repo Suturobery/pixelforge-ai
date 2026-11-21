@@ -79,6 +79,14 @@ advice come from it; **execution always stays in PixelForge**:
 - Read-only resources: `pixelforge://capabilities` (tier-filtered
   catalog) and `pixelforge://project/active` (live project summary).
 
+**In-app Asset Brief (artist-side):** the Brain Panel can compose a
+structured, editable work brief (asset type, camera, facing, pose, color
+limit, outline, lighting, references, must-include/avoid) from the active
+project + Style Lock and queue it on this same task board via `brain-push`
+— deterministic, no model call. If MCP is unreachable it offers a
+clipboard fallback for pasting into your IDE agent. A sent brief is a
+task pending; it is not completed art until an agent finishes the work.
+
 `live-client-test.ts` in the MCP server folder is a ready-made external
 client that exercises this whole sequence against a running app
 (`PF_PAIR_CODE=<code> bun live-client-test.ts`).

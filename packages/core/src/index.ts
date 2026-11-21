@@ -49,6 +49,34 @@ export {
   TRASH_CAP,
 } from './types/document';
 
+export type { StyleCameraAngle, StyleFeedback, StyleLighting, StyleOutline, StylePaletteMode, StyleProfile, StyleReference } from './style-profile';
+export {
+  DEFAULT_STYLE_PROFILE,
+  STYLE_CAMERA_ANGLES,
+  STYLE_LIGHTING,
+  STYLE_REFERENCE_MAX_PNG_BASE64,
+  STYLE_REFERENCE_SIZES,
+  STYLE_OUTLINES,
+  STYLE_PALETTE_MODES,
+  STYLE_FEEDBACK_CUE_MAX,
+  STYLE_FEEDBACK_MAX_CUES,
+  cloneStyleProfile,
+  defaultStyleProfile,
+  parseStyleProfile,
+  styleProfilePromptTags,
+} from './style-profile';
+export type { StyleCheck, StyleCheckStatus } from './ai/style-validation';
+export { validateStyleCandidate } from './ai/style-validation';
+export { brainPlanSchema, brainPlanStepSchema, brainHexColor, type BrainPlanStep } from './ai/plan-schema';
+export {
+  REFERENCE_TARGET_SIZES,
+  buildReferenceCandidate,
+  buildReferencePrompt,
+  isReferenceTargetSize,
+} from './ai/reference-candidate';
+export type { ReferenceCandidate, ReferenceCandidateInput } from './ai/reference-candidate';
+export { hashBrief, renderMockReferenceCandidate } from './ai/reference-mock';
+
 export type {
   SerializedCelV2,
   SerializedClipV2,
@@ -330,6 +358,9 @@ export {
   CapabilityError,
   capabilitiesFor,
   estimateCostUsd,
+  generationTaskStyleTags,
+  GENERATION_TASK_SKILLS,
+  isGenerationTaskSkill,
   parseOpenAiImagesResponse,
   planOpenAiImagesRequest,
   PRICE_TABLE,
@@ -342,6 +373,7 @@ export {
 } from './ai/gen-contract';
 export type {
   GenRecipe,
+  GenerationTaskSkillId,
   OpenAiImagesPlan,
   PriceEntry,
   ProviderCapabilities,
@@ -382,6 +414,29 @@ export {
   resolveParams,
 } from './motion/presets';
 export { planMotion, roleKey, type PlanMotionOptions } from './motion/composer';
+export {
+  CHARACTER_KIT_VERSION,
+  KIT_ATTACHMENTS,
+  KIT_CANVAS,
+  KIT_DEFAULT_SELECTION,
+  KIT_FOOT_BASELINE_Y,
+  KIT_HEADS,
+  KIT_ITEMS,
+  KIT_LAYERS,
+  KIT_OUTFITS,
+  KIT_PRESETS,
+  KIT_ROLE_HEX,
+  composeKitBuffers,
+  composeKitPreviewRgba,
+  describeKit,
+  kitSelectionFromPreset,
+  kitSelectionLabel,
+  matchKitCharacter,
+  snapToPalette,
+  validateKitSelection,
+} from './character/kit';
+export { insertCharacter, type CharacterInsertOptions, type CharacterInsertResult, type KitLayerSlot } from './character/insert';
+export type { KitBriefMatch, KitBuffers, KitPartDef, KitPreset, KitSelection } from './character/kit';
 export {
   analyzeClipMotion,
   analyzeMotionPlan,

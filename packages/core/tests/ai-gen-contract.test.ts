@@ -14,6 +14,9 @@ import {
   CapabilityError,
   capabilitiesFor,
   estimateCostUsd,
+  generationTaskStyleTags,
+  GENERATION_TASK_SKILLS,
+  isGenerationTaskSkill,
   parseOpenAiImagesResponse,
   planOpenAiImagesRequest,
   PRICE_TABLE,
@@ -87,6 +90,15 @@ describe('gen-contract: prompt engineering', () => {
     expect(requestSizeFor(32, 64)).toBe('768x1344');
     expect(SIZE_PRESETS.length).toBeGreaterThanOrEqual(7);
   });
+
+  test('#P4 task skills have an allowlisted, honest provider intent', () => {
+    expect(GENERATION_TASK_SKILLS.map((skill) => skill.id)).toEqual(['create', 'variation']);
+    expect(isGenerationTaskSkill('variation')).toBe(true);
+    expect(isGenerationTaskSkill('edit-the-canvas')).toBe(false);
+    expect(generationTaskStyleTags('create')).toEqual([]);
+    expect(generationTaskStyleTags('variation').join(' ')).toContain('fresh composition');
+    expect(generationTaskStyleTags(undefined)).toEqual([]);
+  });
 });
 
 describe('gen-contract: request planning (capability-checked)', () => {
@@ -109,6 +121,17 @@ describe('gen-contract: request planning (capability-checked)', () => {
     expect(plan.body['size']).toBe('1024x1024');
     expect(plan.headers['Authorization']).toBe('Bearer sk-test');
     expect(plan.body['n']).toBeUndefined(); // count=1 → no n param
+  });
+
+  test('#R1b "auto" resolves per kind: zai → verified cogview code, openai → gpt-image-1', () => {
+    const zai = planOpenAiImagesRequest({ ...base, kind: 'zai', baseUrl: 'https://api.z.ai/api/paas/v4', model: 'auto' });
+    expect(zai.body['model']).toBe('cogview-4-250304');
+    const blank = planOpenAiImagesRequest({ ...base, kind: 'zai', baseUrl: 'https://api.z.ai/api/paas/v4', model: '' });
+    expect(blank.body['model']).toBe('cogview-4-250304');
+    const openaiAuto = planOpenAiImagesRequest({ ...base, model: 'auto' });
+    expect(openaiAuto.body['model']).toBe('gpt-image-1');
+    const explicit = planOpenAiImagesRequest({ ...base, kind: 'zai', baseUrl: 'https://api.z.ai/api/paas/v4', model: 'cogview-4-250304' });
+    expect(explicit.body['model']).toBe('cogview-4-250304');
   });
 
   test('#R2 n=4 allowed for openai, rejected for zai/custom (fan out instead)', () => {

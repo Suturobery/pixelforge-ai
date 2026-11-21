@@ -85,7 +85,11 @@ function allowedNavigationPrefix(target: RendererTarget): string {
  * applied here — validated against the CURRENT display work areas so a
  * disconnected monitor can never strand the window off-screen.
  */
-export function createMainWindow(logger: Logger, settings?: SettingsStore): BrowserWindow {
+export function createMainWindow(
+  logger: Logger,
+  settings?: SettingsStore,
+  options: { onReadyToShow?: () => void } = {},
+): BrowserWindow {
   const target = resolveRendererTarget();
   const stored = settings?.getInternal().window ?? null;
   const bounds = sanitizeBounds(stored);
@@ -113,12 +117,18 @@ export function createMainWindow(logger: Logger, settings?: SettingsStore): Brow
     },
   });
   mainWindow = win;
-  if (stored?.isMaximized) {
-    win.maximize();
-  }
+  // PixelForge is a studio workspace, not a utility dialog. Always launch
+  // maximized so the canvas, panels and export controls have usable room.
+  // This preserves the normal Windows title bar (unlike kiosk fullscreen),
+  // so users can still move, minimize and restore the window normally.
+  win.maximize();
 
   // --- window management ---
   win.once('ready-to-show', () => {
+    // Startup callers can dismiss a native splash BEFORE this real editor
+    // becomes visible. Keeping the order here avoids two PixelForge windows
+    // appearing together during the handoff.
+    options.onReadyToShow?.();
     win.show();
     logger.info('window.shown');
   });

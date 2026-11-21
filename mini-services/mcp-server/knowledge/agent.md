@@ -23,6 +23,9 @@ How to work fast and never damage the user's work.
 - **Check `get_quota` before long jobs.** Budgets are per tool tier per
   minute (L0 60, L1 120, L2 60, L3 20). Failed calls still consume budget —
   back off on `rate_limited`, do not hammer.
+- **Palettes: 2000+ library presets are one call away** — browse with
+  `get_knowledge {topic:"palette_library", style:"gameboy"}`, apply with
+  `apply_library_palette {id}` (L2, undoable).
 
 ## Safety rules
 
@@ -52,11 +55,60 @@ How to work fast and never damage the user's work.
 1. `get_knowledge {topic:"animation"}` for curves, then
    `suggest_motion_preset` (free, deterministic) for parameters.
 2. Tag body regions with `set_parts` (head/body/armL/armR/legL/legR).
-3. `apply_motion_preset` commits atomically to a NEW clip by default — pass
+3. Drawing pixel art? Read `get_knowledge {topic:"grids"}` (method) and `get_knowledge {topic:"characters"}` (proportion recipes + quality bar) first.
+4. `apply_motion_preset` commits atomically to a NEW clip by default — pass
    `overwrite:true` + `targetClipId` only when replacing frames on purpose.
+4. `preview_animation` returns `invariants` — `emptyFrames` (pose never
+   drawn) and `uniformTiming`. An empty in-between is a bug, not a style:
+   draw it before showing the clip.
 
-## Where the money is
+## Style contract
 
-`generate_sprite` is the only PAID tool (L3 + provider quota). Everything
-else — drawing, animation, palettes, macros, knowledge — is deterministic
-and free. Do not wait on provider quota to do canvas work.
+PixelForge owns the art rules — you plan, it enforces:
+
+1. **Read before drawing.** `get_project_state` includes `styleProfile`
+   (art direction, lighting, outline, palette mode, notes, feedback cues).
+   Treat it as binding: wrong-style sprites fail `validate_style`.
+2. **It is enforced by the tools you already use.** `get_palette` returns
+   the project palette; `set_pixels` and friends validate palette
+   membership, and `validate_style` confirms the result obeys the profile
+   (size, outline, margins). Check the state's `styleProfile` instead of
+   assuming — and never invent colors outside the palette.
+3. **Change it with `set_style_profile` (L1)** when the artist asks for a
+   style change — not silently. Off-profile edits are still possible with
+   pixel tools; keep them inside the palette and outline rules.
+4. **Critique is separate from validation.** `validate_style` (free, L0)
+   runs the deterministic checks — size, crisp alpha, palette membership,
+   transparent background, margins — on any frame. Run it BEFORE presenting
+   work; fix warnings first. Subject readability and pose clarity are
+   judged by the artist — never claim aesthetic
+   certainty.
+
+## No paid tools, no image generation
+
+There are NO paid tools and NO provider-backed image generation. Every
+tool here runs locally and deterministically: drawing, animation, motion
+presets, procedural VFX (`list_vfx` + `generate_vfx`, seeded), palettes,
+macros, knowledge. If a task looks like it needs an AI image model, it
+does not — build it with the pixel and VFX tools instead.
+
+## Task board (second-brain orchestration)
+
+The artist composes work briefs in the Brain Panel (Asset Brief) and they
+land here as tasks (`brain_get_tasks`, free, L0). When you are asked to
+"work the task board":
+
+1. `brain_get_tasks` → read `pending` items. `brain_get_status` and
+   `brain_get_capabilities` (both L0) give service state and your tier's
+   tool catalog; `brain_interpret_prompt` (L0) normalizes rough prompts
+   against the project before you plan.
+2. `brain_claim_task {id}` — exclusive claim.
+3. Execute with the normal workflow (grids → paint → validate_style). For
+   long jobs emit `brain_update_task_progress {id, progress}` — it also
+   refreshes your claim lease.
+4. `brain_complete_task {id, result}` on success (include the validation
+   summary) or `brain_fail_task {id, reason}` when blocked. You may cancel
+   your own claim with `brain_cancel_task {id}`.
+
+Deterministic steps (VFX, palettes) can also be executed by the app
+itself — the board only carries work delegated to agents.

@@ -2,8 +2,7 @@
  * PixelForge AI — MCP server shared types (v3.1 §5).
  *
  * Permission tiers (v3.1 §5.2): L0 read · L1 undoable writes ·
- * L2 destructive/disk · L3 paid AI (generate_sprite, approval-gated).
- * Task 11 registered the L2/L3 set — the paid tool parks on the approval
+ * L2 destructive/disk · (L3 paid tier retired — subscription-only).
  * center until the human approves; tier + rate limits still apply.
  */
 
@@ -78,7 +77,6 @@ export type EditorOutbound =
   | { type: 'hello-ok'; server: EditorServerStatus }
   | { type: 'pong' }
   | { type: 'tool-request'; id: string; tool: string; args: unknown; clientId: string; clientName: string; tier: Tier }
-  | { type: 'approval-request'; id: string; tool: string; args: unknown; clientId: string; clientName: string; requestedAt: string; timeoutSec: number }
   | { type: 'ctrl-result'; id: string; ok: boolean; data?: unknown; error?: { code: string; message: string } }
   | { type: 'status'; server: EditorServerStatus };
 
@@ -88,7 +86,6 @@ export interface EditorInbound {
     | 'hello'
     | 'ping'
     | 'tool-result'
-    | 'approval-response'
     | 'ctrl-request'
     | 'status-update'
     | 'event';
@@ -108,8 +105,6 @@ export interface EditorInbound {
   undoable?: boolean;
   stateHash?: string | null;
   summary?: string | null;
-  // approval-response
-  approve?: boolean;
   // ctrl-request
   ctrl?: CtrlRequest;
   // status-update
@@ -127,7 +122,6 @@ export type CtrlRequest =
   /** Remove a client record only after it has been revoked. */
   | { kind: 'client-remove'; clientId: string }
   | { kind: 'ops-recent'; limit?: number }
-  | { kind: 'approvals-list' }
   | { kind: 'brain-push'; tasks: Array<{ title: string; detail: string; idempotencyKey?: string }>; replacePending?: boolean; planId?: string }
   | { kind: 'brain-tasks' }
   | { kind: 'brain-clear' }

@@ -1,0 +1,141 @@
+{
+  "app": "PixelForge AI",
+  "version": 2,
+  "project": {
+    "name": "untitled",
+    "width": 32,
+    "height": 32,
+    "palette": [
+      "#c93426",
+      "#9e232f",
+      "#631b33",
+      "#40162a",
+      "#1c0e12",
+      "#421c1b",
+      "#7d2e1e",
+      "#bd4b1e",
+      "#eb7e17",
+      "#fab13c",
+      "#b5bd2b",
+      "#6ca823",
+      "#31832f",
+      "#1c4d3f",
+      "#153436",
+      "#0e2229",
+      "#1b6b4e",
+      "#2d9656",
+      "#6cbd2a",
+      "#2a6c6c",
+      "#379e80",
+      "#51d598",
+      "#7ff0d9",
+      "#55c6c6",
+      "#358fb0",
+      "#2c6199",
+      "#1e3a70",
+      "#271c40",
+      "#411a4a",
+      "#751e6d",
+      "#a1207a",
+      "#cf3c8a",
+      "#fc868e",
+      "#e85689",
+      "#c72e68",
+      "#7a204a",
+      "#ffd9ad",
+      "#f7b674",
+      "#eb8657",
+      "#de5b47",
+      "#ab3c3c",
+      "#cc5b35",
+      "#faefe6",
+      "#d1bcb8",
+      "#9e8b92",
+      "#68606b",
+      "#323238",
+      "#101012"
+    ]
+  },
+  "clip": {
+    "id": "cl_mwqftnkt11o2vdn",
+    "name": "walk-3",
+    "fps": 8,
+    "loop": true,
+    "loopMode": "forward",
+    "frameCount": 4,
+    "tags": []
+  },
+  "layout": "horizontal",
+  "frameWidth": 32,
+  "frameHeight": 32,
+  "columns": 4,
+  "rows": 1,
+  "padding": 0,
+  "spacing": 0,
+  "image": "walktest_walk-3_sheet.png",
+  "frames": [
+    {
+      "index": 0,
+      "x": 0,
+      "y": 0,
+      "w": 32,
+      "h": 32,
+      "durationMs": 125
+    },
+    {
+      "index": 1,
+      "x": 32,
+      "y": 0,
+      "w": 32,
+      "h": 32,
+      "durationMs": 125
+    },
+    {
+      "index": 2,
+      "x": 64,
+      "y": 0,
+      "w": 32,
+      "h": 32,
+      "durationMs": 125
+    },
+    {
+      "index": 3,
+      "x": 96,
+      "y": 0,
+      "w": 32,
+      "h": 32,
+      "durationMs": 125
+    }
+  ],
+  "playback": {
+    "mode": "forward",
+    "loop": true,
+    "fps": 8,
+    "sequence": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "frameDurationsMs": [
+      125,
+      125,
+      125,
+      125
+    ],
+    "cycleMs": 500,
+    "interpretation": "sequence lists ONE full playback cycle in engine-visible order; frameDurationsMs runs parallel to sequence (effective ms per step) and cycleMs is their sum. While loop=true the engine repeats sequence from its start; loop=false plays it once and stops on the final entry. Reverse and ping-pong direction is already baked into sequence order — engines that only play forward can play sequence verbatim. frames[i].durationMs is the per-frame display duration for engines that step frames instead of steps."
+  },
+  "godot": {
+    "animation": "walk-3",
+    "fps": 8,
+    "loop": true,
+    "frames": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "sheet": "walktest_walk-3_sheet.png"
+  }
+}

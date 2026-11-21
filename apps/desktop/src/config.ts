@@ -12,7 +12,12 @@ export type RendererTarget =
   | { kind: 'shell'; file: string };
 
 /** Internal port of the embedded Next standalone renderer (Task 4). */
-export const RENDERER_PORT = Number(process.env.PF_RENDERER_PORT ?? 3131);
+export const RENDERER_PORT = (() => {
+  const parsed = Number(process.env.PF_RENDERER_PORT ?? 3131);
+  // a NaN/garbage PF_RENDERER_PORT would flow into PORT=NaN and the child
+  // would never bind — fall back and let the operator see it in the log
+  return Number.isInteger(parsed) && parsed > 0 && parsed < 65536 ? parsed : 3131;
+})();
 
 /**
  * Resolve which renderer the shell loads (v3.1 §12 Task 1 → Task 4):

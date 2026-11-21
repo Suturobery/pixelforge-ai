@@ -128,66 +128,10 @@ interface PfSettingsView {
 
 // ------------------------- AI namespace (Task 9) ----------------------------
 
-interface PfAiJobRequest {
-  prompt: string;
-  providerId: string;
-  width: number;
-  height: number;
-  count?: number;
-  seed?: number;
-  clientId?: string;
-  operation?: 'generate' | 'edit';
-  sourcePngBase64?: string;
-  maskPngBase64?: string;
-}
 
-interface PfAiJobView {
-  jobId: string;
-  clientId: string | null;
-  status: 'queued' | 'generating' | 'done' | 'error' | 'cancelled';
-  prompt: string;
-  providerId: string;
-  providerLabel: string;
-  model: string;
-  requestSize: string;
-  count: number;
-  seed: number | null;
-  queuedAt: string;
-  startedAt: string | null;
-  finishedAt: string | null;
-  durationMs: number | null;
-  costEstimateUsd: number | null;
-  cacheHit: boolean;
-  error: { code: string; message: string } | null;
-  images: Array<{ base64: string }>;
-  queuePosition: number | null;
-}
 
-interface PfAiUsageRecord {
-  jobId: string;
-  providerId: string;
-  providerLabel: string;
-  model: string;
-  promptLength: number;
-  requestSize: string;
-  count: number;
-  status: string;
-  cacheHit: boolean;
-  durationMs: number | null;
-  costEstimateUsd: number | null;
-  finishedAt: string;
-}
 
-interface PfAiConnectionTest {
-  ok: boolean;
-  latencyMs: number;
-  note?: string;
-  error?: string;
-}
 
-type PfAiEvent =
-  | { type: 'job'; job: PfAiJobView }
-  | { type: 'spend_warning'; spentUsd: number; warnUsd: number; limitUsd: number };
 
 interface PixelForgeBridge {
   readonly bridgeVersion: 5;
@@ -241,16 +185,12 @@ interface PixelForgeBridge {
     credentialStatus(): Promise<PfSettingsView['credentials']>;
   };
   /** Task 9: AI job runner lives in MAIN — the renderer never sees key material. */
-  ai: {
-    submit(request: PfAiJobRequest): Promise<{ jobId: string }>;
-    cancel(jobId: string): Promise<boolean>;
-    status(jobId: string): Promise<PfAiJobView | null>;
-    list(): Promise<PfAiJobView[]>;
-    usage(): Promise<{ records: PfAiUsageRecord[]; monthSpendUsd: number }>;
-    testConnection(providerId: string): Promise<PfAiConnectionTest>;
-    brain(payload: unknown): Promise<unknown>;
-    agent(payload: unknown): Promise<unknown>;
-    onEvent(listener: (event: PfAiEvent) => void): () => void;
+  /** Create-from-Reference: provider fetch runs MAIN-side (key never leaves). */
+  referenceGen: {
+    generate(input: {
+      prompt: string;
+      referencePngBase64: string;
+    }): Promise<{ ok: true; pngBase64: string; model: string } | { ok: false; error: string }>;
   };
   /** Packaging milestone: guarded software updates (no-op without a feed). */
   updates: {

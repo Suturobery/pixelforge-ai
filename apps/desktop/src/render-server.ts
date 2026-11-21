@@ -28,6 +28,7 @@ export interface RenderServerOptions {
 
 export class RenderServer {
   private child: ChildProcess | null = null;
+  private childExited = false;
   private readonly port: number;
   private readonly healthTimeoutMs: number;
 
@@ -41,9 +42,14 @@ export class RenderServer {
   }
 
   private async healthy(): Promise<boolean> {
+    // our own child must still be alive — a dead child + any squatter
+    // answering 2xx on this port would otherwise be adopted as "ready"
+    if (this.childExited) return false;
     try {
       const res = await fetch(`${this.url()}/`, { signal: AbortSignal.timeout(1500) });
-      return res.status < 500;
+      // 2xx only: a 4xx/redirect from an unrelated loopback service is not
+      // the Next renderer we spawned
+      return res.status >= 200 && res.status < 300;
     } catch {
       return false;
     }
@@ -95,6 +101,7 @@ export class RenderServer {
         this.options.logger.error('render-server.db.initialize.failed', { err: String(err).slice(0, 200) });
       }
     }
+    this.childExited = false;
     this.child = spawn(process.execPath, [serverJs], {
       env: {
         ...process.env,
@@ -108,7 +115,11 @@ export class RenderServer {
       stdio: 'ignore',
       windowsHide: true,
     });
-    this.child.on('exit', (code) => this.options.logger.warn('render-server.exit', { code }));
+    this.child.on('exit', (code) => {
+      this.options.logger.warn('render-server.exit', { code });
+      // a crash mid-wait must fail fast instead of burning the health timeout
+      this.childExited = true;
+    });
 
     const deadline = Date.now() + this.healthTimeoutMs;
     while (Date.now() < deadline) {
@@ -124,6 +135,7 @@ export class RenderServer {
   }
 
   stop(): void {
+    this.childExited = true;
     this.child?.kill();
     this.child = null;
   }

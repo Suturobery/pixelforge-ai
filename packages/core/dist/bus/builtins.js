@@ -10,13 +10,16 @@
  * All commands are pure: (document in) → (new document out).
  */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.settingsSetOnion = exports.trashPurge = exports.trashRestore = exports.paletteRemoveColor = exports.paletteAddColor = exports.layerSetLinked = exports.layerSetProps = exports.layerMove = exports.layerMergeDown = exports.layerDuplicate = exports.layerDelete = exports.layerAdd = exports.frameSetDuration = exports.frameMove = exports.frameDelete = exports.frameAdd = exports.clipSetProps = exports.clipDelete = exports.clipAdd = exports.projectRename = void 0;
+exports.settingsSetStyleProfile = exports.settingsSetOnion = exports.canvasResize = exports.trashPurge = exports.trashRestore = exports.paletteReplaceAll = exports.paletteRemoveColor = exports.paletteAddColor = exports.layerSetLinked = exports.layerReorder = exports.layerSetProps = exports.layerMove = exports.layerMergeDown = exports.layerDuplicate = exports.layerDelete = exports.layerAdd = exports.frameSetDuration = exports.frameMove = exports.frameDelete = exports.frameAdd = exports.clipSetProps = exports.clipDelete = exports.clipAdd = exports.projectRename = void 0;
+exports.blendChannel = blendChannel;
 exports.builtinCommands = builtinCommands;
 const document_1 = require("../types/document");
+const style_profile_1 = require("../style-profile");
 const access_1 = require("../doc/access");
 const factory_1 = require("../doc/factory");
 const buffers_1 = require("../util/buffers");
 const pixel_commands_1 = require("./pixel-commands");
+const motion_commands_1 = require("./motion-commands");
 const errors_1 = require("./errors");
 const validate_1 = require("./validate");
 // ---------------------------------------------------------------------------
@@ -259,7 +262,7 @@ exports.layerAdd = {
     },
     apply(payload, ctx) {
         const clip = (0, access_1.findClip)(ctx.project, payload.clipId);
-        const layer = (0, factory_1.createLayer)(payload.name?.trim() || `layer ${clip.layers.length + 1}`);
+        const layer = (0, factory_1.createLayer)(payload.name?.trim() || `Layer ${clip.layers.length + 1}`);
         const layers = [...clip.layers, layer]; // top
         const project = (0, access_1.mapClip)(ctx.project, clip.id, (c) => ({
             ...c,
@@ -360,6 +363,25 @@ exports.layerDuplicate = {
         return { project, label: 'Duplicate layer' };
     },
 };
+/** Separable blend of one color channel: top (source) over bottom (backdrop), 0..255. */
+function blendChannel(mode, t, b) {
+    switch (mode) {
+        case 'multiply':
+            return Math.round((t * b) / 255);
+        case 'screen':
+            return Math.round(255 - ((255 - t) * (255 - b)) / 255);
+        case 'overlay':
+            return b < 128
+                ? Math.round((2 * t * b) / 255)
+                : Math.round(255 - (2 * (255 - t) * (255 - b)) / 255);
+        case 'darken':
+            return Math.min(t, b);
+        case 'lighten':
+            return Math.max(t, b);
+        default:
+            return t;
+    }
+}
 /**
  * Alpha compositing of the top cel onto the one below, per frame (ported
  * from the prototype store's mergeDown). The top layer is removed; the
@@ -404,12 +426,13 @@ exports.layerMergeDown = {
                     ? new Uint8ClampedArray(bottom.buffer)
                     : new Uint8ClampedArray(width * height * 4);
                 if (top) {
+                    const mode = c.layers[index]?.blend;
                     for (let i = 0; i < width * height; i++) {
                         const ta = (top.buffer[i * 4 + 3] / 255) * (top.linked ? 1 : (c.layers[index]?.opacity ?? 1));
                         if (ta >= 1) {
-                            merged[i * 4] = top.buffer[i * 4];
-                            merged[i * 4 + 1] = top.buffer[i * 4 + 1];
-                            merged[i * 4 + 2] = top.buffer[i * 4 + 2];
+                            for (let ch = 0; ch < 3; ch++) {
+                                merged[i * 4 + ch] = blendChannel(mode, top.buffer[i * 4 + ch], merged[i * 4 + ch]);
+                            }
                             merged[i * 4 + 3] = top.buffer[i * 4 + 3];
                         }
                         else if (ta > 0) {
@@ -418,7 +441,8 @@ exports.layerMergeDown = {
                             if (outA === 0)
                                 continue;
                             for (let ch = 0; ch < 3; ch++) {
-                                merged[i * 4 + ch] = Math.round((top.buffer[i * 4 + ch] * ta + merged[i * 4 + ch] * ba * (1 - ta)) / outA);
+                                const blended = blendChannel(mode, top.buffer[i * 4 + ch], merged[i * 4 + ch]);
+                                merged[i * 4 + ch] = Math.round((blended * ta + merged[i * 4 + ch] * ba * (1 - ta)) / outA);
                             }
                             merged[i * 4 + 3] = Math.round(outA * 255);
                         }
@@ -489,6 +513,13 @@ exports.layerSetProps = {
         if (opacity !== undefined && (typeof opacity !== 'number' || opacity < 0 || opacity > 1)) {
             (0, errors_1.fail)('layer.setProps: opacity must be 0..1');
         }
+        if (patch.locked !== undefined && typeof patch.locked !== 'boolean') {
+            (0, errors_1.fail)('layer.setProps: locked must be boolean');
+        }
+        if (patch.blend !== undefined &&
+            !['normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten'].includes(patch.blend)) {
+            (0, errors_1.fail)('layer.setProps: unknown blend mode');
+        }
     },
     apply(payload, ctx) {
         const { clipId, layerId, patch } = payload;
@@ -501,11 +532,42 @@ exports.layerSetProps = {
                         ...(patch.name !== undefined ? { name: patch.name } : {}),
                         ...(patch.visible !== undefined ? { visible: patch.visible } : {}),
                         ...(patch.opacity !== undefined ? { opacity: patch.opacity } : {}),
+                        ...(patch.locked !== undefined ? { locked: patch.locked } : {}),
+                        ...(patch.blend !== undefined ? { blend: patch.blend } : {}),
                     }
                     : l),
             })),
             label: 'Layer properties',
         };
+    },
+};
+exports.layerReorder = {
+    type: 'layer.reorder',
+    defaultLabel: 'Reorder layer',
+    validate(payload, ctx) {
+        const p = (0, validate_1.assertObject)(payload, 'layer.reorder');
+        const { clipId, layerId } = parseLayerRef(p);
+        const clip = (0, access_1.findClip)(ctx.project, clipId);
+        if (!clip)
+            (0, errors_1.failNotFound)(`layer.reorder: clip "${clipId}" not found`);
+        if (!(0, access_1.findLayer)(clip, layerId))
+            (0, errors_1.failNotFound)(`layer.reorder: layer "${layerId}" not found`);
+        const to = p.to;
+        if (typeof to !== 'number' || !Number.isInteger(to) || to < 0 || to >= clip.layers.length) {
+            (0, errors_1.fail)('layer.reorder: to must be an in-range layer index');
+        }
+    },
+    apply(payload, ctx) {
+        const clip = (0, access_1.findClip)(ctx.project, payload.clipId);
+        const { index } = (0, access_1.findLayer)(clip, payload.layerId);
+        if (index === payload.to) {
+            return { project: ctx.project, label: 'Reorder layer' };
+        }
+        const layers = [...clip.layers];
+        const [moved] = layers.splice(index, 1);
+        layers.splice(payload.to, 0, moved);
+        // Cel keys are layer ids — reordering the stack needs no cel changes.
+        return { project: (0, access_1.mapClip)(ctx.project, clip.id, (c) => ({ ...c, layers })), label: 'Reorder layer' };
     },
 };
 /**
@@ -608,6 +670,38 @@ exports.paletteRemoveColor = {
         };
     },
 };
+/** Replace the whole document palette in one undoable step (preset apply). */
+exports.paletteReplaceAll = {
+    type: 'palette.replaceAll',
+    defaultLabel: 'Replace palette',
+    validate(payload) {
+        const p = (0, validate_1.assertObject)(payload, 'palette.replaceAll');
+        if (!Array.isArray(p.colors) || p.colors.length === 0) {
+            (0, errors_1.fail)(`palette.replaceAll: "colors" must be a non-empty array of hex colors`);
+        }
+        for (const c of p.colors) {
+            if (typeof c !== 'string' || !validate_1.HEX_RE.test(c)) {
+                (0, errors_1.fail)(`palette.replaceAll: every color must be a hex string like #rrggbb`);
+            }
+        }
+    },
+    apply(payload, ctx) {
+        // normalize + dedupe, keep first occurrence order
+        const seen = new Set();
+        const colors = [];
+        for (const c of payload.colors) {
+            const hex = c.toLowerCase();
+            if (!seen.has(hex)) {
+                seen.add(hex);
+                colors.push(hex);
+            }
+        }
+        return {
+            project: { ...ctx.project, palette: colors },
+            label: 'Replace palette',
+        };
+    },
+};
 // ---------------------------------------------------------------------------
 // trash
 // ---------------------------------------------------------------------------
@@ -681,6 +775,78 @@ exports.trashPurge = {
         return { project: taken.project, label: 'Empty trash entry' };
     },
 };
+exports.canvasResize = {
+    type: 'canvas.resize',
+    defaultLabel: 'Resize canvas',
+    validate(payload, ctx) {
+        const p = (0, validate_1.assertObject)(payload, 'canvas.resize');
+        const width = (0, validate_1.getInt)(p, 'width', 'canvas.resize');
+        const height = (0, validate_1.getInt)(p, 'height', 'canvas.resize');
+        // Core allows 1..512 (tiny sprites are legit); the MCP tool schema keeps
+        // the documented 16..256 surface on top of this.
+        if (width < 1 || width > 512 || height < 1 || height > 512) {
+            (0, errors_1.fail)('canvas.resize: width/height must be 1..512');
+        }
+        const anchor = p.anchor;
+        if (anchor !== undefined && anchor !== 'top-left' && anchor !== 'center') {
+            (0, errors_1.fail)('canvas.resize: anchor must be "top-left" or "center"');
+        }
+        if (width === ctx.project.width && height === ctx.project.height) {
+            (0, errors_1.fail)('canvas.resize: canvas is already that size');
+        }
+    },
+    apply(payload, ctx) {
+        const from = ctx.project;
+        const { width, height } = payload;
+        const anchor = payload.anchor ?? 'top-left';
+        if (width === from.width && height === from.height) {
+            return { project: from, label: 'Resize canvas' };
+        }
+        const offsetX = anchor === 'center' ? Math.floor((width - from.width) / 2) : 0;
+        const offsetY = anchor === 'center' ? Math.floor((height - from.height) / 2) : 0;
+        // Linked cels share one buffer — remap each unique buffer once so linked
+        // layers stay linked after the resize.
+        const seen = new Map();
+        const remap = (buf) => {
+            const hit = seen.get(buf);
+            if (hit)
+                return hit;
+            const out = new Uint8ClampedArray(width * height * 4);
+            const sy0 = Math.max(0, -offsetY);
+            const sy1 = Math.min(from.height, height - offsetY);
+            const sx0 = Math.max(0, -offsetX);
+            const sx1 = Math.min(from.width, width - offsetX);
+            for (let y = sy0; y < sy1; y++) {
+                const srcRow = y * from.width;
+                const dstRow = (y + offsetY) * width;
+                for (let x = sx0; x < sx1; x++) {
+                    const si = (srcRow + x) * 4;
+                    const di = (dstRow + x + offsetX) * 4;
+                    out[di] = buf[si];
+                    out[di + 1] = buf[si + 1];
+                    out[di + 2] = buf[si + 2];
+                    out[di + 3] = buf[si + 3];
+                }
+            }
+            seen.set(buf, out);
+            return out;
+        };
+        const clips = from.clips.map((clip) => ({
+            ...clip,
+            frames: clip.frames.map((frame) => ({
+                ...frame,
+                cels: Object.fromEntries(Object.entries(frame.cels).map(([layerId, cel]) => [
+                    layerId,
+                    { ...cel, buffer: remap(cel.buffer) },
+                ])),
+            })),
+        }));
+        return {
+            project: { ...from, width, height, clips },
+            label: `Resize canvas to ${width}×${height} (${anchor})`,
+        };
+    },
+};
 // ---------------------------------------------------------------------------
 // document settings (Task 6: onion-skin range is document data — persisted
 // in project.json, undoable like every other structural change)
@@ -709,6 +875,29 @@ exports.settingsSetOnion = {
         };
     },
 };
+/** Persist the shared AI/style contract as an undoable document setting. */
+exports.settingsSetStyleProfile = {
+    type: 'settings.setStyleProfile',
+    defaultLabel: 'Update style profile',
+    validate(payload) {
+        const p = (0, validate_1.assertObject)(payload, 'settings.setStyleProfile');
+        if (!(0, style_profile_1.parseStyleProfile)(p.profile)) {
+            (0, errors_1.fail)('settings.setStyleProfile: "profile" must be a valid bounded style profile');
+        }
+    },
+    apply(payload, ctx) {
+        const profile = (0, style_profile_1.parseStyleProfile)(payload.profile);
+        if (!profile)
+            (0, errors_1.fail)('settings.setStyleProfile: invalid profile');
+        return {
+            project: {
+                ...ctx.project,
+                settings: { ...ctx.project.settings, styleProfile: profile },
+            },
+            label: 'Update style profile',
+        };
+    },
+};
 // ---------------------------------------------------------------------------
 // registry
 // ---------------------------------------------------------------------------
@@ -727,14 +916,21 @@ function builtinCommands() {
         exports.layerDuplicate,
         exports.layerMergeDown,
         exports.layerMove,
+        exports.layerReorder,
         exports.layerSetProps,
         exports.layerSetLinked,
         exports.paletteAddColor,
         exports.paletteRemoveColor,
+        exports.paletteReplaceAll,
         exports.settingsSetOnion,
+        exports.settingsSetStyleProfile,
         exports.trashRestore,
         exports.trashPurge,
+        exports.canvasResize,
         // Pixel-editing path (same tile-diff history as strokes):
         pixel_commands_1.applyPixelOpsCommand,
+        // Motion presets (Task 10, v3.1 §4.1): part tagging + deterministic composer
+        motion_commands_1.partSet,
+        motion_commands_1.motionApply,
     ];
 }

@@ -16,6 +16,7 @@ exports.createProject = createProject;
 exports.cloneProject = cloneProject;
 const id_1 = require("../id");
 const document_1 = require("../types/document");
+const style_profile_1 = require("../style-profile");
 /** Default palette — the prototype's Forge-16 set (store.ts initialProject). */
 exports.DEFAULT_PALETTE = [
     '#1a1c2c', '#5d275d', '#b13e53', '#ef7d57', '#ffcd75', '#a7f070',
@@ -98,6 +99,7 @@ function createProject(opts = {}) {
         palette: [...(opts.palette ?? exports.DEFAULT_PALETTE)],
         settings: {
             paletteEnforce: true,
+            styleProfile: (0, style_profile_1.defaultStyleProfile)(),
             onion: { prev: 1, next: 0 },
         },
         clips: [
@@ -127,7 +129,11 @@ function cloneProject(p) {
     return {
         ...p,
         palette: [...p.palette],
-        settings: { paletteEnforce: p.settings.paletteEnforce, onion: { ...p.settings.onion } },
+        settings: {
+            paletteEnforce: p.settings.paletteEnforce,
+            ...(p.settings.styleProfile ? { styleProfile: (0, style_profile_1.cloneStyleProfile)(p.settings.styleProfile) } : {}),
+            onion: { ...p.settings.onion },
+        },
         trash: p.trash.map((t) => ({ ...t })),
         clips: p.clips.map((c) => ({
             ...c,

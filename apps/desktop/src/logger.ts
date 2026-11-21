@@ -14,6 +14,8 @@ export interface Logger {
 }
 
 const KEEP_DAYS = 7;
+const MAX_LOG_FILE_BYTES = 2 * 1024 * 1024;
+const RETAIN_LOG_FILE_BYTES = 1024 * 1024;
 
 /**
  * Minimal crash-safe, rotating, local-only file logger (v3.1 §8.4).
@@ -34,6 +36,7 @@ export function createLogger(): Logger {
     const line = `[${new Date().toISOString()}] [${level.toUpperCase()}] ${tag}${data === undefined ? '' : ` ${safeJson(data)}`}\n`;
     try {
       fs.appendFileSync(file, line);
+      trimCurrentLog(file);
     } catch {
       // Never throw from the logger.
     }
@@ -48,6 +51,20 @@ export function createLogger(): Logger {
     warn: (tag, data) => write('warn', tag, data),
     error: (tag, data) => write('error', tag, data),
   };
+}
+
+/** Bound a noisy single-day log while retaining its latest useful tail. */
+function trimCurrentLog(file: string): void {
+  try {
+    const size = fs.statSync(file).size;
+    if (size <= MAX_LOG_FILE_BYTES) return;
+    const start = Math.max(0, size - RETAIN_LOG_FILE_BYTES);
+    const tail = fs.readFileSync(file).subarray(start);
+    const firstNewline = tail.indexOf(0x0a);
+    fs.writeFileSync(file, firstNewline >= 0 ? tail.subarray(firstNewline + 1) : tail);
+  } catch {
+    // Logging remains best-effort.
+  }
 }
 
 /** Console-only fallback used when the log dir cannot be created. */

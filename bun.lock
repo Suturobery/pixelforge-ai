@@ -1563,7 +1563,7 @@
 
     "picomatch": ["picomatch@4.0.3", "https://registry.npmjs.com/picomatch/-/picomatch-4.0.3.tgz", {}, "sha512-5gTmgEY/sqK6gFXLIsQNH19lWb4ebPDLA4SdLP7dsWkIXHWlG66oPuVvXSGFPppYZz8ZDZq0dYYrbHfBCVUb1Q=="],
 
-    "pixelfx": ["pixelfx@github:patch-gg/pixelfx#5294518", {}, "patch-gg-pixelfx-5294518", "sha512-22I/9XT3F5mK2tloPW+G4kweXIIHfY3TWQr9HZo3Sv5WDsJnlLcg4fNt2OUYrr/ZhjirIIkj1iFJG7hiyWRQoA=="],
+    "pixelfx": ["pixelfx@github:patch-gg/pixelfx#a841596", {}, "patch-gg-pixelfx-a841596", "sha512-/aTQh1n2fdDkoynWSYFW71V0TkQafcIJNDDrmFyMUkHt9E9D2PMRXietDrbrNfrRlDl2cL8YIOKRGj0B6HjHnQ=="],
 
     "pkg-types": ["pkg-types@2.3.0", "https://registry.npmjs.com/pkg-types/-/pkg-types-2.3.0.tgz", { "dependencies": { "confbox": "^0.2.2", "exsolve": "^1.0.7", "pathe": "^2.0.3" } }, "sha512-SIqCzDRg0s9npO5XQ3tNZioRY1uK06lA41ynBC1YmFTmnY6FjUjVt6s4LoADmwoig1qqD0oK8h1p/8mlMx8Oig=="],
 

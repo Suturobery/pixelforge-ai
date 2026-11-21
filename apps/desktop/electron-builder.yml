@@ -24,6 +24,9 @@ extraResources:
       - mcp-server
   - from: ../../mini-services/mcp-server/knowledge
     to: mcp/knowledge
+    filter:
+      - "**"
+      - "!learned/**"
   - from: resources/renderer
     to: renderer
   - from: resources/prisma

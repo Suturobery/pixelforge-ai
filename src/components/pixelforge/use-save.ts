@@ -8,10 +8,8 @@
 
 'use client'
 
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { useEditor } from '@/lib/pixelforge/store'
-import { useAppSettings } from '@/lib/pixelforge/settings'
-import { useEffect } from 'react'
 import { exportLegacyProjectJson } from '@/lib/pixelforge/project-io'
 import { saveProjectFile } from '@/lib/pixelforge/project-files'
 import { isDesktop } from '@/lib/pixelforge/desktop-bridge'
@@ -20,26 +18,25 @@ import { AGENT_FETCH_HEADERS } from '@/lib/pixelforge/agent-headers'
 import { describeApiErrorInline } from '@/lib/pixelforge/api-error'
 import { rememberLastProject } from '@/lib/pixelforge/last-session'
 import { pushBackupSnapshot } from '@/lib/pixelforge/backup-snapshots'
-import { autosaveProjectFile } from '@/lib/pixelforge/project-files'
+
+/** Module-wide save lock shared across Header, Home, and keyboard shortcuts
+ *  so manual save and autosave never overlap or create duplicate entries. */
+let saveInFlight = false
 
 export function useSaveProject() {
   const [saving, setSaving] = useState(false)
-  const savingRef = useRef(false)
   const { toast } = useToast()
 
   const save = useCallback(
     async (silent = false) => {
-      if (savingRef.current) return
-      savingRef.current = true
+      if (saveInFlight) return
+      saveInFlight = true
       setSaving(true)
       try {
         // Desktop: saving to the open file (Save As dialog when no file yet).
         if (isDesktop()) {
-          const st0 = useEditor.getState()
           const ok = await saveProjectFile()
           if (ok) {
-            // snapshot ring: one entry per successful save (rolling 5)
-            if (st0.projectId) pushBackupSnapshot(st0.projectId, st0.project, exportLegacyProjectJson(st0.project))
             if (!silent) {
               const p = useEditor.getState().filePath
               toast({ title: 'Project saved', description: p ?? '' })
@@ -79,31 +76,12 @@ export function useSaveProject() {
           })
         }
       } finally {
-        savingRef.current = false
+        saveInFlight = false
         setSaving(false)
       }
     },
     [toast]
   )
-
-  // Autosave (setting-gated): debounced silent save while dirty.
-  // Web: SQLite adapter. Desktop: the .autosave sidecar file (the main file
-  // saves explicitly, preserving Save-As naming choices).
-  const editorDirty = useEditor((s) => s.dirty)
-  const autosaveOn = useEditor((s) => s.autosave)
-  const autosaveDelay = useAppSettings((s) => s.autosaveDelay)
-  useEffect(() => {
-    if (!autosaveOn || !editorDirty || savingRef.current) return
-    const t = setTimeout(() => {
-      if (savingRef.current) return
-      if (isDesktop()) {
-        void autosaveProjectFile()
-      } else {
-        void save(true)
-      }
-    }, Math.max(500, autosaveDelay))
-    return () => clearTimeout(t)
-  }, [editorDirty, autosaveOn, autosaveDelay, save])
 
   return { save, saving }
 }

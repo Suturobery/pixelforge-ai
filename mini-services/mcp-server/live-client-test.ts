@@ -66,7 +66,7 @@ async function main() {
   const capsData = caps.data as { tier: string; tools: Array<{ name: string }>; counts: { granted: number; total: number } };
   record(
     'brain_get_capabilities',
-    caps.ok && capsData?.tier === 'L1' && capsData.tools.some((t) => t.name === 'brain_ask'),
+    caps.ok && capsData?.tier === 'L1' && capsData.tools.some((t) => t.name === 'brain_interpret_prompt'),
     caps.ok ? `granted ${capsData.counts.granted}/${capsData.counts.total}` : JSON.stringify(caps.error),
   );
 
@@ -79,24 +79,7 @@ async function main() {
     interp.ok ? `intent=${interpData.interpreted!.detectedIntent} corrections=${interpData.interpreted!.corrections!.length}` : JSON.stringify(interp.error),
   );
 
-  // 7. brain_ask — LIVE Groq round-trip through the app's vault
-  const ask = envelope(await client.callTool({ name: 'brain_ask', arguments: { question: 'what should I build next?' } }));
-  record(
-    'brain_ask',
-    ask.ok && typeof (ask.data as any)?.answer === 'string' && (ask.data as any).answer.length > 0,
-    ask.ok ? `answer: "${String((ask.data as any).answer).slice(0, 90)}…"` : JSON.stringify(ask.error),
-  );
-
-  // 8. brain_plan_goal — plan-only
-  const plan = envelope(await client.callTool({ name: 'brain_plan_goal', arguments: { goal: 'add a warm campfire and set a dark cozy palette' } }));
-  const planData = plan.data as { plan?: unknown[]; note?: string };
-  record(
-    'brain_plan_goal',
-    plan.ok && Array.isArray(planData?.plan) && /NOTHING was executed/.test(planData.note ?? ''),
-    plan.ok ? `${planData.plan!.length} step(s), plan-only disclaimer present` : JSON.stringify(plan.error),
-  );
-
-  // 9. task loop (board must have a pending task pushed from the editor side)
+  // 7. task loop (board must have a pending task pushed from the editor side)
   const tasks = envelope(await client.callTool({ name: 'brain_get_tasks', arguments: {} }));
   const pending = ((tasks.data as any)?.pending ?? []) as Array<{ id: string; title: string }>;
   if (pending.length === 0) {

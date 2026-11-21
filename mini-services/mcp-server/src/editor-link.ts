@@ -46,7 +46,6 @@ export class EditorLink {
   private candidate: { socket: EditorSocket; timer: ReturnType<typeof setTimeout> } | null = null;
   private pending = new Map<string, PendingCall>();
   private eventListeners = new Set<(evt: EditorEvent) => void>();
-  private approvalListeners = new Set<(msg: { id: string; approve: boolean }) => void>();
   private helloListeners = new Set<() => void>();
   /** last sign of life from the attached editor (hello or ping) */
   private lastAliveAt = 0;
@@ -70,12 +69,6 @@ export class EditorLink {
   onEvent(fn: (evt: EditorEvent) => void): () => void {
     this.eventListeners.add(fn);
     return () => this.eventListeners.delete(fn);
-  }
-
-  /** Human approval decisions from the editor UI (approval center). */
-  onApprovalResponse(fn: (msg: { id: string; approve: boolean }) => void): () => void {
-    this.approvalListeners.add(fn);
-    return () => this.approvalListeners.delete(fn);
   }
 
   /** Fired after a (re)connect hello — pending approvals are re-shared. */
@@ -255,12 +248,6 @@ export class EditorLink {
       case 'ping': {
         this.lastAliveAt = Date.now();
         this.send({ type: 'pong' });
-        break;
-      }
-      case 'approval-response': {
-        if (typeof msg.id !== 'string' || !msg.id) return;
-        const approve = msg.approve === true;
-        for (const fn of this.approvalListeners) fn({ id: msg.id, approve });
         break;
       }
       case 'tool-result': {

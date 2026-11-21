@@ -22,6 +22,7 @@ exports.projectFromSerialized = projectFromSerialized;
 const png_1 = require("./png");
 const errors_1 = require("./errors");
 const paths_1 = require("./paths");
+const style_profile_1 = require("../style-profile");
 // ---------------------------------------------------------------------------
 // runtime → serialized
 // ---------------------------------------------------------------------------
@@ -115,6 +116,7 @@ async function serializeProjectV2(project) {
             clips,
             settings: {
                 paletteEnforce: project.settings.paletteEnforce,
+                ...(project.settings.styleProfile ? { styleProfile: (0, style_profile_1.cloneStyleProfile)(project.settings.styleProfile) } : {}),
                 onion: { prev: project.settings.onion.prev, next: project.settings.onion.next },
             },
         },
@@ -254,6 +256,7 @@ async function projectFromSerialized(doc, celBytes, opts = {}) {
     for (let ti = 0; ti < doc.trash.length; ti++) {
         trash.push(await trashEntryFromSerialized(doc.trash[ti], ti, celBytes, decodeCache, doc));
     }
+    const styleProfile = (0, style_profile_1.parseStyleProfile)(doc.settings.styleProfile);
     return {
         id: opts.id ?? null,
         schemaVersion: 2,
@@ -263,6 +266,7 @@ async function projectFromSerialized(doc, celBytes, opts = {}) {
         palette: [...doc.palette],
         settings: {
             paletteEnforce: doc.settings.paletteEnforce,
+            ...(styleProfile ? { styleProfile } : {}),
             onion: { prev: doc.settings.onion.prev, next: doc.settings.onion.next },
         },
         clips,

@@ -13,5 +13,6 @@ export declare function getBool(o: Record<string, unknown>, key: string, what: s
 export declare function getOptionalBool(o: Record<string, unknown>, key: string, what: string): boolean | undefined;
 export declare function getLoopMode(o: Record<string, unknown>, key: string, what: string): LoopMode;
 export declare function getOptionalLoopMode(o: Record<string, unknown>, key: string, what: string): LoopMode | undefined;
+export declare const HEX_RE: RegExp;
 export declare function getHexColor(o: Record<string, unknown>, key: string, what: string): string;
 export declare function getRgba(o: Record<string, unknown>, key: string, what: string): RGBA;

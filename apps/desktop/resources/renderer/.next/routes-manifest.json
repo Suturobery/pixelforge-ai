@@ -57,30 +57,6 @@
       "namedRegex": "^/api(?:/)?$"
     },
     {
-      "page": "/api/ai/agent",
-      "regex": "^/api/ai/agent(?:/)?$",
-      "routeKeys": {},
-      "namedRegex": "^/api/ai/agent(?:/)?$"
-    },
-    {
-      "page": "/api/ai/brain",
-      "regex": "^/api/ai/brain(?:/)?$",
-      "routeKeys": {},
-      "namedRegex": "^/api/ai/brain(?:/)?$"
-    },
-    {
-      "page": "/api/ai/sprite",
-      "regex": "^/api/ai/sprite(?:/)?$",
-      "routeKeys": {},
-      "namedRegex": "^/api/ai/sprite(?:/)?$"
-    },
-    {
-      "page": "/api/ai/test",
-      "regex": "^/api/ai/test(?:/)?$",
-      "routeKeys": {},
-      "namedRegex": "^/api/ai/test(?:/)?$"
-    },
-    {
       "page": "/api/generate",
       "regex": "^/api/generate(?:/)?$",
       "routeKeys": {},

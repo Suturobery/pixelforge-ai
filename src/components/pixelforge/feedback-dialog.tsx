@@ -11,7 +11,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useEditor, getActiveClip } from '@/lib/pixelforge/store'
-import { isDesktop, desktopLogsTail } from '@/lib/pixelforge/desktop-bridge'
+import { copyText, isDesktop, desktopLogsTail } from '@/lib/pixelforge/desktop-bridge'
 import { useToast } from '@/hooks/use-toast'
 import { Button } from '@/components/ui/button'
 import { Bug, Check, Copy, HelpCircle, Lightbulb, MessageCircle, Send, X } from 'lucide-react'
@@ -77,11 +77,17 @@ export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () =
 
   if (!open || typeof document === 'undefined') return null
 
-  const mailto = `mailto:${FEEDBACK_EMAIL}?subject=${encodeURIComponent(`PixelForge AI — ${typeLabel}`)}&body=${encodeURIComponent(report)}`
+  // Email clients commonly reject very long URLs. Keep the copyable report
+  // complete, but bound the mail body so Send via email always opens the OS
+  // mail app even when the optional log tail is large.
+  const emailReport = report.length > 12_000
+    ? `${report.slice(0, 12_000)}\n\n--- report truncated for email; use Copy report for the full diagnostics ---`
+    : report
+  const mailto = `mailto:${FEEDBACK_EMAIL}?subject=${encodeURIComponent(`PixelForge AI — ${typeLabel}`)}&body=${encodeURIComponent(emailReport)}`
 
   const copyReport = async () => {
     try {
-      await navigator.clipboard.writeText(report)
+      await copyText(report)
       setCopied(true)
       setTimeout(() => setCopied(false), 1600)
       toast({ title: 'Report copied', description: `Paste it into an email to ${FEEDBACK_EMAIL}.` })
@@ -149,6 +155,7 @@ export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () =
           rows={4}
           value={message}
           onChange={(e) => setMessage(e.target.value)}
+          maxLength={4_000}
           placeholder="What happened? What did you expect?"
           className="mt-1 w-full resize-none rounded border border-zinc-800 bg-zinc-900 px-2 py-1.5 font-mono text-xs text-zinc-200 placeholder:text-zinc-600 focus:border-teal-500/50 focus:outline-none"
         />
@@ -187,7 +194,7 @@ export function FeedbackDialog({ open, onClose }: { open: boolean; onClose: () =
 
         <div className="mt-3 flex gap-1.5">
           <Button asChild size="sm" className="h-7 flex-1 bg-teal-600 text-white hover:bg-teal-500">
-            <a href={mailto} aria-label={`Send ${typeLabel} via email`}>
+            <a href={mailto} target="_blank" rel="noreferrer" aria-label={`Send ${typeLabel} via email`}>
               <Send className="h-3.5 w-3.5" /> Send via email
             </a>
           </Button>

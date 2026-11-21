@@ -190,6 +190,27 @@
  * PixelForge AI studio utilities
  * ------------------------------------------------------------------------- */
 
+/* Compact inspector labels are intentionally dense, but their previous
+   regular weight became hard to read on dark displays. Scope this to the
+   studio so dialogs outside PixelForge retain their component defaults.
+   Attribute selectors cover Tailwind's arbitrary 8–11px utilities without
+   duplicating the same font class across hundreds of controls. */
+.pixelforge-studio :is(
+  [class*='text-[8px]'],
+  [class*='text-[9px]'],
+  [class*='text-[10px]'],
+  [class*='text-[11px]']
+) {
+  font-weight: 600;
+}
+
+/* Large is a deliberate, one-step accessibility scale for inspector text.
+   It leaves canvas pixels, toolbar geometry, and normal body copy untouched. */
+.pixelforge-studio.pixelforge-text-large [class*='text-[8px]'] { font-size: 9px; }
+.pixelforge-studio.pixelforge-text-large [class*='text-[9px]'] { font-size: 10px; }
+.pixelforge-studio.pixelforge-text-large [class*='text-[10px]'] { font-size: 11px; }
+.pixelforge-studio.pixelforge-text-large [class*='text-[11px]'] { font-size: 12px; }
+
 /* Transparent-pixel checkerboard behind the canvas, thumbnails and previews
    (dark slate tones so RGBA artwork reads correctly on the dark shell). */
 .pixelforge-checker {

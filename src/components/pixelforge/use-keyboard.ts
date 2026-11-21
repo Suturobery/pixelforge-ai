@@ -136,6 +136,10 @@ export function useKeyboardShortcuts(onSave: () => void) {
         st.swapColors()
         return
       }
+      if (e.shiftKey && k === 'y') {
+        st.setMirrorY(!st.mirrorY)
+        return
+      }
       if (k === 'y') {
         st.setMirrorX(!st.mirrorX)
         return

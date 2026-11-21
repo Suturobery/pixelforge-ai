@@ -17,81 +17,25 @@ import {
   autosavePathFor,
   inspectRecovery,
   loadPixelforgeproj,
-  saveAutosave,
   savePixelforgeproj,
-  recordsToLines,
-  type JournalRecord,
   type Project,
 } from '@pixelforge/core'
 import { describePersistError } from './project-io'
-import { getBus, getRecorder, setJournalFlushHook, useEditor } from './store'
+import { getBus, setJournalFlushHook, useEditor } from './store'
 import { isDesktop, makeBridgeFs, getBridge, PROJECT_FILE_FILTERS } from './desktop-bridge'
 import { rememberRecentProjectFile } from './recent-files'
 import { toast } from '@/hooks/use-toast'
 import { confirmDialog } from '@/components/ui/confirm-dialog'
 
 // ---------------------------------------------------------------------------
-// journal sidecar flush (throttled full-ring rewrite)
+// single-file save discipline (no external .journal / .autosave sidecar spam)
 // ---------------------------------------------------------------------------
 
-const FLUSH_INTERVAL_MS = 5000
+let desktopSaveInFlight = false
 
-let flushTimer: ReturnType<typeof setTimeout> | null = null
-let flushInProgress = false
-let flushDirty = false
-
-function sidecarPathFor(filePath: string): string {
-  return `${filePath}.journal`
-}
-
-async function writeSidecar(filePath: string, records: JournalRecord[]): Promise<void> {
-  const bridge = getBridge()
-  if (!bridge) return
-  const lines = recordsToLines(records)
-  const body = lines.length > 0 ? lines.join('\n') + '\n' : ''
-  await bridge.project.fs.writeFile(sidecarPathFor(filePath), new TextEncoder().encode(body))
-}
-
-function scheduleFlush(): void {
-  if (!flushTimer) {
-    flushTimer = setTimeout(() => {
-      flushTimer = null
-      void runFlush()
-    }, FLUSH_INTERVAL_MS)
-  }
-}
-
-async function runFlush(): Promise<void> {
-  const filePath = useEditor.getState().filePath
-  if (!filePath || flushInProgress) {
-    if (flushDirty) scheduleFlush()
-    return
-  }
-  flushInProgress = true
-  try {
-    await writeSidecar(filePath, getRecorder().all() as JournalRecord[])
-    flushDirty = false
-  } catch {
-    // best-effort: retry on the next command
-    flushDirty = true
-  } finally {
-    flushInProgress = false
-    if (flushDirty) scheduleFlush()
-  }
-}
-
-/** Install/clear the throttled sidecar flush (call on path changes). */
-function setFileTarget(filePath: string | null): void {
-  if (filePath) {
-    setJournalFlushHook(() => scheduleFlush())
-    scheduleFlush()
-  } else {
-    setJournalFlushHook(null)
-    if (flushTimer) {
-      clearTimeout(flushTimer)
-      flushTimer = null
-    }
-  }
+/** Clear any legacy sidecar flush hook so saving never spawns extra files. */
+function setFileTarget(_filePath: string | null): void {
+  setJournalFlushHook(null)
 }
 
 // ---------------------------------------------------------------------------
@@ -222,34 +166,20 @@ export async function openRecentProjectFromPath(path: string): Promise<boolean> 
 // save / save-as / autosave
 // ---------------------------------------------------------------------------
 
-/** Filesystem-safe project filename from the project name. */
-function projectFileName(name: string): string {
-  const safe = name
-    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 80)
-  return `${safe || 'untitled'}.pixelforgeproj`
+/** Derive the clean file stem from a chosen `.pixelforgeproj` path. */
+function fileStemFromPath(filePath: string): string {
+  const base = filePath.split(/[\\/]/).pop() ?? ''
+  return base.replace(/\.pixelforgeproj$/i, '').trim()
 }
 
-/** Save to the current file path (falls back to Save As when none).
- *  The FILE NAME follows the project name: renaming a project re-targets
- *  the save to `<project name>.pixelforgeproj` and removes the stale file,
- *  so file listings always match what the tester sees. */
+/** Save to the current file path in place (falls back to Save As when none).
+ *  Always updates the existing `filePath` rather than creating duplicate
+ *  renamed files when the in-memory project title differs. */
 export async function saveProjectFile(): Promise<boolean> {
   if (!isDesktop()) return false
   const st = useEditor.getState()
   const path = st.filePath
   if (!path) return await saveProjectFileAs()
-
-  const currentName = path.split(/[\\/]/).pop() ?? ''
-  const desired = projectFileName(st.project.name || 'untitled')
-  if (currentName !== desired) {
-    const dir = path.slice(0, path.length - currentName.length)
-    const renamed = dir + desired
-    const ok = await saveProjectToPath(renamed, path)
-    return ok
-  }
   return await saveProjectToPath(path)
 }
 
@@ -264,25 +194,50 @@ export async function saveProjectFileAs(): Promise<boolean> {
     defaultPath: suggested,
   })
   if (picked.canceled || !picked.path) return false
+  const stem = fileStemFromPath(picked.path)
+  if (stem && (!st.project.name || st.project.name === 'untitled')) {
+    st.setName(stem)
+  }
   return await saveProjectToPath(picked.path)
 }
 
-/** Core atomic save to a known path (dialog flows + dev harness).
- *  previousPath: when the save RETARGETS (project renamed), the stale file
- *  is removed after a successful write so no duplicate/stale copies linger. */
-export async function saveProjectToPath(path: string, previousPath?: string): Promise<boolean> {
+/** Core atomic save to a known path (dialog flows + autosave + dev harness).
+ *  Writes strictly to `path` in-place (via atomic `.tmp` rename) without
+ *  creating extra backup folders, `.journal` sidecars, or `.autosave` copies. */
+export async function saveProjectToPath(
+  path: string,
+  previousPath?: string,
+  opts?: { silent?: boolean },
+): Promise<boolean> {
   const bridge = getBridge()
   if (!bridge) return false
+  if (desktopSaveInFlight) return false
+  desktopSaveInFlight = true
   const st = useEditor.getState()
   st.setSavingFile(true)
   try {
     const fs = makeBridgeFs()
-    await savePixelforgeproj(fs, path, getBus().getProject(), { recorder: getRecorder() })
+    await savePixelforgeproj(fs, path, getBus().getProject(), {
+      noBackup: true,
+      keepBackups: 0,
+      journalRecords: [],
+    })
     await bridge.project.rememberCurrentPath(path)
     useEditor.getState().setFilePath(path)
     useEditor.getState().markSaved()
     setFileTarget(path)
-    rememberRecentProjectFile(path, st.project.name)
+    rememberRecentProjectFile(path, useEditor.getState().project.name)
+
+    // Clean up any legacy autosave sidecar if one existed from an older build
+    const legacyAutosave = autosavePathFor(path)
+    try {
+      if (await fs.exists(legacyAutosave)) {
+        await fs.unlink(legacyAutosave)
+      }
+    } catch {
+      /* ignore best-effort cleanup */
+    }
+
     if (previousPath && previousPath !== path) {
       try {
         await fs.unlink(previousPath)
@@ -292,29 +247,30 @@ export async function saveProjectToPath(path: string, previousPath?: string): Pr
     }
     return true
   } catch (err) {
-    toast({
-      title: 'Save failed',
-      description: describePersistError(err),
-      variant: 'destructive',
-    })
+    if (!opts?.silent) {
+      toast({
+        title: 'Save failed',
+        description: describePersistError(err),
+        variant: 'destructive',
+      })
+    } else {
+      console.warn('[pixelforge] autosave failed:', describePersistError(err))
+    }
     return false
   } finally {
+    desktopSaveInFlight = false
     useEditor.getState().setSavingFile(false)
   }
 }
 
-/** Debounced desktop autosave → <file>.autosave.pixelforgeproj (core atomic path). */
+/** Debounced desktop autosave — updates the existing `.pixelforgeproj` file
+ *  in-place instead of creating a duplicate `.autosave.pixelforgeproj` file. */
 export async function autosaveProjectFile(): Promise<void> {
   if (!isDesktop()) return
-  const path = useEditor.getState().filePath
-  if (!path || !useEditor.getState().dirty) return
-  try {
-    const fs = makeBridgeFs()
-    await saveAutosave(fs, path, getBus().getProject())
-  } catch (err) {
-    // autosave must never toast-spam; failures surface on the next manual save
-    console.warn('[pixelforge] autosave failed:', describePersistError(err))
-  }
+  const st = useEditor.getState()
+  const path = st.filePath
+  if (!path || !st.dirty || st.savingFile || desktopSaveInFlight) return
+  await saveProjectToPath(path, undefined, { silent: true })
 }
 
 /** Recovery inspection for the current file (diagnostics / dev harness). */

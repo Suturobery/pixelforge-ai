@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'" />
+    <title>Starting PixelForge AI</title>
+    <style>
+      /* Studio-matched loading screen: zinc-950 + the Glow Grid brand mark
+         (same logo as the desktop icon / header) + the studio mono font. */
+      :root { color-scheme: dark; font-family: ui-monospace, 'Geist Mono', ui-monospace, monospace; background: #09090b; }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #09090b; color: #f4f4f5; }
+      main { width: min(100%, 440px); padding: 32px 36px; text-align: center; }
+      .logo { width: 56px; height: 56px; margin: 0 auto 18px; display: block; filter: drop-shadow(0 0 18px #5eead433); }
+      h1 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: -.02em; }
+      p { margin: 8px 0 0; color: #a1a1aa; font-size: 13px; }
+      .spin { width: 16px; height: 16px; margin: 14px auto 0; border: 2px solid #3f3f46; border-top-color: #5eead4; border-radius: 999px; animation: rot 1s linear infinite; }
+      @keyframes rot { to { transform: rotate(360deg); } }
+    </style>
+  </head>
+  <body>
+    <main aria-label="PixelForge AI is starting">
+      <svg class="logo" viewBox="0 0 256 256" aria-hidden="true">
+        <defs>
+          <linearGradient id="glow" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#5eead4"/>
+            <stop offset="1" stop-color="#0d9488"/>
+          </linearGradient>
+        </defs>
+        <rect width="256" height="256" rx="56" fill="#09090b"/>
+        <rect x="50" y="50" width="70" height="70" rx="16" fill="none" stroke="#3f3f46" stroke-width="11"/>
+        <rect x="50" y="136" width="70" height="70" rx="16" fill="none" stroke="#52525b" stroke-width="11"/>
+        <rect x="136" y="50" width="70" height="70" rx="16" fill="#5eead4"/>
+        <rect x="136" y="136" width="70" height="70" rx="16" fill="url(#glow)"/>
+      </svg>
+      <h1>PixelForge AI</h1>
+      <p>Preparing your pixel studio…</p>
+      <div class="spin" aria-hidden="true"></div>
+    </main>
+  </body>
+</html>

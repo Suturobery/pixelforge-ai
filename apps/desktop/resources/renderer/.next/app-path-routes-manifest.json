@@ -1,10 +1,6 @@
 {
   "/_global-error/page": "/_global-error",
   "/_not-found/page": "/_not-found",
-  "/api/ai/agent/route": "/api/ai/agent",
-  "/api/ai/brain/route": "/api/ai/brain",
-  "/api/ai/sprite/route": "/api/ai/sprite",
-  "/api/ai/test/route": "/api/ai/test",
   "/api/generate/route": "/api/generate",
   "/api/mcp/editor-key/route": "/api/mcp/editor-key",
   "/api/mcp/ops/route": "/api/mcp/ops",

@@ -64,18 +64,8 @@ const bridge: PixelForgeBridge = {
     removeKey: (providerId) => ipcRenderer.invoke('pf:settings-remove-key', providerId),
     credentialStatus: () => ipcRenderer.invoke('pf:settings-credential-status'),
   },
-  ai: {
-    submit: (request) => ipcRenderer.invoke('pf:ai-submit', request),
-    cancel: (jobId) => ipcRenderer.invoke('pf:ai-cancel', jobId),
-    status: (jobId) => ipcRenderer.invoke('pf:ai-status', jobId),
-    list: () => ipcRenderer.invoke('pf:ai-list'),
-    usage: () => ipcRenderer.invoke('pf:ai-usage'),
-    testConnection: (providerId) => ipcRenderer.invoke('pf:ai-test-connection', providerId),
-    onEvent: (listener) => {
-      const wrapped = (_event: unknown, payload: unknown): void => listener(payload as Parameters<typeof listener>[0]);
-      ipcRenderer.on('pf:ai-event', wrapped);
-      return () => ipcRenderer.removeListener('pf:ai-event', wrapped);
-    },
+  referenceGen: {
+    generate: (input) => ipcRenderer.invoke('pf:reference-generate', input),
   },
   updates: {
     status: () => ipcRenderer.invoke('pf:app-update-status'),

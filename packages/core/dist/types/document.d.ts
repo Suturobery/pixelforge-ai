@@ -19,6 +19,7 @@
  * This module is pure TypeScript: no React, no Electron, no DOM (§8.3).
  */
 import type { SCHEMA_VERSION } from '../version';
+import type { StyleProfile } from '../style-profile';
 /** RGBA tuple, channels 0–255 (matches prototype color.ts). */
 export type RGBA = [number, number, number, number];
 /** Playback direction (v3.1 C3). `loop: false` = play once through, stopping on the last frame in the mode's direction. */
@@ -46,6 +47,8 @@ export interface Frame {
     /** Cel per layer id; absent key = fully transparent. Keys ⊆ clip layer ids. */
     cels: Record<string, Cel>;
 }
+/** Pixel blend modes for layer compositing (canvas globalCompositeOperation names). */
+export type BlendMode = 'normal' | 'multiply' | 'screen' | 'overlay' | 'darken' | 'lighten';
 /** A layer of the clip's stack (bottom → top). Pixels live in cels, not here. */
 export interface Layer {
     id: string;
@@ -55,6 +58,10 @@ export interface Layer {
     opacity: number;
     /** Linked layer: all frames share one cel (backgrounds; C2/C19). */
     linked: boolean;
+    /** Paint-locked: pixel tools refuse to mutate this layer. */
+    locked?: boolean;
+    /** Compositing mode against the layers below; omitted = normal. */
+    blend?: BlendMode;
 }
 /** Region rectangle in canvas pixels. */
 export interface PartRect {
@@ -126,6 +133,8 @@ export interface TrashEntry {
 /** Document-level settings serialized in project.json (v3.1 §6). */
 export interface DocumentSettings {
     paletteEnforce: boolean;
+    /** Optional so older v2 and v1 projects remain readable without migration. */
+    styleProfile?: StyleProfile;
     onion: {
         /** How many previous frames to onion-skin (0–3). */
         prev: number;

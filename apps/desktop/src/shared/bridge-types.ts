@@ -187,71 +187,6 @@ export interface BridgeSetApiKeyResult {
 // --------------------------- AI (Task 9) -------------------------------------
 
 /** Renderer → main AI job request (NO key material — providerId references the vault). */
-export interface BridgeAiJobRequest {
-  prompt: string;
-  providerId: string;
-  width: number;
-  height: number;
-  count?: number;
-  seed?: number;
-  clientId?: string;
-  operation?: 'generate' | 'edit';
-  sourcePngBase64?: string;
-  maskPngBase64?: string;
-}
-
-export interface BridgeAiJobImage {
-  base64: string;
-}
-
-export interface BridgeAiJobView {
-  jobId: string;
-  clientId: string | null;
-  status: 'queued' | 'generating' | 'done' | 'error' | 'cancelled';
-  prompt: string;
-  providerId: string;
-  providerLabel: string;
-  model: string;
-  requestSize: string;
-  count: number;
-  seed: number | null;
-  queuedAt: string;
-  startedAt: string | null;
-  finishedAt: string | null;
-  durationMs: number | null;
-  /** ESTIMATE from the price table; null = unknown — never an exact charge */
-  costEstimateUsd: number | null;
-  cacheHit: boolean;
-  error: { code: string; message: string } | null;
-  images: BridgeAiJobImage[];
-  queuePosition: number | null;
-}
-
-export interface BridgeAiUsageRecord {
-  jobId: string;
-  providerId: string;
-  providerLabel: string;
-  model: string;
-  promptLength: number;
-  requestSize: string;
-  count: number;
-  status: string;
-  cacheHit: boolean;
-  durationMs: number | null;
-  costEstimateUsd: number | null;
-  finishedAt: string;
-}
-
-export interface BridgeAiConnectionTest {
-  ok: boolean;
-  latencyMs: number;
-  note?: string;
-  error?: string;
-}
-
-export type BridgeAiEvent =
-  | { type: 'job'; job: BridgeAiJobView }
-  | { type: 'spend_warning'; spentUsd: number; warnUsd: number; limitUsd: number };
 
 export interface PixelForgeBridge {
   readonly bridgeVersion: 5;
@@ -344,27 +279,9 @@ export interface PixelForgeBridge {
     /** Keyring availability + per-provider credential metadata. */
     credentialStatus(): Promise<BridgeCredentialStatus>;
   };
-  /**
-   * Task 9: AI generation jobs. All provider I/O and credential decryption
-   * happen in the MAIN process; the renderer only sees job views (provenance
-   * + status + result images) — key material NEVER crosses the bridge.
-   */
-  ai: {
-    /** Queue a generation job. Throws AiJobError-shaped rejections (spend_limit etc). */
-    submit(request: BridgeAiJobRequest): Promise<{ jobId: string }>;
-    cancel(jobId: string): Promise<boolean>;
-    status(jobId: string): Promise<BridgeAiJobView | null>;
-    list(): Promise<BridgeAiJobView[]>;
-    /** Usage history + ESTIMATED month spend (for the meter; cache hits are $0). */
-    usage(): Promise<{ records: BridgeAiUsageRecord[]; monthSpendUsd: number }>;
-    /** Read-only provider probe; credentials remain in the main-process vault. */
-    testConnection(providerId: string): Promise<BridgeAiConnectionTest>;
-    /** Second-brain request routed through main so vault-stored Groq keys work across restarts. */
-    brain(payload: unknown): Promise<unknown>;
-    /** Agent-console chat turn routed through main so vault-stored keys work across restarts. */
-    agent(payload: unknown): Promise<unknown>;
-    /** Subscribe to job/spend events pushed from main. Returns an unsubscriber. */
-    onEvent(listener: (event: BridgeAiEvent) => void): () => void;
+  /** Create-from-Reference: provider fetch runs MAIN-side (key never leaves). */
+  referenceGen: {
+    generate(input: BridgeReferenceGenInput): Promise<BridgeReferenceGenResult>;
   };
   /** Packaging milestone: guarded software updates (no-op without a feed). */
   updates: {
@@ -374,6 +291,27 @@ export interface PixelForgeBridge {
     onStatus(listener: (status: UpdateStatusView) => void): () => void;
   };
 }
+
+// ------------------- Create-from-Reference generation ------------------------
+
+/** Provider id used for the Create-from-Reference credential (vault key). */
+export const REFERENCE_PROVIDER_ID = 'gemini-image';
+/** Verified against the official Gemini image-generation docs (reference
+ * images supported — aistudio.google.com/docs/image-generation). */
+export const REFERENCE_GEN_MODEL = 'gemini-2.5-flash-image';
+export const REFERENCE_GEN_MAX_PROMPT = 1200;
+export const REFERENCE_GEN_MAX_PNG_BASE64 = 16384;
+
+export interface BridgeReferenceGenInput {
+  /** Composed brief + style tags (bounded; built by the renderer pipeline). */
+  prompt: string;
+  /** Approved reference sprite PNG, base64 (≤ STYLE_REFERENCE cap). */
+  referencePngBase64: string;
+}
+
+export type BridgeReferenceGenResult =
+  | { ok: true; pngBase64: string; model: string }
+  | { ok: false; error: string };
 
 export interface UpdateStatusView {
   state:

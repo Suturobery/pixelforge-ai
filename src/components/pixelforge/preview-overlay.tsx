@@ -87,6 +87,16 @@ export function PreviewOverlay() {
   const clip = getActiveClip(useEditor.getState())
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
+  // `size` is the longest preview edge, never a forced square. This keeps a
+  // 16×32 character, a 64×16 strip and a square canvas all pixel-correct.
+  const longestEdge = Math.max(project.width, project.height, 1)
+  const previewScale = size / longestEdge
+  const previewWidth = Math.max(1, Math.round(project.width * previewScale))
+  const previewHeight = Math.max(1, Math.round(project.height * previewScale))
+  // Header and controls need a usable width for narrow portrait canvases;
+  // centre the correctly-proportioned pixels inside that chrome.
+  const previewBoxWidth = Math.max(MIN_SIZE, previewWidth)
+
   // ------------------------------------------------------------- animation
   useEffect(() => {
     const canvas = canvasRef.current
@@ -207,7 +217,7 @@ export function PreviewOverlay() {
       const r = root.getBoundingClientRect()
       return clampXY(p.x, p.y, r.width, r.height)
     })
-  }, [size, clampXY])
+  }, [size, previewBoxWidth, previewHeight, clampXY])
 
   useEffect(() => {
     const parent = rootRef.current?.parentElement
@@ -307,7 +317,7 @@ export function PreviewOverlay() {
       className={`absolute z-20 rounded-lg border border-zinc-700/80 bg-zinc-900/90 p-1.5 shadow-xl backdrop-blur ${
         dragging ? 'select-none' : ''
       }`}
-      style={pos ? { left: pos.x, top: pos.y, width: size + CHROME } : { left: 12, bottom: 12, width: size + CHROME }}
+      style={pos ? { left: pos.x, top: pos.y, width: previewBoxWidth + CHROME } : { left: 12, bottom: 12, width: previewBoxWidth + CHROME }}
       onPointerMove={onPointerMove}
       onPointerUp={endDrag}
       onPointerCancel={endDrag}
@@ -355,12 +365,14 @@ export function PreviewOverlay() {
       </div>
 
       {/* preview canvas + corner resize grip */}
-      <div className="relative" style={{ width: size, height: size }}>
+      <div className="relative grid place-items-center" style={{ width: previewBoxWidth, height: previewHeight }}>
+        {/* Keep the backing buffer at the actual canvas ratio too. CSS alone
+            cannot fix a 256×256 buffer: it would stretch a 64×32 sprite. */}
         <canvas
           ref={canvasRef}
-          width={256}
-          height={256}
-          style={{ width: size, height: size, imageRendering: 'pixelated' }}
+          width={project.width}
+          height={project.height}
+          style={{ width: previewWidth, height: previewHeight, imageRendering: 'pixelated' }}
           className="pixelforge-canvas-checker block rounded-md border border-zinc-800"
           aria-label="Looping animation preview of the active clip"
         />

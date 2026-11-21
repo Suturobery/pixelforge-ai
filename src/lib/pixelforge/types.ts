@@ -15,6 +15,8 @@
  *  R10 Motion QA is non-destructive: it reports warnings, never mutates artwork.
  */
 
+import type { StyleProfile } from '@pixelforge/core'
+
 export interface RGBA {
   r: number
   g: number
@@ -240,7 +242,11 @@ export interface SerializedProject {
   palette: string[]
   clips: SerializedClip[]
   /** Document-level onion-skin range (Task 6); omitted = defaults {1, 0}. */
-  settings?: { onion: { prev: number; next: number } }
+  settings?: {
+    onion: { prev: number; next: number }
+    /** Shared AI style contract; harmlessly ignored by classic v1 readers. */
+    styleProfile?: StyleProfile
+  }
 }
 
 /** Row summary for the Open-project dialog (/api/projects GET). */

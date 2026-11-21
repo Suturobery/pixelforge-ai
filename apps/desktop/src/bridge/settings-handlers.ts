@@ -95,6 +95,10 @@ function parseUpdate(raw: unknown): BridgeSettingsUpdate {
     if (typeof r['activeProviderId'] !== 'string') fail('activeProviderId must be a string');
     out.activeProviderId = r['activeProviderId'];
   }
+  if (r['brainProviderId'] !== undefined) {
+    if (typeof r['brainProviderId'] !== 'string') fail('brainProviderId must be a string');
+    out.brainProviderId = r['brainProviderId'];
+  }
   if (r['aiProviders'] !== undefined) {
     if (!Array.isArray(r['aiProviders'])) fail('aiProviders must be an array');
     out.aiProviders = r['aiProviders'] as BridgeSettingsUpdate['aiProviders'];
@@ -102,7 +106,11 @@ function parseUpdate(raw: unknown): BridgeSettingsUpdate {
   return out;
 }
 
-export function registerSettingsHandlers(store: SettingsStore, logger: Logger): void {
+export function registerSettingsHandlers(
+  store: SettingsStore,
+  logger: Logger,
+  onUpdated?: (patch: BridgeSettingsUpdate) => void,
+): void {
   ipcMain.handle('pf:settings-get', (): BridgeSettingsView => {
     const view: BridgeSettingsView = { ...store.getPublic(), credentials: statusPayload(store) };
     assertNoSecret(view);
@@ -112,6 +120,8 @@ export function registerSettingsHandlers(store: SettingsStore, logger: Logger): 
   ipcMain.handle('pf:settings-update', (_event, raw: unknown): BridgeSettingsView => {
     const patch = parseUpdate(raw);
     store.update(patch);
+    // live consumers (AI spend limits) must see the change without a restart
+    onUpdated?.(patch);
     logger.info('settings.update', {
       sections: Object.keys(patch),
       activeProviderId: patch.activeProviderId ?? undefined,

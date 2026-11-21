@@ -6,7 +6,7 @@ import { app, BrowserWindow, dialog, ipcMain } from 'electron';
 
 import { registerBridgeHandlers } from '../bridge/handlers';
 import { registerSettingsHandlers } from '../bridge/settings-handlers';
-import { AiService } from '../ai/service';
+import { registerReferenceGenHandlers } from './reference-gen';
 import { SMOKE, RENDERER_PORT } from '../config';
 import { createLogger, type Logger } from '../logger';
 import { RenderServer } from '../render-server';
@@ -18,6 +18,7 @@ import { installSessionHardening } from '../security';
 import { createSafeStorageBox } from '../settings/secret-box';
 import { SettingsStore } from '../settings/store';
 import { UpdateService } from '../update/service';
+import { closeStartupSplash, showStartupSplash } from '../startup-splash';
 import { createMainWindow, getMainWindow, loadRenderer, persistWindowLayout } from '../window';
 
 // Fix the product name before anything reads userData paths (logs live there).
@@ -52,18 +53,6 @@ const settingsLoad = settingsStore.load();
 if (settingsLoad.recovered) {
   logger.warn('settings.load.recovered', { notes: settingsLoad.notes });
 }
-
-/**
- * Task 9: AI job runner — lives in MAIN (plan §3.1). Credentials are
- * decrypted in-process from the vault; usage is persisted next to the
- * settings file; PF_AI_MOCK=1 (smokes/CI) swaps in the offline mock adapter.
- */
-const aiService: AiService = new AiService({
-  settings: settingsStore,
-  logger,
-  usageFile: path.join(app.getPath('userData'), 'ai-usage.json'),
-  fs: fs as unknown as import('../ai/service').AiServiceOptions['fs'],
-});
 
 /** Task 8 (embed v1): MCP mini-service supervisor — created in whenReady. */
 let mcpSupervisor: McpSupervisor | null = null;
@@ -143,7 +132,8 @@ if (!gotLock) {
     }
   });
 
-  app.whenReady().then(async () => {
+  app.whenReady()
+    .then(async () => {
     logger.info('app.ready', {
       electron: process.versions.electron,
       chrome: process.versions.chrome,
@@ -154,14 +144,24 @@ if (!gotLock) {
     installProcessErrorHandlers();
     registerBridgeHandlers(logger);
     ipcMain.handle('pf:mcp-status', () => {
-      const ready = mcpSupervisor?.state.kind === 'running';
+      // In development the supervisor deliberately adopts an already healthy
+      // local PixelForge MCP process instead of spawning another listener on
+      // the same loopback port.  An adopted service is just as usable by the
+      // renderer as one this Electron process started itself; reporting it as
+      // unavailable prevented the editor WebSocket from ever connecting.
+      const supervisorState = mcpSupervisor?.state.kind;
+      const ready = supervisorState === 'running' || supervisorState === 'adopted';
       return { ready, endpoint: ready ? `http://127.0.0.1:${mcpPort}/mcp` : null };
     });
     registerSettingsHandlers(settingsStore, logger);
-    aiService.register(() => BrowserWindow.getAllWindows().map((w) => w.webContents));
+    registerReferenceGenHandlers(settingsStore, logger);
     updateService.register();
     updateService.scheduleStartupCheck();
     installApplicationMenu();
+    // The embedded Next renderer has a noticeable cold-start cost. Present a
+    // native, local splash immediately rather than exposing a black window
+    // while the renderer server boots. Smoke mode skips this extra window.
+    const startupSplash = SMOKE ? null : showStartupSplash(logger);
 
     // Task 8 (embed v1): supervise the bundled MCP mini-service so the
     // desktop app offers MCP tools without a separate terminal. Packaged
@@ -189,12 +189,22 @@ if (!gotLock) {
     });
     void mcpSupervisor.start().then((state) => logger.info('mcp.supervisor.state', state));
 
-    const win = createMainWindow(logger, settingsStore);
+    // editor-auth + mcp data dir parity: the render server (editor page) and
+    // the MCP child must resolve the SAME data dir for the editor auth key
+    process.env.PF_MCP_DATA_DIR ??= app.isPackaged
+      ? path.join(app.getPath('userData'), 'mcp-data')
+      : path.resolve(app.getAppPath(), '..', '..', 'db');
+
+    const win = createMainWindow(logger, settingsStore, {
+      onReadyToShow: () => closeStartupSplash(startupSplash, logger),
+    });
     installSessionHardening(win, logger); // must precede the first navigation
+    win.once('closed', () => closeStartupSplash(startupSplash, logger));
 
     // Task 4: packaged builds serve the REAL editor from the embedded Next
-    // standalone server before the window navigates to it.
-    if (app.isPackaged) {
+    // standalone server before the window navigates to it. PF_RENDERER=shell
+    // loads static/shell.html instead — don't boot a server nothing uses.
+    if (app.isPackaged && process.env.PF_RENDERER !== 'shell') {
       const renderServer = new RenderServer({
         packaged: true,
         resourcesPath: process.resourcesPath,
@@ -218,6 +228,16 @@ if (!gotLock) {
       void runSmokeTest(win, logger);
     }
     void loadTrustedRenderer(win);
+  }).catch((err: unknown) => {
+    // startup must never strand the user on the always-on-top splash —
+    // surface the failure and exit instead of an unresponsive app
+    logger.error('app.ready.failed', { err: String(err) });
+    try {
+      dialog.showErrorBox('PixelForge AI — startup failed', String((err as Error)?.message ?? err));
+    } catch {
+      /* headless */
+    }
+    app.exit(1);
   });
 
   app.on('window-all-closed', () => {

@@ -57,12 +57,18 @@ export declare class CommandBus {
     private commit;
     private buildEntry;
     /**
-     * Group several executes into ONE undoable history entry. If `fn` throws,
-     * the document is rolled back to the transaction start and the error is
-     * rethrown — no partial application, no history pollution.
-     * Nested transactions fold into their parent.
+     * Group several executes into ONE undoable history entry. If `fn` throws
+     * (or the returned promise rejects), the document is rolled back to the
+     * transaction start and the error is rethrown — no partial application,
+     * no history pollution. Nested transactions fold into their parent.
+     *
+     * `fn` may be async: the commit/rollback then happens when the promise
+     * settles. While an async transaction is open, commands executed from
+     * other sources fold into it as children — keep the async window short.
      */
-    transaction<T>(label: string, origin: CommandOrigin, fn: () => T): T;
+    transaction<T>(label: string, origin: CommandOrigin, fn: () => T): T | Promise<T>;
+    private commitTx;
+    private rollbackTx;
     /** True while inside transaction() — strokes are rejected in that window. */
     get inTransaction(): boolean;
     /**

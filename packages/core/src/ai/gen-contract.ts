@@ -131,6 +131,44 @@ export interface RecipePreset {
 }
 
 /**
+ * The two provider-backed tasks PixelForge can honestly offer today.
+ *
+ * `variation` deliberately creates a fresh concept from text. It is not
+ * presented as image-to-image editing because not every supported provider
+ * has a verified edits API wired into PixelForge yet.
+ */
+export const GENERATION_TASK_SKILLS = [
+  {
+    id: 'create',
+    label: 'Create',
+    description: 'Make a new sprite from your prompt.',
+    styleTags: [],
+  },
+  {
+    id: 'variation',
+    label: 'Concept variation',
+    description: 'Make a fresh alternate concept from the same prompt; this does not edit an existing image.',
+    styleTags: [
+      'create a distinct but style-consistent alternate concept',
+      'change the visual interpretation while keeping the requested subject readable',
+      'this is a fresh composition, not an edit of an existing image',
+    ],
+  },
+] as const;
+
+export type GenerationTaskSkillId = (typeof GENERATION_TASK_SKILLS)[number]['id'];
+
+/** Use a narrow allowlist at every caller boundary; unknown task ids become Create. */
+export function isGenerationTaskSkill(value: unknown): value is GenerationTaskSkillId {
+  return typeof value === 'string' && GENERATION_TASK_SKILLS.some((skill) => skill.id === value);
+}
+
+/** Deterministic, bounded tags for a provider-backed task. */
+export function generationTaskStyleTags(skillId: GenerationTaskSkillId | undefined): string[] {
+  return [...(GENERATION_TASK_SKILLS.find((skill) => skill.id === skillId)?.styleTags ?? [])];
+}
+
+/**
  * Recipe presets (plan §3.2 "recipe preset: size, palette, style tags, seed,
  * provider"). Deterministic prompt shaping — no hidden randomness.
  *
@@ -319,11 +357,21 @@ export function planOpenAiImagesRequest(input: {
   if (!base) throw new CapabilityError('config_error', 'Provider base URL is not configured.');
   if (!input.apiKey) throw new CapabilityError('config_error', 'Provider API key is missing (store it in Settings).');
 
+  // "auto" (or blank) means the provider's own default. OpenAI's images API
+  // has no default — send gpt-image-1. Z.AI rejects "auto" and a null model
+  // alike (HTTP 400 code 1211 / 500 NPE): its verified image model is
+  // cogview-4-250304, so default to that. A user-picked code always wins.
+  const requestedModel = (input.model ?? '').trim();
+  const auto = !requestedModel || requestedModel.toLowerCase() === 'auto';
+  const effectiveModel = auto
+    ? (input.kind === 'openai' ? 'gpt-image-1' : input.kind === 'zai' ? 'cogview-4-250304' : '')
+    : requestedModel;
+
   const body: Record<string, unknown> = {
-    model: input.model || 'gpt-image-1',
     prompt: input.fullPrompt,
     size: input.requestSize,
   };
+  if (effectiveModel) body['model'] = effectiveModel;
   const count = Math.max(1, Math.min(4, Math.floor(input.count)));
   if (count > 1) {
     if (!caps.n) {

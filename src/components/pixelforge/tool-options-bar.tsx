@@ -120,7 +120,7 @@ export function ToolOptionsBar() {
   const scaleH = sizeEd && sizeEd.key === selKey ? sizeEd.h : selection?.h ?? 1
 
   if (playing) return null
-  if (tool !== 'ellipse' && tool !== 'marquee') return null
+  if (tool !== 'ellipse' && tool !== 'rect' && tool !== 'marquee') return null
 
   return (
     <TooltipProvider delayDuration={250}>
@@ -129,7 +129,7 @@ export function ToolOptionsBar() {
         aria-label="Tool options"
         className="absolute inset-x-2 top-3 z-20 mx-auto flex w-fit max-w-full flex-wrap items-center justify-center gap-1 rounded-lg border border-zinc-800 bg-zinc-950/90 px-2 py-1 shadow-xl backdrop-blur"
       >
-        {tool === 'ellipse' && (
+        {(tool === 'ellipse' || tool === 'rect') && (
           <>
             <button
               type="button"

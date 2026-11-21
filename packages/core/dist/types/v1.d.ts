@@ -7,12 +7,17 @@
  * implemented in Task 3 against the V1ToV2Importer interface below.
  */
 import type { LoopMode } from './document';
+import type { StyleProfile } from '../style-profile';
 /** v1 layer inside a per-frame layer stack, PNG encoded as a data URL. */
 export interface V1SerializedLayer {
     id: string;
     name: string;
     visible: boolean;
     opacity: number;
+    /** Optional v1.1 extension — classic v1 readers ignore it. */
+    locked?: boolean;
+    /** Optional v1.1 extension — compositing mode. */
+    blend?: 'normal' | 'multiply' | 'screen' | 'overlay' | 'darken' | 'lighten';
     png: string;
 }
 /** v1 frame — carries its OWN layer stack (the flaw v2 fixes with cels). */
@@ -39,6 +44,26 @@ export interface V1SerializedClip {
      * (the C3 v1 mapping); the exporter writes it only when non-forward.
      */
     loopMode?: LoopMode;
+    /**
+     * OPTIONAL Task 10 extension: motion parts (v3.1 §4.1). Absent = no parts
+     * (classic v1 files). The exporter writes them only when non-empty and the
+     * importer adopts only well-formed entries (invalid ones warn + skip) —
+     * classic v1 readers ignore the unknown field.
+     */
+    parts?: V1SerializedPart[];
+}
+/** Task 10 additive extension — the v1-carried form of a v2 `Part`. */
+export interface V1SerializedPart {
+    name: string;
+    layerId: string;
+    rect?: {
+        x: number;
+        y: number;
+        w: number;
+        h: number;
+    };
+    anchorFrameId?: string;
+    z?: number;
 }
 export interface V1SerializedProject {
     version: 1;
@@ -56,6 +81,8 @@ export interface V1SerializedProject {
             prev?: number;
             next?: number;
         };
+        /** Optional project style contract; classic v1 readers ignore this field. */
+        styleProfile?: StyleProfile;
     };
 }
 export declare function isSerializedProjectV1(v: unknown): v is V1SerializedProject;

@@ -33,6 +33,24 @@ export declare function flipRegionVInPlace(buf: Uint8ClampedArray, W: number, H:
 export declare function rotateRegionCWInPlace(buf: Uint8ClampedArray, W: number, H: number, rect: PixelRect): PixelRect;
 /** Rotate the rect region 90° counter-clockwise, in place. Same anchoring. */
 export declare function rotateRegionCCWInPlace(buf: Uint8ClampedArray, W: number, H: number, rect: PixelRect): PixelRect;
+/**
+ * Nearest-neighbor scale of a rect region about its top-left corner, in
+ * place. Integer factors ≥ 2 duplicate pixels (crisp upscale); 0.5 samples
+ * every other source pixel (downscale). Content is extracted first, the
+ * source area cleared, then the scaled footprint is written back clipped to
+ * the canvas — pixels pushed outside are dropped (same contract as the
+ * rotate helpers). Returns the destination footprint (clipped) so callers
+ * can keep selections in sync. Deterministic, interpolation-free.
+ */
+export declare function scaleRegionInPlace(buf: Uint8ClampedArray, W: number, H: number, rect: PixelRect, factor: number): PixelRect;
+/**
+ * Arbitrary nearest-neighbor resample of a rect region into a destination
+ * footprint (free scaling). The source content is extracted, its area
+ * cleared, then written into `dst` (clipped to the canvas) with independent
+ * per-axis NN sampling — uniform or non-uniform, upscale or downscale.
+ * Content pushed outside the canvas is dropped. Deterministic.
+ */
+export declare function scaleRegionToInPlace(buf: Uint8ClampedArray, W: number, H: number, src: PixelRect, dst: PixelRect): void;
 /** Copy a rect region out (alpha verbatim — transparency preserved). */
 export declare function extractRegion(buf: Uint8ClampedArray, W: number, H: number, rect: PixelRect): Uint8ClampedArray;
 /** Zero a rect region in place (transparent). */

@@ -2,8 +2,8 @@
 // The MCP server keeps the authoritative audit log (db/mcp-ops.jsonl);
 // get_operation_log is an MCP L0 tool. See ./run/route.ts for context.
 
-import { retiredResponse } from '../run/route'
+import { retiredMcpResponse } from '@/lib/pixelforge/retired-mcp-response'
 
 export async function GET(): Promise<Response> {
-  return retiredResponse()
+  return retiredMcpResponse()
 }

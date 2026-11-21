@@ -43,12 +43,16 @@ const paths_1 = require("./paths");
 const schema_1 = require("./schema");
 const serialize_1 = require("./serialize");
 const journal_1 = require("./journal");
+function lastSepIndex(path) {
+    // Windows accepts both separators; derive dirs/stems from either
+    return Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+}
 function dirnameOf(path) {
-    const i = path.lastIndexOf('/');
+    const i = lastSepIndex(path);
     return i <= 0 ? '.' : path.slice(0, i);
 }
 function basenameOf(path) {
-    const i = path.lastIndexOf('/');
+    const i = lastSepIndex(path);
     return i >= 0 ? path.slice(i + 1) : path;
 }
 function stemOf(path) {

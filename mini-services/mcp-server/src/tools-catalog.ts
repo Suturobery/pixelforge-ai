@@ -2,15 +2,17 @@
  * PixelForge AI — MCP tool catalog (v3.1 §5.2/§5.3).
  *
  * Every non-server-side tool is a RELAY: the MCP server validates identity +
- * tier + rate budget (+ the paid-op approval gate), then forwards the call to
+ * tier + rate budget, then forwards the call to
  * the PixelForge renderer, which executes it on the REAL CommandBus — the
  * same bus, validation and undo history as manual editing. Nothing here
  * mutates a document directly.
  *
- * Tiers registered: L0 read · L1 undoable writes · L2 destructive/disk
- * (Task 11) · L3 generate_sprite, the one paid tool (approval card before
- * anything is spent — v3.1 §5.2/§5.4). Task 8b/8c added the embedded
- * knowledge skill set (get_knowledge L0, study_reference L1).
+ * Tiers registered: L0 read · L1 undoable writes · L2 destructive/disk.
+ * All tools execute locally (editor CommandBus or deterministic helpers) —
+ * there is no provider-backed image generation and no paid tools. Task 8b/8c
+ * added the embedded knowledge skill set (get_knowledge L0, study_reference
+ * L1); the shared-Brain surface exposes deterministic interpretation and the
+ * agent task board.
  */
 
 import { z } from 'zod';
@@ -142,23 +144,7 @@ export const TOOL_CATALOG: ToolDef[] = [
       ),
     },
   },
-  {
-    name: 'validate_candidate',
-    title: 'Validate AI candidate against style contract',
-    description:
-      'Same deterministic checks as validate_style, but on a CANDIDATE in the AI review cache (before it is ' +
-      'accepted onto the canvas). Non-mutating: lets you score generation results for benchmarks or pre-review ' +
-      'without touching the document. Requires the candidate to be normalized already.',
-    tier: 'L0',
-    relay: true,
-    inputSchema: {
-      candidateId: z.string().min(1).max(128).describe('Candidate id from get_candidates or generate_sprite.'),
-      allowEdgeTouch: z.boolean().optional().describe(
-        'true = sprite may touch its canvas edges (tilesets, full-bleed backgrounds). Default false.',
-      ),
-    },
-  },
-  {
+    {
     name: 'list_vfx',
     title: 'List procedural VFX effects',
     description:
@@ -242,18 +228,7 @@ export const TOOL_CATALOG: ToolDef[] = [
     relay: false,
     inputSchema: {},
   },
-  {
-    name: 'get_approvals',
-    title: 'Get approval queue',
-    description:
-      'Read the paid-op approval queue: pending requests waiting for the human and recent decisions. ' +
-      'Read-only status — approval/denial happens ONLY in the editor UI; no MCP tool can approve spend.',
-    tier: 'L0',
-    relay: false,
-    inputSchema: {},
-  },
-
-  // ---------------------------------------------------------- L1 safe writes
+    // ---------------------------------------------------------- L1 safe writes
   {
     name: 'create_project',
     title: 'Create a new project',
@@ -705,33 +680,7 @@ export const TOOL_CATALOG: ToolDef[] = [
     relay: false,
     inputSchema: {},
   },
-  {
-    name: 'brain_ask',
-    title: 'Brain: project-aware advisory Q&A',
-    description:
-      'Ask the Second Brain a question about the open project (craft, palette ramps, what to build next, export choices). ' +
-      'The question is first normalized by the deterministic interpreter, then answered by the configured reasoning provider ' +
-      '(costs a small amount of the artist\'s provider quota — bounded, read-only, never executes anything).',
-    tier: 'L1',
-    relay: true,
-    inputSchema: {
-      question: z.string().min(1).max(2000).describe('Your question about the project or pixel-art workflow.'),
-    },
-  },
-  {
-    name: 'brain_plan_goal',
-    title: 'Brain: plan a goal (never executes)',
-    description:
-      'Turn a goal into a validated plan proposal: app-vfx / app-palette steps (deterministic app actions) plus agent steps ' +
-      'for hand-drawn work. STRICT schema + real VFX catalog grounding happen editor-side. PLANNING ONLY — nothing is ' +
-      'executed or queued; to delegate work, queue tasks on the board instead.',
-    tier: 'L1',
-    relay: true,
-    inputSchema: {
-      goal: z.string().min(1).max(800).describe('The goal to plan, rough phrasing and typos welcome.'),
-    },
-  },
-  {
+      {
     name: 'brain_claim_task',
     title: 'Claim a brain task',
     description: 'Claim a pending board task for THIS agent. Only pending tasks can be claimed; the claim is exclusive.',
@@ -851,26 +800,7 @@ export const TOOL_CATALOG: ToolDef[] = [
       ...staleGuard,
     },
   },
-  {
-    name: 'generate_sprite',
-    title: 'Generate sprite (paid)',
-    description:
-      'L3 PAID (human approval required): text-to-image generation via the provider configured in Settings → AI. ' +
-      'The active project Style Lock is automatically applied to the prompt and normalization when enabled. ' +
-      'The call PARKS until the user clicks Approve/Deny on the approval card in the editor — denied or timed-out ' +
-      'requests spend nothing. Candidates land in the review cache — inspect with get_candidates, import with ' +
-      'accept_candidate. Requires an L3-paired client.',
-    tier: 'L3',
-    relay: true,
-    paid: true,
-    inputSchema: {
-      prompt: z.string().min(1).max(600).describe('Sprite description.'),
-      task: z.enum(['create', 'variation']).optional().describe('Optional generation task. variation creates a fresh alternate concept; it does not edit an existing image.'),
-      count: z.number().int().min(1).max(4).optional().describe('How many candidates (1–4). Default 1.'),
-      ...staleGuard,
-    },
-  },
-  {
+    {
     name: 'beautify_layer',
     title: 'Beautify layer',
     description:
@@ -963,72 +893,7 @@ export const TOOL_CATALOG: ToolDef[] = [
     },
   },
 
-  // ------------------------------------------------- AI candidates (Task 9)
-  {
-    name: 'get_candidates',
-    title: 'Get AI candidates',
-    description:
-      'List the AI sprite candidates in the review cache with full provenance (prompt, provider, model, seed, ' +
-      'duration, cost ESTIMATE), bounded edit lineage (source candidate id, instruction, mask type), and a small normalized preview PNG. Paid generation itself is NOT exposed as a ' +
-      'tool — it stays in the editor UI until the Task 11 approval center (v3.1 §5.2 L3).',
-    tier: 'L0',
-    relay: true,
-    inputSchema: {
-      limit: z.number().int().min(1).max(8).optional().describe('Max candidates to return (default 8).'),
-      includeImages: z.boolean().optional().describe('Also include the ORIGINAL generated image data URL when small enough.'),
-    },
-  },
-  {
-    name: 'accept_candidate',
-    title: 'Accept AI candidate',
-    description:
-      'Accept an AI candidate from the review cache: import its NORMALIZED pixels as a NEW layer on the target ' +
-      'frame (mode "layer") or as a NEW frame in the target clip (mode "frame"). One undoable transaction — the ' +
-      "candidate never overwrites existing artwork. Read the candidates with get_candidates first.",
-    tier: 'L1',
-    relay: true,
-    inputSchema: {
-      candidateId: z.string().min(1).max(128).describe('Candidate id from get_candidates.'),
-      mode: z.enum(['layer', 'frame']).describe('Import as a new layer on the target frame, or as a new frame in the clip.'),
-      ...clipRef,
-      ...frameRef,
-      ...layerRef,
-      ...staleGuard,
-    },
-  },
-  {
-    name: 'reject_candidate',
-    title: 'Reject AI candidate',
-    description: 'Reject an AI candidate and remove it from the review cache. The document is untouched (not undoable — nothing changed).',
-    tier: 'L1',
-    relay: true,
-    inputSchema: {
-      candidateId: z.string().min(1).max(128).describe('Candidate id from get_candidates.'),
-    },
-  },
-  {
-    name: 'apply_normalize',
-    title: 'Apply normalize v2',
-    description:
-      'Re-run the deterministic normalize-v2 pipeline (trim → dominant-color downscale → despeckle → background ' +
-      'removal → OKLab quantize → fringe cleanup) on an AI candidate with adjusted parameters. Returns the new ' +
-      'preview PNG + pipeline stats. Deterministic: identical inputs always give identical output.',
-    tier: 'L1',
-    relay: true,
-    inputSchema: {
-      candidateId: z.string().min(1).max(128).describe('Candidate id from get_candidates.'),
-      width: z.number().int().min(8).max(512).optional().describe('Output width (default: canvas width).'),
-      height: z.number().int().min(8).max(512).optional().describe('Output height (default: canvas height).'),
-      removeBg: z.boolean().optional().describe('Flood background removal (default true).'),
-      bgTolerance: z.number().int().min(0).max(255).optional().describe('Background tolerance (default 48).'),
-      paletteMode: z.enum(['project', 'auto', 'off']).optional().describe('Palette strategy (default "auto" = median cut).'),
-      maxColors: z.number().int().min(2).max(64).optional().describe('Max colors for the auto palette (default 16).'),
-      outlineCleanup: z.boolean().optional().describe('Clear the AA fringe ring adjacent to transparency (default true).'),
-      palette: z.array(z.string()).max(256).optional().describe('Override palette (hex colors); default is the project palette.'),
-    },
-  },
-
-  {
+          {
     name: 'suggest_motion_preset',
     title: 'Suggest motion preset',
     description:

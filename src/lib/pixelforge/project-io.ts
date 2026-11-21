@@ -48,7 +48,14 @@ export function exportLegacyProjectJson(project: Project): SerializedProject {
   const transparent = new Uint8ClampedArray(width * height * 4)
   const { prev, next } = project.settings.onion
   const settings =
-    prev !== 1 || next !== 0 ? { settings: { onion: { prev, next } } } : {}
+    prev !== 1 || next !== 0 || project.settings.styleProfile
+      ? {
+          settings: {
+            onion: { prev, next },
+            ...(project.settings.styleProfile ? { styleProfile: { ...project.settings.styleProfile } } : {}),
+          },
+        }
+      : {}
   return {
     version: 1,
     name: project.name,

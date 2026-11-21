@@ -64,6 +64,23 @@ export type PixelOp = ({
     op: 'rotateCCW';
     rect?: PixelRect;
 }
+/** Nearest-neighbor scale about the region's top-left corner. factor 0.5
+ * downsamples (every-other-pixel), integers 2–8 duplicate pixels. Content
+ * pushed outside the canvas is dropped; rect omitted = whole cel. */
+ | {
+    op: 'scale';
+    factor: number;
+    rect?: PixelRect;
+}
+/** Free NN resample: scale the `rect` region into the explicit `to`
+ * footprint (per-axis, uniform or not). Overwrites the destination area,
+ * clears the source, clips to the canvas. Powers the interactive
+ * selection-scale handles. */
+ | {
+    op: 'scaleTo';
+    rect: PixelRect;
+    to: PixelRect;
+}
 /** Full cel replace (AI import path) — buffer must match w*h*4. */
  | {
     op: 'setBuffer';

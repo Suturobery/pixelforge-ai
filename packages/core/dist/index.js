@@ -12,10 +12,12 @@
  * integration lives in apps/desktop and the renderer (Task 4).
  */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.TILE_PIXELS = exports.TILE_BYTES = exports.rotateRegionCWInPlace = exports.rotateRegionCCWInPlace = exports.pasteRegionInPlace = exports.flipRegionVInPlace = exports.flipRegionHInPlace = exports.extractRegion = exports.clearRegionInPlace = exports.clampRect = exports.normalizeEllipseBox = exports.ellipseOutlinePoints = exports.drawEllipsePixels = exports.stampBrush = exports.moveBuffer = exports.inBounds = exports.getPixel = exports.floodFill = exports.drawRectPixels = exports.drawLinePixels = exports.clearBufferInPlace = exports.takeTrash = exports.setCelEverywhere = exports.setCel = exports.replaceCelBuffer = exports.pushTrash = exports.mapFrames = exports.mapClip = exports.locateCel = exports.findLayer = exports.findFrame = exports.findClip = exports.duplicateFrame = exports.createProject = exports.createLayer = exports.createFrame = exports.createClip = exports.createCel = exports.cloneProject = exports.clampCanvasSize = exports.DEFAULT_PALETTE = exports.CommandError = exports.isSerializedProjectV2 = exports.TRASH_CAP = exports.ONION_MAX = exports.CANVAS_MIN = exports.CANVAS_MAX = exports.uid = exports.SCHEMA_VERSION = exports.CORE_VERSION = void 0;
-exports.composeSheetRgba = exports.composeFrameRgba = exports.buildClipMetadata = exports.buildAllArtifacts = exports.EXPORT_METADATA_VERSION = exports.ExportError = exports.frameAtPosition = exports.effectiveFrameMs = exports.buildPlaybackCycle = exports.PlaybackClock = exports.applyPixelOpsCommand = exports.trashRestore = exports.trashPurge = exports.settingsSetOnion = exports.projectRename = exports.paletteRemoveColor = exports.paletteAddColor = exports.layerSetProps = exports.layerSetLinked = exports.layerMove = exports.layerMergeDown = exports.layerDuplicate = exports.layerDelete = exports.layerAdd = exports.frameSetDuration = exports.frameMove = exports.frameDelete = exports.frameAdd = exports.clipSetProps = exports.clipDelete = exports.clipAdd = exports.CommandBus = exports.makeStructureEntry = exports.makePixelEntry = exports.makeCompositeEntry = exports.estimateStructureEntryBytes = exports.estimateProjectStructureBytes = exports.estimatePixelEntryBytes = exports.clampHistoryBudget = exports.applyEntry = exports.HistoryEngine = exports.MIN_HISTORY_BUDGET_BYTES = exports.MAX_HISTORY_BUDGET_BYTES = exports.DEFAULT_HISTORY_BUDGET_BYTES = exports.tilesPerRow = exports.tilesPerColumn = exports.tileIndexAt = exports.extractTileDiff = exports.applyTileDiff = exports.TILE_SIZE = void 0;
-exports.autosavePathFor = exports.MemoryFs = exports.replayJournal = exports.recordsToLines = exports.linesToRecords = exports.encodeJsonSafe = exports.decodeJsonSafe = exports.JournalRecorder = exports.JOURNAL_CAP = exports.readPixelforgeproj = exports.buildPixelforgeproj = exports.FORMAT_VERSION = exports.serializeProjectV2 = exports.projectFromSerialized = exports.validateSerializedProjectV2OrThrow = exports.validateSerializedProjectV2 = exports.JOURNAL_ENTRY = exports.PROJECT_ENTRY = exports.MANIFEST_ENTRY = exports.assertSafeCelSrc = exports.isSafeId = exports.trashClipCelSrc = exports.trashCelSrc = exports.sharedCelSrc = exports.celSrc = exports.zipWrite = exports.zipRead = exports.assertSafeEntryName = exports.peekPngSize = exports.encodePng = exports.decodePng = exports.sha256Hex = exports.base64Decode = exports.base64Encode = exports.crc32 = exports.PersistError = exports.isZeroBuffer = exports.cloneBuffer = exports.bufferEquals = exports.v2ProjectShell = exports.v1ClipSkeleton = exports.mapV1Loop = exports.isSerializedProjectV1 = exports.convertV1Loop = exports.writeExportPlan = exports.slugify = exports.sheetFrameOrigin = exports.resolveSheetLayout = exports.planExport = exports.encodeExportPng = void 0;
-exports.V1ProjectImporter = exports.v1Importer = exports.pngDataUrlResolver = exports.tmpPathFor = exports.savePixelforgeproj = exports.saveAutosave = exports.rotateBackups = exports.readEmbeddedJournal = exports.loadPixelforgeproj = exports.listBackups = exports.journalPathFor = exports.inspectRecovery = exports.createBackup = exports.buildArchive = exports.backupsDirFor = void 0;
+exports.inBrushDisc = exports.getPixel = exports.floodFillDither = exports.floodFill = exports.drawRectPixels = exports.drawLinePixels = exports.clearBufferInPlace = exports.takeTrash = exports.setCelEverywhere = exports.setCel = exports.replaceCelBuffer = exports.pushTrash = exports.mapFrames = exports.mapClip = exports.locateCel = exports.findLayer = exports.findFrame = exports.findClip = exports.duplicateFrame = exports.createProject = exports.createLayer = exports.createFrame = exports.createClip = exports.createCel = exports.cloneProject = exports.clampCanvasSize = exports.DEFAULT_PALETTE = exports.CommandError = exports.isSerializedProjectV2 = exports.brainHexColor = exports.brainPlanStepSchema = exports.brainPlanSchema = exports.validateStyleCandidate = exports.styleProfilePromptTags = exports.parseStyleProfile = exports.defaultStyleProfile = exports.cloneStyleProfile = exports.STYLE_FEEDBACK_MAX_CUES = exports.STYLE_FEEDBACK_CUE_MAX = exports.STYLE_PALETTE_MODES = exports.STYLE_OUTLINES = exports.STYLE_LIGHTING = exports.DEFAULT_STYLE_PROFILE = exports.TRASH_CAP = exports.ONION_MAX = exports.CANVAS_MIN = exports.CANVAS_MAX = exports.uid = exports.SCHEMA_VERSION = exports.CORE_VERSION = void 0;
+exports.layerDuplicate = exports.layerDelete = exports.layerAdd = exports.frameSetDuration = exports.frameMove = exports.frameDelete = exports.frameAdd = exports.clipSetProps = exports.clipDelete = exports.clipAdd = exports.CommandBus = exports.makeStructureEntry = exports.makePixelEntry = exports.makeCompositeEntry = exports.estimateStructureEntryBytes = exports.estimateProjectStructureBytes = exports.estimatePixelEntryBytes = exports.clampHistoryBudget = exports.applyEntry = exports.HistoryEngine = exports.MIN_HISTORY_BUDGET_BYTES = exports.MAX_HISTORY_BUDGET_BYTES = exports.DEFAULT_HISTORY_BUDGET_BYTES = exports.tilesPerRow = exports.tilesPerColumn = exports.tileIndexAt = exports.extractTileDiff = exports.applyTileDiff = exports.TILE_SIZE = exports.TILE_PIXELS = exports.TILE_BYTES = exports.scaleRegionToInPlace = exports.scaleRegionInPlace = exports.rotateRegionCWInPlace = exports.rotateRegionCCWInPlace = exports.pasteRegionInPlace = exports.flipRegionVInPlace = exports.flipRegionHInPlace = exports.extractRegion = exports.clearRegionInPlace = exports.clampRect = exports.normalizeEllipseBox = exports.ellipseOutlinePoints = exports.drawEllipsePixels = exports.stampCustomBuffer = exports.stampBrush = exports.beautifyLayer = exports.pixelPerfectStroke = exports.moveBuffer = exports.inBounds = void 0;
+exports.medianCutPalette = exports.floodRemoveBackgroundWithColor = exports.floodRemoveBackground = exports.fitBufferToCanvas = exports.dominantColorDownscale = exports.despeckleIsolated = exports.cleanupOutlineFringeWithColor = exports.cleanupOutlineFringe = exports.applyAlphaThreshold = exports.srgbToLinear = exports.rgbToOklab = exports.rgbDistance2 = exports.parseHexColor = exports.oklabToRgb = exports.oklabDistance2 = exports.linearToSrgb = exports.v2ProjectShell = exports.v1ClipSkeleton = exports.mapV1Loop = exports.isSerializedProjectV1 = exports.convertV1Loop = exports.writeExportPlan = exports.slugify = exports.sheetFrameOrigin = exports.resolveSheetLayout = exports.planExport = exports.encodeExportPng = exports.composeSheetRgba = exports.composeFrameRgba = exports.buildClipMetadata = exports.buildAllArtifacts = exports.EXPORT_METADATA_VERSION = exports.ExportError = exports.frameAtPosition = exports.effectiveFrameMs = exports.buildPlaybackCycle = exports.PlaybackClock = exports.applyPixelOpsCommand = exports.blendChannel = exports.trashRestore = exports.trashPurge = exports.settingsSetOnion = exports.projectRename = exports.paletteRemoveColor = exports.paletteAddColor = exports.layerSetProps = exports.layerSetLinked = exports.layerReorder = exports.layerMove = exports.layerMergeDown = void 0;
+exports.KIT_PRESETS = exports.KIT_OUTFITS = exports.KIT_LAYERS = exports.KIT_ITEMS = exports.KIT_HEADS = exports.KIT_FOOT_BASELINE_Y = exports.KIT_DEFAULT_SELECTION = exports.KIT_CANVAS = exports.KIT_ATTACHMENTS = exports.CHARACTER_KIT_VERSION = exports.roleKey = exports.planMotion = exports.resolveParams = exports.getPreset = exports.PRESET_IDS = exports.MOTION_PRESETS = exports.scaledOffset = exports.rectsIntersect = exports.rectContains = exports.MOTION_PARAMS_DEFAULTS = exports.AMPLITUDE_MIN = exports.AMPLITUDE_MAX = exports.ZAI_SUPPORTED_SIZES = exports.SIZE_PRESETS = exports.requestSizeFor = exports.RECIPE_PRESETS = exports.PROVIDER_CAPABILITIES = exports.priceBasisFor = exports.PRICE_TABLE = exports.planOpenAiImagesRequest = exports.parseOpenAiImagesResponse = exports.isGenerationTaskSkill = exports.GENERATION_TASK_SKILLS = exports.generationTaskStyleTags = exports.estimateCostUsd = exports.capabilitiesFor = exports.CapabilityError = exports.cacheKeyFor = exports.buildFullPrompt = exports.analyzeSpriteQuality = exports.DEFAULT_NORMALIZE2_OPTIONS = exports.trimContentBBox = exports.sampleBorderColorMedian = exports.sampleBorderColor = exports.removeStrayComponents = exports.removeEnclosedBgResidue = exports.quantizeToPalette = exports.normalizeV2 = exports.nearestNeighborContain = exports.harvestPalette = void 0;
+exports.encodeJsonSafe = exports.decodeJsonSafe = exports.JournalRecorder = exports.JOURNAL_CAP = exports.readPixelforgeproj = exports.buildPixelforgeproj = exports.FORMAT_VERSION = exports.serializeProjectV2 = exports.projectFromSerialized = exports.validateSerializedProjectV2OrThrow = exports.validateSerializedProjectV2 = exports.JOURNAL_ENTRY = exports.PROJECT_ENTRY = exports.MANIFEST_ENTRY = exports.assertSafeCelSrc = exports.isSafeId = exports.trashClipCelSrc = exports.trashCelSrc = exports.sharedCelSrc = exports.celSrc = exports.zipWrite = exports.zipRead = exports.assertSafeEntryName = exports.peekPngSize = exports.encodePng = exports.decodePng = exports.sha256Hex = exports.base64Decode = exports.base64Encode = exports.crc32 = exports.PersistError = exports.isZeroBuffer = exports.cloneBuffer = exports.bufferEquals = exports.suggestMotionPreset = exports.QA_OPTIONS_DEFAULTS = exports.footContactIssues = exports.diffChangedPixels = exports.analyzeMotionPlan = exports.analyzeClipMotion = exports.insertCharacter = exports.validateKitSelection = exports.snapToPalette = exports.matchKitCharacter = exports.kitSelectionLabel = exports.kitSelectionFromPreset = exports.describeKit = exports.composeKitPreviewRgba = exports.composeKitBuffers = exports.KIT_ROLE_HEX = void 0;
+exports.V1ProjectImporter = exports.v1Importer = exports.pngDataUrlResolver = exports.tmpPathFor = exports.savePixelforgeproj = exports.saveAutosave = exports.rotateBackups = exports.readEmbeddedJournal = exports.loadPixelforgeproj = exports.listBackups = exports.journalPathFor = exports.inspectRecovery = exports.createBackup = exports.buildArchive = exports.backupsDirFor = exports.autosavePathFor = exports.MemoryFs = exports.replayJournal = exports.recordsToLines = exports.linesToRecords = void 0;
 // ---------------------------------------------------------------------------
 // version
 // ---------------------------------------------------------------------------
@@ -32,6 +34,23 @@ Object.defineProperty(exports, "CANVAS_MAX", { enumerable: true, get: function (
 Object.defineProperty(exports, "CANVAS_MIN", { enumerable: true, get: function () { return document_1.CANVAS_MIN; } });
 Object.defineProperty(exports, "ONION_MAX", { enumerable: true, get: function () { return document_1.ONION_MAX; } });
 Object.defineProperty(exports, "TRASH_CAP", { enumerable: true, get: function () { return document_1.TRASH_CAP; } });
+var style_profile_1 = require("./style-profile");
+Object.defineProperty(exports, "DEFAULT_STYLE_PROFILE", { enumerable: true, get: function () { return style_profile_1.DEFAULT_STYLE_PROFILE; } });
+Object.defineProperty(exports, "STYLE_LIGHTING", { enumerable: true, get: function () { return style_profile_1.STYLE_LIGHTING; } });
+Object.defineProperty(exports, "STYLE_OUTLINES", { enumerable: true, get: function () { return style_profile_1.STYLE_OUTLINES; } });
+Object.defineProperty(exports, "STYLE_PALETTE_MODES", { enumerable: true, get: function () { return style_profile_1.STYLE_PALETTE_MODES; } });
+Object.defineProperty(exports, "STYLE_FEEDBACK_CUE_MAX", { enumerable: true, get: function () { return style_profile_1.STYLE_FEEDBACK_CUE_MAX; } });
+Object.defineProperty(exports, "STYLE_FEEDBACK_MAX_CUES", { enumerable: true, get: function () { return style_profile_1.STYLE_FEEDBACK_MAX_CUES; } });
+Object.defineProperty(exports, "cloneStyleProfile", { enumerable: true, get: function () { return style_profile_1.cloneStyleProfile; } });
+Object.defineProperty(exports, "defaultStyleProfile", { enumerable: true, get: function () { return style_profile_1.defaultStyleProfile; } });
+Object.defineProperty(exports, "parseStyleProfile", { enumerable: true, get: function () { return style_profile_1.parseStyleProfile; } });
+Object.defineProperty(exports, "styleProfilePromptTags", { enumerable: true, get: function () { return style_profile_1.styleProfilePromptTags; } });
+var style_validation_1 = require("./ai/style-validation");
+Object.defineProperty(exports, "validateStyleCandidate", { enumerable: true, get: function () { return style_validation_1.validateStyleCandidate; } });
+var plan_schema_1 = require("./ai/plan-schema");
+Object.defineProperty(exports, "brainPlanSchema", { enumerable: true, get: function () { return plan_schema_1.brainPlanSchema; } });
+Object.defineProperty(exports, "brainPlanStepSchema", { enumerable: true, get: function () { return plan_schema_1.brainPlanStepSchema; } });
+Object.defineProperty(exports, "brainHexColor", { enumerable: true, get: function () { return plan_schema_1.brainHexColor; } });
 var serialized_1 = require("./types/serialized");
 Object.defineProperty(exports, "isSerializedProjectV2", { enumerable: true, get: function () { return serialized_1.isSerializedProjectV2; } });
 // ---------------------------------------------------------------------------
@@ -72,10 +91,15 @@ Object.defineProperty(exports, "clearBufferInPlace", { enumerable: true, get: fu
 Object.defineProperty(exports, "drawLinePixels", { enumerable: true, get: function () { return ops_1.drawLinePixels; } });
 Object.defineProperty(exports, "drawRectPixels", { enumerable: true, get: function () { return ops_1.drawRectPixels; } });
 Object.defineProperty(exports, "floodFill", { enumerable: true, get: function () { return ops_1.floodFill; } });
+Object.defineProperty(exports, "floodFillDither", { enumerable: true, get: function () { return ops_1.floodFillDither; } });
 Object.defineProperty(exports, "getPixel", { enumerable: true, get: function () { return ops_1.getPixel; } });
+Object.defineProperty(exports, "inBrushDisc", { enumerable: true, get: function () { return ops_1.inBrushDisc; } });
 Object.defineProperty(exports, "inBounds", { enumerable: true, get: function () { return ops_1.inBounds; } });
 Object.defineProperty(exports, "moveBuffer", { enumerable: true, get: function () { return ops_1.moveBuffer; } });
+Object.defineProperty(exports, "pixelPerfectStroke", { enumerable: true, get: function () { return ops_1.pixelPerfectStroke; } });
+Object.defineProperty(exports, "beautifyLayer", { enumerable: true, get: function () { return ops_1.beautifyLayer; } });
 Object.defineProperty(exports, "stampBrush", { enumerable: true, get: function () { return ops_1.stampBrush; } });
+Object.defineProperty(exports, "stampCustomBuffer", { enumerable: true, get: function () { return ops_1.stampCustomBuffer; } });
 var ellipse_1 = require("./pixels/ellipse");
 Object.defineProperty(exports, "drawEllipsePixels", { enumerable: true, get: function () { return ellipse_1.drawEllipsePixels; } });
 Object.defineProperty(exports, "ellipseOutlinePoints", { enumerable: true, get: function () { return ellipse_1.ellipseOutlinePoints; } });
@@ -89,6 +113,8 @@ Object.defineProperty(exports, "flipRegionVInPlace", { enumerable: true, get: fu
 Object.defineProperty(exports, "pasteRegionInPlace", { enumerable: true, get: function () { return region_1.pasteRegionInPlace; } });
 Object.defineProperty(exports, "rotateRegionCCWInPlace", { enumerable: true, get: function () { return region_1.rotateRegionCCWInPlace; } });
 Object.defineProperty(exports, "rotateRegionCWInPlace", { enumerable: true, get: function () { return region_1.rotateRegionCWInPlace; } });
+Object.defineProperty(exports, "scaleRegionInPlace", { enumerable: true, get: function () { return region_1.scaleRegionInPlace; } });
+Object.defineProperty(exports, "scaleRegionToInPlace", { enumerable: true, get: function () { return region_1.scaleRegionToInPlace; } });
 var tile_1 = require("./pixels/tile");
 Object.defineProperty(exports, "TILE_BYTES", { enumerable: true, get: function () { return tile_1.TILE_BYTES; } });
 Object.defineProperty(exports, "TILE_PIXELS", { enumerable: true, get: function () { return tile_1.TILE_PIXELS; } });
@@ -132,6 +158,7 @@ Object.defineProperty(exports, "layerDelete", { enumerable: true, get: function 
 Object.defineProperty(exports, "layerDuplicate", { enumerable: true, get: function () { return builtins_1.layerDuplicate; } });
 Object.defineProperty(exports, "layerMergeDown", { enumerable: true, get: function () { return builtins_1.layerMergeDown; } });
 Object.defineProperty(exports, "layerMove", { enumerable: true, get: function () { return builtins_1.layerMove; } });
+Object.defineProperty(exports, "layerReorder", { enumerable: true, get: function () { return builtins_1.layerReorder; } });
 Object.defineProperty(exports, "layerSetLinked", { enumerable: true, get: function () { return builtins_1.layerSetLinked; } });
 Object.defineProperty(exports, "layerSetProps", { enumerable: true, get: function () { return builtins_1.layerSetProps; } });
 Object.defineProperty(exports, "paletteAddColor", { enumerable: true, get: function () { return builtins_1.paletteAddColor; } });
@@ -140,6 +167,7 @@ Object.defineProperty(exports, "projectRename", { enumerable: true, get: functio
 Object.defineProperty(exports, "settingsSetOnion", { enumerable: true, get: function () { return builtins_1.settingsSetOnion; } });
 Object.defineProperty(exports, "trashPurge", { enumerable: true, get: function () { return builtins_1.trashPurge; } });
 Object.defineProperty(exports, "trashRestore", { enumerable: true, get: function () { return builtins_1.trashRestore; } });
+Object.defineProperty(exports, "blendChannel", { enumerable: true, get: function () { return builtins_1.blendChannel; } });
 var pixel_commands_1 = require("./bus/pixel-commands");
 Object.defineProperty(exports, "applyPixelOpsCommand", { enumerable: true, get: function () { return pixel_commands_1.applyPixelOpsCommand; } });
 // ---------------------------------------------------------------------------
@@ -177,6 +205,112 @@ Object.defineProperty(exports, "isSerializedProjectV1", { enumerable: true, get:
 Object.defineProperty(exports, "mapV1Loop", { enumerable: true, get: function () { return v1_1.mapV1Loop; } });
 Object.defineProperty(exports, "v1ClipSkeleton", { enumerable: true, get: function () { return v1_1.v1ClipSkeleton; } });
 Object.defineProperty(exports, "v2ProjectShell", { enumerable: true, get: function () { return v1_1.v2ProjectShell; } });
+// ---------------------------------------------------------------------------
+// AI generation system (Task 9): deterministic normalize v2 + OKLab palette
+// math + the provider/generation contract shared by web route & desktop job
+// runner — pure, DOM-free (v3.1 Plan §3, §8.3)
+// ---------------------------------------------------------------------------
+var oklab_1 = require("./ai/oklab");
+// oklab
+Object.defineProperty(exports, "linearToSrgb", { enumerable: true, get: function () { return oklab_1.linearToSrgb; } });
+Object.defineProperty(exports, "oklabDistance2", { enumerable: true, get: function () { return oklab_1.oklabDistance2; } });
+Object.defineProperty(exports, "oklabToRgb", { enumerable: true, get: function () { return oklab_1.oklabToRgb; } });
+Object.defineProperty(exports, "parseHexColor", { enumerable: true, get: function () { return oklab_1.parseHexColor; } });
+Object.defineProperty(exports, "rgbDistance2", { enumerable: true, get: function () { return oklab_1.rgbDistance2; } });
+Object.defineProperty(exports, "rgbToOklab", { enumerable: true, get: function () { return oklab_1.rgbToOklab; } });
+Object.defineProperty(exports, "srgbToLinear", { enumerable: true, get: function () { return oklab_1.srgbToLinear; } });
+var normalize_v2_1 = require("./ai/normalize-v2");
+// pipeline steps (pure + independently testable)
+Object.defineProperty(exports, "applyAlphaThreshold", { enumerable: true, get: function () { return normalize_v2_1.applyAlphaThreshold; } });
+Object.defineProperty(exports, "cleanupOutlineFringe", { enumerable: true, get: function () { return normalize_v2_1.cleanupOutlineFringe; } });
+Object.defineProperty(exports, "cleanupOutlineFringeWithColor", { enumerable: true, get: function () { return normalize_v2_1.cleanupOutlineFringeWithColor; } });
+Object.defineProperty(exports, "despeckleIsolated", { enumerable: true, get: function () { return normalize_v2_1.despeckleIsolated; } });
+Object.defineProperty(exports, "dominantColorDownscale", { enumerable: true, get: function () { return normalize_v2_1.dominantColorDownscale; } });
+Object.defineProperty(exports, "fitBufferToCanvas", { enumerable: true, get: function () { return normalize_v2_1.fitBufferToCanvas; } });
+Object.defineProperty(exports, "floodRemoveBackground", { enumerable: true, get: function () { return normalize_v2_1.floodRemoveBackground; } });
+Object.defineProperty(exports, "floodRemoveBackgroundWithColor", { enumerable: true, get: function () { return normalize_v2_1.floodRemoveBackgroundWithColor; } });
+Object.defineProperty(exports, "medianCutPalette", { enumerable: true, get: function () { return normalize_v2_1.medianCutPalette; } });
+Object.defineProperty(exports, "harvestPalette", { enumerable: true, get: function () { return normalize_v2_1.harvestPalette; } });
+Object.defineProperty(exports, "nearestNeighborContain", { enumerable: true, get: function () { return normalize_v2_1.nearestNeighborContain; } });
+Object.defineProperty(exports, "normalizeV2", { enumerable: true, get: function () { return normalize_v2_1.normalizeV2; } });
+Object.defineProperty(exports, "quantizeToPalette", { enumerable: true, get: function () { return normalize_v2_1.quantizeToPalette; } });
+Object.defineProperty(exports, "removeEnclosedBgResidue", { enumerable: true, get: function () { return normalize_v2_1.removeEnclosedBgResidue; } });
+Object.defineProperty(exports, "removeStrayComponents", { enumerable: true, get: function () { return normalize_v2_1.removeStrayComponents; } });
+Object.defineProperty(exports, "sampleBorderColor", { enumerable: true, get: function () { return normalize_v2_1.sampleBorderColor; } });
+Object.defineProperty(exports, "sampleBorderColorMedian", { enumerable: true, get: function () { return normalize_v2_1.sampleBorderColorMedian; } });
+Object.defineProperty(exports, "trimContentBBox", { enumerable: true, get: function () { return normalize_v2_1.trimContentBBox; } });
+Object.defineProperty(exports, "DEFAULT_NORMALIZE2_OPTIONS", { enumerable: true, get: function () { return normalize_v2_1.DEFAULT_NORMALIZE2_OPTIONS; } });
+var quality_1 = require("./ai/quality");
+// output quality report (Task 9 quality follow-up) — non-destructive checks
+Object.defineProperty(exports, "analyzeSpriteQuality", { enumerable: true, get: function () { return quality_1.analyzeSpriteQuality; } });
+var gen_contract_1 = require("./ai/gen-contract");
+// generation contract
+Object.defineProperty(exports, "buildFullPrompt", { enumerable: true, get: function () { return gen_contract_1.buildFullPrompt; } });
+Object.defineProperty(exports, "cacheKeyFor", { enumerable: true, get: function () { return gen_contract_1.cacheKeyFor; } });
+Object.defineProperty(exports, "CapabilityError", { enumerable: true, get: function () { return gen_contract_1.CapabilityError; } });
+Object.defineProperty(exports, "capabilitiesFor", { enumerable: true, get: function () { return gen_contract_1.capabilitiesFor; } });
+Object.defineProperty(exports, "estimateCostUsd", { enumerable: true, get: function () { return gen_contract_1.estimateCostUsd; } });
+Object.defineProperty(exports, "generationTaskStyleTags", { enumerable: true, get: function () { return gen_contract_1.generationTaskStyleTags; } });
+Object.defineProperty(exports, "GENERATION_TASK_SKILLS", { enumerable: true, get: function () { return gen_contract_1.GENERATION_TASK_SKILLS; } });
+Object.defineProperty(exports, "isGenerationTaskSkill", { enumerable: true, get: function () { return gen_contract_1.isGenerationTaskSkill; } });
+Object.defineProperty(exports, "parseOpenAiImagesResponse", { enumerable: true, get: function () { return gen_contract_1.parseOpenAiImagesResponse; } });
+Object.defineProperty(exports, "planOpenAiImagesRequest", { enumerable: true, get: function () { return gen_contract_1.planOpenAiImagesRequest; } });
+Object.defineProperty(exports, "PRICE_TABLE", { enumerable: true, get: function () { return gen_contract_1.PRICE_TABLE; } });
+Object.defineProperty(exports, "priceBasisFor", { enumerable: true, get: function () { return gen_contract_1.priceBasisFor; } });
+Object.defineProperty(exports, "PROVIDER_CAPABILITIES", { enumerable: true, get: function () { return gen_contract_1.PROVIDER_CAPABILITIES; } });
+Object.defineProperty(exports, "RECIPE_PRESETS", { enumerable: true, get: function () { return gen_contract_1.RECIPE_PRESETS; } });
+Object.defineProperty(exports, "requestSizeFor", { enumerable: true, get: function () { return gen_contract_1.requestSizeFor; } });
+Object.defineProperty(exports, "SIZE_PRESETS", { enumerable: true, get: function () { return gen_contract_1.SIZE_PRESETS; } });
+Object.defineProperty(exports, "ZAI_SUPPORTED_SIZES", { enumerable: true, get: function () { return gen_contract_1.ZAI_SUPPORTED_SIZES; } });
+// ---------------------------------------------------------------------------
+// motion presets (Task 10, v3.1 §4.1/§4.1.1): deterministic composer, QA,
+// part ownership, suggest helper — zero DOM
+// ---------------------------------------------------------------------------
+var types_1 = require("./motion/types");
+Object.defineProperty(exports, "AMPLITUDE_MAX", { enumerable: true, get: function () { return types_1.AMPLITUDE_MAX; } });
+Object.defineProperty(exports, "AMPLITUDE_MIN", { enumerable: true, get: function () { return types_1.AMPLITUDE_MIN; } });
+Object.defineProperty(exports, "MOTION_PARAMS_DEFAULTS", { enumerable: true, get: function () { return types_1.MOTION_PARAMS_DEFAULTS; } });
+Object.defineProperty(exports, "rectContains", { enumerable: true, get: function () { return types_1.rectContains; } });
+Object.defineProperty(exports, "rectsIntersect", { enumerable: true, get: function () { return types_1.rectsIntersect; } });
+Object.defineProperty(exports, "scaledOffset", { enumerable: true, get: function () { return types_1.scaledOffset; } });
+var presets_1 = require("./motion/presets");
+Object.defineProperty(exports, "MOTION_PRESETS", { enumerable: true, get: function () { return presets_1.MOTION_PRESETS; } });
+Object.defineProperty(exports, "PRESET_IDS", { enumerable: true, get: function () { return presets_1.PRESET_IDS; } });
+Object.defineProperty(exports, "getPreset", { enumerable: true, get: function () { return presets_1.getPreset; } });
+Object.defineProperty(exports, "resolveParams", { enumerable: true, get: function () { return presets_1.resolveParams; } });
+var composer_1 = require("./motion/composer");
+Object.defineProperty(exports, "planMotion", { enumerable: true, get: function () { return composer_1.planMotion; } });
+Object.defineProperty(exports, "roleKey", { enumerable: true, get: function () { return composer_1.roleKey; } });
+var kit_1 = require("./character/kit");
+Object.defineProperty(exports, "CHARACTER_KIT_VERSION", { enumerable: true, get: function () { return kit_1.CHARACTER_KIT_VERSION; } });
+Object.defineProperty(exports, "KIT_ATTACHMENTS", { enumerable: true, get: function () { return kit_1.KIT_ATTACHMENTS; } });
+Object.defineProperty(exports, "KIT_CANVAS", { enumerable: true, get: function () { return kit_1.KIT_CANVAS; } });
+Object.defineProperty(exports, "KIT_DEFAULT_SELECTION", { enumerable: true, get: function () { return kit_1.KIT_DEFAULT_SELECTION; } });
+Object.defineProperty(exports, "KIT_FOOT_BASELINE_Y", { enumerable: true, get: function () { return kit_1.KIT_FOOT_BASELINE_Y; } });
+Object.defineProperty(exports, "KIT_HEADS", { enumerable: true, get: function () { return kit_1.KIT_HEADS; } });
+Object.defineProperty(exports, "KIT_ITEMS", { enumerable: true, get: function () { return kit_1.KIT_ITEMS; } });
+Object.defineProperty(exports, "KIT_LAYERS", { enumerable: true, get: function () { return kit_1.KIT_LAYERS; } });
+Object.defineProperty(exports, "KIT_OUTFITS", { enumerable: true, get: function () { return kit_1.KIT_OUTFITS; } });
+Object.defineProperty(exports, "KIT_PRESETS", { enumerable: true, get: function () { return kit_1.KIT_PRESETS; } });
+Object.defineProperty(exports, "KIT_ROLE_HEX", { enumerable: true, get: function () { return kit_1.KIT_ROLE_HEX; } });
+Object.defineProperty(exports, "composeKitBuffers", { enumerable: true, get: function () { return kit_1.composeKitBuffers; } });
+Object.defineProperty(exports, "composeKitPreviewRgba", { enumerable: true, get: function () { return kit_1.composeKitPreviewRgba; } });
+Object.defineProperty(exports, "describeKit", { enumerable: true, get: function () { return kit_1.describeKit; } });
+Object.defineProperty(exports, "kitSelectionFromPreset", { enumerable: true, get: function () { return kit_1.kitSelectionFromPreset; } });
+Object.defineProperty(exports, "kitSelectionLabel", { enumerable: true, get: function () { return kit_1.kitSelectionLabel; } });
+Object.defineProperty(exports, "matchKitCharacter", { enumerable: true, get: function () { return kit_1.matchKitCharacter; } });
+Object.defineProperty(exports, "snapToPalette", { enumerable: true, get: function () { return kit_1.snapToPalette; } });
+Object.defineProperty(exports, "validateKitSelection", { enumerable: true, get: function () { return kit_1.validateKitSelection; } });
+var insert_1 = require("./character/insert");
+Object.defineProperty(exports, "insertCharacter", { enumerable: true, get: function () { return insert_1.insertCharacter; } });
+var qa_1 = require("./motion/qa");
+Object.defineProperty(exports, "analyzeClipMotion", { enumerable: true, get: function () { return qa_1.analyzeClipMotion; } });
+Object.defineProperty(exports, "analyzeMotionPlan", { enumerable: true, get: function () { return qa_1.analyzeMotionPlan; } });
+Object.defineProperty(exports, "diffChangedPixels", { enumerable: true, get: function () { return qa_1.diffChangedPixels; } });
+Object.defineProperty(exports, "footContactIssues", { enumerable: true, get: function () { return qa_1.footContactIssues; } });
+Object.defineProperty(exports, "QA_OPTIONS_DEFAULTS", { enumerable: true, get: function () { return qa_1.QA_OPTIONS_DEFAULTS; } });
+var suggest_1 = require("./motion/suggest");
+Object.defineProperty(exports, "suggestMotionPreset", { enumerable: true, get: function () { return suggest_1.suggestMotionPreset; } });
 // ---------------------------------------------------------------------------
 // buffer utils
 // ---------------------------------------------------------------------------

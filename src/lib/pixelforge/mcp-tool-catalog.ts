@@ -8,12 +8,11 @@
 // through the real MCP client, so drift between the two files surfaces in
 // tests.
 //
-// DEFERRED tools (documented, NOT listed — Task 11/P1 dependencies):
-//   L2/L3: resize_canvas, save_project-as, export_*, purge_trash,
-//   generate_sprite (P1 approval center / Task 11 — paid ops are never
-//   unrestricted L1; v3.1 §5.2)
-// Task 9 adds get_candidates (L0) + accept/reject_candidate + apply_normalize
-// (L1) over the AI candidate review cache.
+// Subscription-only product: there is NO provider-backed image generation
+// and no paid tools — generate_sprite and the AI-candidate review cache were
+// removed; procedural VFX (list_vfx / generate_vfx) runs locally in-app.
+// DEFERRED tools (documented, NOT listed — dependencies):
+//   L2/L3: resize_canvas, save_project-as, export_*, purge_trash.
 // Task 10 adds the motion set: suggest_motion_preset (L0), set_parts +
 // apply_motion_preset (L1).
 
@@ -25,16 +24,10 @@ export interface McpToolInfo {
 }
 
 export const MCP_TOOLS: McpToolInfo[] = [
-  {
-    name: 'get_candidates',
-    tier: 'L0',
-    description: 'AI sprite candidates in the review cache: provenance (prompt/model/provider), status and small previews.',
-    example: { limit: 4 },
-  },
-  {
+    {
     name: 'get_project_state',
     tier: 'L0',
-    description: 'Active project summary: name, size, palette, clips, trash, dirty flag and the document stateHash.',
+    description: 'Active project summary: name, size, palette, project Style Lock, clips, trash, dirty flag and the document stateHash.',
     example: {},
   },
   {
@@ -60,6 +53,18 @@ export const MCP_TOOLS: McpToolInfo[] = [
     tier: 'L0',
     description: 'The project palette and palette-enforcement flag.',
     example: {},
+  },
+  {
+    name: 'list_vfx',
+    tier: 'L0',
+    description: 'Catalog of deterministic procedural pixel-art VFX renderable locally by generate_vfx. Filter by category (fire, explosions, ice, lightning, arcane, nature, ui, pickups, …).',
+    example: { category: 'fire' },
+  },
+  {
+    name: 'generate_vfx',
+    tier: 'L1',
+    description: 'Render a procedural VFX effect (from list_vfx) into a NEW clip — deterministic (seeded), free, one undo transaction, optional dark→bright project-palette ramp. Runs fully inside PixelForge: no image-provider request.',
+    example: { effect: 'fire/campfire', light: 0.6, palette: 'project' },
   },
   {
     name: 'preview_animation',
@@ -248,6 +253,12 @@ export const MCP_TOOLS: McpToolInfo[] = [
     example: { colors: ['#0d0d0d', '#f4f4f4', '#14b8a6'] },
   },
   {
+    name: 'set_style_profile',
+    tier: 'L1',
+    description: 'Update the shared project Style Lock used by PixelForge, connected IDEs, and AI generation. References are existing project frame ids; inspect them with get_frame_png. Undoable; palette enforcement stays inside PixelForge.',
+    example: { profile: { enabled: true, name: 'Forest sprites', artDirection: 'cozy 16-bit fantasy RPG', lighting: 'top-left', outline: 'dark-1px', paletteMode: 'enforce', transparentBackground: true, notes: 'chunky proportions; no gradients', references: [{ clipId: 'cl_idle', frameId: 'fr_1', label: 'idle · frame 1' }], feedback: { prefer: ['chunky silhouette'], avoid: ['smooth gradients'] } } },
+  },
+  {
     name: 'import_image_as_layer',
     tier: 'L1',
     description: 'Import a base64 PNG (≤2 MB, exact canvas size) as a NEW layer on the target frame.',
@@ -259,13 +270,7 @@ export const MCP_TOOLS: McpToolInfo[] = [
     description: 'Import a sprite-sheet PNG (columns × rows of canvas-sized cells) as a NEW animated clip — one layer per frame, one undo step.',
     example: { name: 'run-cycle', columns: 4, rows: 3, fps: 12, pngBase64: '<base64 PNG>' },
   },
-  {
-    name: 'generate_sprite',
-    tier: 'L3',
-    description: 'PAID: generate pixel-art candidates from a text prompt via the configured provider (L3 credential + per-call approval). Review with get_candidates, import with accept_candidate.',
-    example: { prompt: 'treasure chest, gold trim', count: 2 },
-  },
-  {
+    {
     name: 'beautify_layer',
     tier: 'L1',
     description: 'One-call polish: 1px outline around the active layer + directional shading on bottom/right edges (light from top-left). Undoable.',
@@ -307,25 +312,7 @@ export const MCP_TOOLS: McpToolInfo[] = [
     description: 'Run 1–50 tool calls as ONE undoable transaction (all-or-nothing: any failure rolls everything back). One round-trip, one undo entry.',
     example: { steps: [{ tool: 'set_pixels', args: { pixels: [{ x: 1, y: 1 }], color: '#000000' } }, { tool: 'beautify_layer', args: { outline: '#151111' } }] },
   },
-  {
-    name: 'accept_candidate',
-    tier: 'L1',
-    description: 'Accept an AI candidate: import its normalized pixels as a NEW layer (mode "layer") or NEW frame (mode "frame") — one undoable transaction, never overwrites art.',
-    example: { candidateId: '<id from get_candidates>', mode: 'layer' },
-  },
-  {
-    name: 'reject_candidate',
-    tier: 'L1',
-    description: 'Reject an AI candidate and drop it from the review cache (document untouched).',
-    example: { candidateId: '<id from get_candidates>' },
-  },
-  {
-    name: 'apply_normalize',
-    tier: 'L1',
-    description: 'Re-run deterministic normalize-v2 on an AI candidate with adjusted parameters (size, bg removal, palette mode); returns a preview PNG + stats.',
-    example: { candidateId: '<id from get_candidates>', width: 32, height: 32, paletteMode: 'auto' },
-  },
-  {
+        {
     name: 'suggest_motion_preset',
     tier: 'L0',
     description: 'Propose a motion preset (Idle/Walk/Run/Attack/Jump/Spin/Duck/Hurt/Swim/Death) + parameters from a natural-language prompt. Pure helper, $0, deterministic.',
@@ -344,10 +331,10 @@ export const MCP_TOOLS: McpToolInfo[] = [
     example: { preset: 'walk', frameCount: 4, targetName: 'hero-walk' },
   },
   {
-    name: 'get_approvals',
+    name: 'brain_interpret_prompt',
     tier: 'L0',
-    description: 'Read the paid-op approval queue (pending + recent decisions). Approve/Deny happens only in the editor UI — no MCP tool can approve spend.',
-    example: {},
+    description: 'Second Brain reasoning layer: interpret a short, incomplete, or misspelled prompt against the active project context, fix errors, infer missing details, and return an enhanced prompt + recommended tool workflow.',
+    example: { prompt: 'make hero wlak 4 frames' },
   },
   {
     name: 'undo',

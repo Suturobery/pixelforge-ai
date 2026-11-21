@@ -28,6 +28,7 @@ const v1_2 = require("./v1");
 const png_1 = require("../persist/png");
 const base64_1 = require("../persist/base64");
 const errors_1 = require("../persist/errors");
+const style_profile_1 = require("../style-profile");
 class V1ProjectImporter {
     async import(raw, resolver, opts = {}) {
         if (!(0, v1_1.isSerializedProjectV1)(raw)) {
@@ -52,6 +53,15 @@ class V1ProjectImporter {
             else if (v1Onion.prev !== undefined || v1Onion.next !== undefined) {
                 warnings.push('project.settings.onion: invalid values ignored — using defaults');
             }
+        }
+        // Optional style contract added by PixelForge. Classic v1 readers ignore
+        // the field, while the importer validates it before AI can use it.
+        if (v1.settings?.styleProfile !== undefined) {
+            const profile = (0, style_profile_1.parseStyleProfile)(v1.settings.styleProfile);
+            if (profile)
+                project.settings.styleProfile = profile;
+            else
+                warnings.push('project.settings.styleProfile: invalid profile ignored');
         }
         for (const v1Clip of v1.clips) {
             project.clips.push(await importClip(v1Clip, v1, resolver, warnings));
@@ -79,7 +89,13 @@ async function importClip(v1Clip, v1, resolver, warnings) {
         for (const layer of frame.layers) {
             if (!layerProps.has(layer.name)) {
                 layerNames.push(layer.name);
-                layerProps.set(layer.name, { id: layer.id, visible: layer.visible, opacity: layer.opacity });
+                layerProps.set(layer.name, {
+                    id: layer.id,
+                    visible: layer.visible,
+                    opacity: layer.opacity,
+                    locked: layer.locked === true,
+                    ...(layer.blend && layer.blend !== 'normal' ? { blend: layer.blend } : {}),
+                });
             }
             else {
                 const first = layerProps.get(layer.name);
@@ -100,10 +116,15 @@ async function importClip(v1Clip, v1, resolver, warnings) {
             visible: props.visible,
             opacity: props.opacity,
             linked: false, // v1 has no linked concept
+            ...(props.locked ? { locked: true } : {}),
+            ...(props.blend ? { blend: props.blend } : {}),
         };
     });
     clip.layers = layers;
     const byName = new Map(layers.map((l) => [l.name, l]));
+    // parts reference layer ids — resolves against the first-occurrence ids
+    // (v1 files with per-frame differing ids already warn about name matching)
+    const byId = new Map(layers.map((l) => [l.id, l]));
     const frames = [];
     for (const v1Frame of v1Clip.frames) {
         const cels = {};
@@ -158,6 +179,60 @@ async function importClip(v1Clip, v1, resolver, warnings) {
         frames.push({ id: v1Frame.id, durationMs, cels });
     }
     clip.frames = frames;
+    // OPTIONAL Task 10 extension: motion parts (v3.1 §4.1). Only well-formed
+    // entries are adopted; anything invalid warns and is skipped so a corrupt
+    // field can never produce a half-usable composer state.
+    if (Array.isArray(v1Clip.parts)) {
+        const parts = [];
+        const seenNames = new Set();
+        v1Clip.parts.forEach((raw, i) => {
+            const what = `clip "${v1Clip.name}" parts[${i}]`;
+            if (!raw || typeof raw !== 'object') {
+                warnings.push(`${what}: not an object — skipped`);
+                return;
+            }
+            const p = raw;
+            const name = typeof p.name === 'string' ? p.name.trim() : '';
+            if (!name || name.length > 40) {
+                warnings.push(`${what}: invalid name — skipped`);
+                return;
+            }
+            const key = name.toLowerCase();
+            if (seenNames.has(key)) {
+                warnings.push(`${what}: duplicate name "${name}" — skipped`);
+                return;
+            }
+            const layer = typeof p.layerId === 'string' ? byId.get(p.layerId) : undefined;
+            if (!layer) {
+                warnings.push(`${what}: layerId not found — skipped`);
+                return;
+            }
+            let rect;
+            if (p.rect !== undefined) {
+                const r = p.rect;
+                const x = r.x, y = r.y, w = r.w, h = r.h;
+                const ints = typeof x === 'number' && Number.isInteger(x) &&
+                    typeof y === 'number' && Number.isInteger(y) &&
+                    typeof w === 'number' && Number.isInteger(w) && w >= 1 &&
+                    typeof h === 'number' && Number.isInteger(h) && h >= 1;
+                if (!ints || x < 0 || y < 0 || x + w > v1.width || y + h > v1.height) {
+                    warnings.push(`${what}: rect out of bounds — skipped`);
+                    return;
+                }
+                rect = { x, y, w: w, h: h };
+            }
+            const anchorFrameId = typeof p.anchorFrameId === 'string' && frames.some((f) => f.id === p.anchorFrameId)
+                ? p.anchorFrameId
+                : frames[0]?.id;
+            if (p.anchorFrameId !== undefined && anchorFrameId !== p.anchorFrameId) {
+                warnings.push(`${what}: anchor frame not found — using frame 1`);
+            }
+            const z = typeof p.z === 'number' && Number.isInteger(p.z) ? Math.max(-99, Math.min(99, p.z)) : parts.length;
+            seenNames.add(key);
+            parts.push({ id: `pt_${i}_${name.replace(/[^a-z0-9_-]/gi, '')}`, name, layerId: layer.id, ...(rect ? { rect } : {}), anchorFrameId, z });
+        });
+        clip.parts = parts;
+    }
     return clip;
 }
 /**

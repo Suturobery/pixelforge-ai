@@ -7,7 +7,7 @@
 //   deserializeProject — v1 JSON → v2 runtime document (decodes the PNGs)
 // Both are browser-side (PNG codec uses the canvas).
 
-import { SCHEMA_VERSION, type Project } from '@pixelforge/core'
+import { parseStyleProfile, SCHEMA_VERSION, type Project } from '@pixelforge/core'
 import type {
   SerializedClip,
   SerializedFrame,
@@ -21,7 +21,9 @@ export function serializeProject(p: Project): SerializedProject {
   const { width, height } = p
   const transparent = new Uint8ClampedArray(width * height * 4)
   const { prev, next } = p.settings.onion
-  const settings = prev !== 1 || next !== 0 ? { settings: { onion: { prev, next } } } : {}
+  const settings = prev !== 1 || next !== 0 || p.settings.styleProfile
+    ? { settings: { onion: { prev, next }, ...(p.settings.styleProfile ? { styleProfile: { ...p.settings.styleProfile } } : {}) } }
+    : {}
   return {
     version: 1,
     name: p.name,
@@ -65,6 +67,7 @@ export function serializeProject(p: Project): SerializedProject {
 
 /** v1 JSON contract → v2 runtime document (PNG data URLs decoded to cels). */
 export async function deserializeProject(s: SerializedProject): Promise<Project> {
+  const styleProfile = parseStyleProfile(s.settings?.styleProfile)
   const clips = await Promise.all(
     s.clips.map(async (c) => {
       // classic v1 documents repeat the same layer stack on every frame —
@@ -113,7 +116,11 @@ export async function deserializeProject(s: SerializedProject): Promise<Project>
     width: s.width,
     height: s.height,
     palette: [...s.palette],
-    settings: { paletteEnforce: false, onion: { ...(s.settings?.onion ?? { prev: 1, next: 0 }) } },
+    settings: {
+      paletteEnforce: false,
+      ...(styleProfile ? { styleProfile } : {}),
+      onion: { ...(s.settings?.onion ?? { prev: 1, next: 0 }) },
+    },
     clips,
     trash: [],
   }

@@ -1,12 +1,11 @@
-// PixelForge AI — Dedicated "Second Brain · Groq" Panel.
+// PixelForge AI — Second Brain Panel (deterministic reasoning surface).
 //
 // Functions as the central intelligent reasoning layer of PixelForge AI:
 //   1. Intelligent Prompt Interpreter & Error Corrector — understands short,
 //      incomplete, misspelled, or ambiguous prompts from artists & IDE agents,
 //      infers missing details from the active project context, and enhances them.
-//   2. Goal Orchestrator & MCP Task Board — turns high-level goals into
-//      validated deterministic app steps (VFX, palette) + IDE agent tasks.
-//   3. Project-Aware Advisory Q&A — pixel-art craft, animation, and workflow advice.
+//   2. Agent Task Board — monitors and manages the work delegated to
+//      connected IDE agents (brain_claim_task loop), including cancel/retry.
 //   4. Continuous Learning Memory — learns from user feedback (prefer/avoid cues
 //      and recent IDE agent context) locally without modifying model weights.
 
@@ -19,7 +18,6 @@ import {
   RotateCcw,
   Send,
   ListChecks,
-  Play,
   WandSparkles,
   Check,
   Copy,
@@ -27,65 +25,43 @@ import {
   ThumbsDown,
   Plus,
   X,
-  ArrowRight,
-  Sparkles,
   Activity,
   Bot,
   Eraser,
+  ClipboardList,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { useEditor } from '@/lib/pixelforge/store'
-import { useAppSettings } from '@/lib/pixelforge/settings'
-import { readBrainUsage, recordBrainCall, resetBrainUsage, type BrainUsage } from '@/lib/pixelforge/ai-usage'
-import { describeApiErrorInline } from '@/lib/pixelforge/api-error'
 import { mcpCtrl } from '@/lib/pixelforge/mcp-bridge'
 import { copyText, desktopConfirm } from '@/lib/pixelforge/desktop-bridge'
 import {
   addBrainPreference,
-  buildBrainProjectContext,
-  callBrain,
-  checkPlanFreshness,
   clearBrainSessionContext,
   exportBrainMemory,
   interpretAndEnhancePrompt,
   readBrainMemory,
-  recordAgentContextEvent,
   recordBrainFeedback,
   removeBrainPreference,
   resetBrainMemory,
-  resolveBrainProvider,
   subscribeBrainMemory,
   writeBrainMemory,
-  planStepToToolCall,
-  type BrainCallPayload,
-  type BrainProjectIdentity,
-  type PlanStep,
   type PromptCorrection,
   type SecondBrainMemory,
 } from '@/lib/pixelforge/brain-core'
-import { computeStateHash, executeMcpTool, type ToolExecContext } from '@/lib/pixelforge/mcp-tools'
 import { MCP_TOOLS } from '@/lib/pixelforge/mcp-tool-catalog'
-
-/** Panel executions ride the shared dispatcher with an explicit identity so
- * the audit trail distinguishes the artist's own runs from agent work. */
-const PANEL_EXEC_CTX: ToolExecContext = { clientId: 'second-brain-panel', clientName: 'second-brain', tier: 'L1' }
-
-async function pushAgentTasks(steps: PlanStep[], planId: string | null, replacePending: boolean): Promise<boolean> {
-  const res = await mcpCtrl<{ tasks: unknown[] }>({
-    kind: 'brain-push',
-    // idempotency keys make a re-queue of the same plan a no-op instead of a duplicate
-    tasks: steps.map((s) => ({
-      title: s.title,
-      detail: s.detail ?? '',
-      ...(planId ? { idempotencyKey: `${planId}:${s.title}` } : {}),
-    })),
-    ...(planId ? { planId } : {}),
-    replacePending,
-  })
-  return Boolean(res.ok)
-}
+import {
+  defaultBriefFields,
+  buildAssetBrief,
+  type AssetBriefFields,
+} from '@/lib/pixelforge/asset-brief'
+import {
+  describeKit,
+  kitSelectionFromPreset,
+  matchKitCharacter,
+} from '@pixelforge/core'
 
 const QUICK_PROMPT_EXAMPLES = [
   'make knigth wlak no bg',
@@ -108,17 +84,8 @@ export function SecondBrain() {
   const activeClipId = useEditor((s) => s.activeClipId)
   const activeLayerId = useEditor((s) => s.activeLayerId)
   const activeFrameIndex = useEditor((s) => s.activeFrameIndex)
-  const setRightTab = useEditor((s) => s.setRightTab)
-  const setRightOpen = useEditor((s) => s.setRightOpen)
-  const requestAgentRun = useEditor((s) => s.requestAgentRun)
-
-  const aiProviders = useAppSettings((s) => s.aiProviders)
-  const secureMode = useAppSettings((s) => s.secureMode)
-  const keyStatus = useAppSettings((s) => s.keyStatus)
-  const brainProviderId = useAppSettings((s) => s.brainProviderId)
-  const { provider: brainProfile, hasKey } = resolveBrainProvider(aiProviders, secureMode, keyStatus, brainProviderId)
-  const brainLabel = brainProfile ? brainProfile.label.replace(/ \(second brain\)$/, '') : 'local'
-
+  const setCreatorDraft = useEditor((s) => s.setCreatorDraft)
+  const requestRightTab = useEditor((s) => s.requestRightTab)
   // Continuous learning memory state
   const [memory, setMemory] = useState<SecondBrainMemory>(() => readBrainMemory())
   useEffect(() => {
@@ -128,14 +95,6 @@ export function SecondBrain() {
 
   // Prompt Interpreter & Enhancer state
   const [rawPrompt, setRawPrompt] = useState('')
-  const [deepInterpreting, setDeepInterpreting] = useState(false)
-  const [deepResult, setDeepResult] = useState<{
-    correctedPrompt: string
-    enhancedPrompt: string
-    reasoningSummary: string
-    corrections: PromptCorrection[]
-    pixelArtGuidance: string[]
-  } | null>(null)
   const [copiedEnhanced, setCopiedEnhanced] = useState(false)
   const [memoryExported, setMemoryExported] = useState(false)
   const [feedbackNote, setFeedbackNote] = useState('')
@@ -161,33 +120,6 @@ export function SecondBrain() {
     )
   }, [rawPrompt, project, activeClipId, activeLayerId, activeFrameIndex, memory, editorToolNames])
 
-  // Clear deep Groq override when the raw input changes
-  useEffect(() => {
-    setDeepResult(null)
-    setFeedbackSaved(null)
-  }, [rawPrompt])
-
-  // Advisory state
-  const [question, setQuestion] = useState('')
-  const [answer, setAnswer] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [usage, setUsage] = useState<BrainUsage>(() => readBrainUsage())
-  useEffect(() => setUsage(readBrainUsage()), [])
-
-  // Orchestrator state
-  const [goal, setGoal] = useState('')
-  const [plan, setPlan] = useState<PlanStep[] | null>(null)
-  const [planRevision, setPlanRevision] = useState<string | null>(null)
-  const [planning, setPlanning] = useState(false)
-  const [running, setRunning] = useState(false)
-  const [boardTasks, setBoardTasks] = useState<
-    Array<{ id: string; title: string; status: string; claimedBy: string | null; result: string | null; progress: string | null; verified: boolean | null }>
-  >([])
-  // explicit replace-vs-append for queueing a plan (doc §9.2: never silently
-  // destroy unrelated pending tasks — append is the default)
-  const [replacePending, setReplacePending] = useState(false)
-
   // overview: MCP service, connected agents, pending approvals (doc §12)
   const [mcpStatus, setMcpStatus] = useState<{
     mcpEnabled: boolean
@@ -199,9 +131,100 @@ export function SecondBrain() {
   const [mcpClients, setMcpClients] = useState<
     Array<{ clientId: string; name: string; tier: string; lastSeen: string | null; revoked: boolean }>
   >([])
-  const [pendingApprovals, setPendingApprovals] = useState<
-    Array<{ id: string; tool: string; clientName: string; summary: string }>
+  const [boardTasks, setBoardTasks] = useState<
+    Array<{ id: string; title: string; status: string; claimedBy: string | null; result: string | null; progress: string | null; verified: boolean | null }>
   >([])
+
+  // --- Asset Brief (deterministic work spec → task board; no model call) ---
+  const [brief, setBrief] = useState<AssetBriefFields>(() =>
+    defaultBriefFields(project, readBrainMemory()),
+  )
+  const [briefPreviewOpen, setBriefPreviewOpen] = useState(false)
+  const [briefText, setBriefText] = useState('')
+  const [briefEdited, setBriefEdited] = useState(false)
+  type BriefStatus =
+    | 'sent'
+    | 'copied'
+    | 'not-connected-copied'
+    | 'not-connected-copy-failed'
+    | 'uncertain-copied'
+    | 'uncertain-copy-failed'
+    | 'rejected-copied'
+    | 'rejected-copy-failed'
+    | 'copy-failed'
+    | null
+  const [briefStatus, setBriefStatus] = useState<BriefStatus>(null)
+  const [briefError, setBriefError] = useState<string | null>(null)
+  const [briefBusy, setBriefBusy] = useState(false)
+  const setBriefField = (key: keyof AssetBriefFields, value: string | number | string[]) =>
+    setBrief((f) => ({ ...f, [key]: value }))
+
+  const composeBrief = () => {
+    const { detail } = buildAssetBrief(brief, project, memory)
+    setBriefText(detail)
+    setBriefEdited(false)
+    setBriefPreviewOpen(true)
+    setBriefStatus(null)
+  }
+  const recomposeBrief = () => {
+    const { detail } = buildAssetBrief(brief, project, memory)
+    setBriefText(detail)
+    setBriefEdited(false)
+  }
+  const copyBrief = async () => {
+    try {
+      await copyText(briefText)
+      setBriefStatus('copied')
+    } catch {
+      setBriefStatus('copy-failed')
+    }
+  }
+  const confirmBrief = async () => {
+    if (briefBusy || !briefText.trim()) return
+    setBriefBusy(true)
+    // mcpCtrl failure codes (mcp-bridge.ts): 'not_connected' = the request was
+    // NEVER sent (certain: nothing queued); 'timeout' = sent over an open
+    // socket but the reply was lost (UNCERTAIN — the server may have accepted
+    // the task); any other ok:false is an explicit server rejection. A
+    // mid-send socket error can also throw — treat that as uncertain too.
+    const fallbackCopy = async (okStatus: BriefStatus, failStatus: BriefStatus) => {
+      try {
+        await copyText(briefText)
+        setBriefStatus(okStatus)
+      } catch {
+        setBriefStatus(failStatus)
+      }
+    }
+    try {
+      const res = await mcpCtrl<{ tasks: unknown[] }>({
+        kind: 'brain-push',
+        tasks: [{ title: `Asset brief: ${brief.assetType || 'asset'}`, detail: briefText }],
+      })
+      if (res.ok) {
+        setBriefStatus('sent')
+        void pollBoard()
+        return
+      }
+      const code = res.error?.code ?? 'unknown'
+      setBriefError(res.error?.message ?? null)
+      if (code === 'not_connected') {
+        // certain: the request was never sent — nothing was queued
+        await fallbackCopy('not-connected-copied', 'not-connected-copy-failed')
+      } else if (code === 'timeout' || code === 'unknown') {
+        // uncertain: the server may have accepted the task — reply lost
+        await fallbackCopy('uncertain-copied', 'uncertain-copy-failed')
+      } else {
+        // explicit rejection — confirmed: nothing was queued
+        await fallbackCopy('rejected-copied', 'rejected-copy-failed')
+      }
+    } catch {
+      // transport threw mid-send — delivery unknown → uncertain
+      setBriefError(null)
+      await fallbackCopy('uncertain-copied', 'uncertain-copy-failed')
+    } finally {
+      setBriefBusy(false)
+    }
+  }
 
   // Poll the MCP agent task board + overview facts on one timer
   const pollBoard = useCallback(async () => {
@@ -211,24 +234,18 @@ export function SecondBrain() {
       kind: 'brain-tasks',
     })
     if (res.ok && res.data?.tasks) setBoardTasks(res.data.tasks)
-    const [statusRes, clientsRes, approvalsRes] = await Promise.all([
-      mcpCtrl<{
-        mcpEnabled: boolean
-        editorConnected: boolean
-        clientsPaired: number
-        sessions: number
-        lastProjectName: string | null
-      }>({ kind: 'status' }),
-      mcpCtrl<{ clients: Array<{ clientId: string; name: string; tier: string; lastSeen: string | null; revoked: boolean }> }>({
-        kind: 'clients-list',
-      }),
-      mcpCtrl<{ approvals: { pending: Array<{ id: string; tool: string; clientName: string; summary: string }> } }>({
-        kind: 'approvals-list',
-      }),
-    ])
+    const statusRes = await mcpCtrl<{
+      mcpEnabled: boolean
+      editorConnected: boolean
+      clientsPaired: number
+      sessions: number
+      lastProjectName: string | null
+    }>({ kind: 'status' })
     if (statusRes.ok && statusRes.data) setMcpStatus(statusRes.data)
+    const clientsRes = await mcpCtrl<{
+      clients: Array<{ clientId: string; name: string; tier: string; lastSeen: string | null; revoked: boolean }>
+    }>({ kind: 'clients-list' })
     if (clientsRes.ok && clientsRes.data?.clients) setMcpClients(clientsRes.data.clients)
-    if (approvalsRes.ok && approvalsRes.data?.approvals) setPendingApprovals(approvalsRes.data.approvals.pending)
   }, [])
 
   useEffect(() => {
@@ -236,215 +253,6 @@ export function SecondBrain() {
     const timer = setInterval(() => void pollBoard(), 8000)
     return () => clearInterval(timer)
   }, [pollBoard])
-
-  const projectContextPayload = useCallback(
-    (identity?: BrainProjectIdentity) => buildBrainProjectContext(project, memory, identity),
-    [project, memory],
-  )
-
-  const deepInterpretWithGroq = useCallback(async () => {
-    const p = rawPrompt.trim()
-    if (!p || deepInterpreting || !hasKey) return
-    setDeepInterpreting(true)
-    setError(null)
-    try {
-      const payload: BrainCallPayload = {
-        action: 'interpret',
-        prompt: p,
-        provider: { id: brainProfile?.id ?? brainProviderId, baseUrl: brainProfile?.baseUrl, apiKey: brainProfile?.apiKey, model: brainProfile?.model },
-        project: projectContextPayload(),
-      }
-      const json = await callBrain<{
-        ok: boolean
-        correctedPrompt?: string
-        enhancedPrompt?: string
-        reasoningSummary?: string
-        corrections?: PromptCorrection[]
-        pixelArtGuidance?: string[]
-        usage?: { tokensIn: number; tokensOut: number }
-        error?: string
-      }>(payload)
-      if (!json.ok) throw new Error(describeApiErrorInline(json.error, 'Groq prompt analysis failed'))
-      setDeepResult({
-        correctedPrompt: json.correctedPrompt ?? localInterpretation?.correctedPrompt ?? p,
-        enhancedPrompt: json.enhancedPrompt ?? localInterpretation?.enhancedPrompt ?? p,
-        reasoningSummary: json.reasoningSummary ?? '',
-        corrections:
-          json.corrections && json.corrections.length > 0
-            ? json.corrections
-            : (localInterpretation?.corrections ?? []),
-        pixelArtGuidance:
-          json.pixelArtGuidance && json.pixelArtGuidance.length > 0
-            ? json.pixelArtGuidance
-            : (localInterpretation?.pixelArtGuidance ?? []),
-      })
-      recordAgentContextEvent('second-brain', 'interpret', `Analyzed: "${p.slice(0, 48)}"`)
-      if (json.usage) setUsage(recordBrainCall(json.usage.tokensIn, json.usage.tokensOut))
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Analysis failed')
-    } finally {
-      setDeepInterpreting(false)
-    }
-  }, [rawPrompt, deepInterpreting, hasKey, brainProfile, projectContextPayload, localInterpretation])
-
-  const ask = useCallback(async () => {
-    const q = question.trim()
-    if (!q || busy) return
-    setBusy(true)
-    setError(null)
-    setAnswer(null)
-    try {
-      const interpreted = interpretAndEnhancePrompt(
-        q,
-        project,
-        { clipId: activeClipId, layerId: activeLayerId, frameIndex: activeFrameIndex },
-        memory,
-      )
-      const payload = {
-        question: interpreted.correctedPrompt,
-        provider: { id: brainProfile?.id ?? brainProviderId, baseUrl: brainProfile?.baseUrl, apiKey: brainProfile?.apiKey, model: brainProfile?.model },
-        project: projectContextPayload(),
-      }
-      const json = await callBrain<{ ok: boolean; answer?: string; error?: string; usage?: { tokensIn: number; tokensOut: number } }>(payload)
-      if (!json.ok) throw new Error(describeApiErrorInline(json.error, 'Second brain request failed'))
-      setAnswer(json.answer ?? '')
-      recordAgentContextEvent('second-brain', 'advisory', `Q: "${q.slice(0, 48)}"`)
-      if (json.usage) setUsage(recordBrainCall(json.usage.tokensIn, json.usage.tokensOut))
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Request failed')
-    } finally {
-      setBusy(false)
-    }
-  }, [question, busy, brainProfile, project, activeClipId, activeLayerId, activeFrameIndex, memory, projectContextPayload])
-
-  const planGoal = useCallback(
-    async (overrideGoal?: string) => {
-      const rawGoal = (overrideGoal ?? goal).trim()
-      if (!rawGoal || planning || running) return
-      setPlanning(true)
-      setError(null)
-      setPlan(null)
-      setPlanRevision(null)
-      try {
-        // Automatically run the goal through Second Brain typo correction & context interpretation first
-        const interpreted = interpretAndEnhancePrompt(
-          rawGoal,
-          project,
-          { clipId: activeClipId, layerId: activeLayerId, frameIndex: activeFrameIndex },
-          memory,
-        )
-        // record the document fingerprint the plan was made against so
-        // execution can reject a stale plan instead of applying it silently
-        const revision = await computeStateHash()
-        const payload: BrainCallPayload = {
-          action: 'plan',
-          goal: interpreted.correctedPrompt,
-          provider: { id: brainProfile?.id ?? brainProviderId, baseUrl: brainProfile?.baseUrl, apiKey: brainProfile?.apiKey, model: brainProfile?.model },
-          project: projectContextPayload({ projectId: project.id, revision }),
-        }
-        const json = await callBrain<{ ok: boolean; steps?: PlanStep[]; error?: string }>(payload)
-        if (!json.ok) throw new Error(describeApiErrorInline(json.error, 'Planning failed'))
-        setPlan((json.steps ?? []).map((s) => ({ ...s, status: 'pending' as const })))
-        setPlanRevision(revision)
-        recordAgentContextEvent('second-brain', 'plan', `Planned "${interpreted.correctedPrompt.slice(0, 48)}" (${json.steps?.length ?? 0} steps)`)
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Planning failed')
-      } finally {
-        setPlanning(false)
-      }
-    },
-    [goal, planning, running, brainProfile, project, activeClipId, activeLayerId, activeFrameIndex, memory, projectContextPayload],
-  )
-
-  const runPlan = useCallback(async () => {
-    if (!plan || running) return
-    // freshness gate: a plan made from an older document snapshot must be
-    // re-planned, never applied silently
-    const freshness = checkPlanFreshness(planRevision, await computeStateHash())
-    if (freshness.stale) {
-      setError(freshness.reason)
-      return
-    }
-    setRunning(true)
-    setError(null)
-    const steps = plan.map((s) => ({ ...s }))
-    for (const step of steps) {
-      try {
-        if (step.kind === 'agent') {
-          step.status = 'queued'
-          step.result = 'queued for IDE agents'
-          setPlan([...steps])
-          continue
-        }
-        // dispatch through the SHARED executor — same handler, validation,
-        // state-hash stamping and audit trail as built-in Agent / MCP agents
-        const call = planStepToToolCall(step)
-        if (!call) {
-          step.status = 'failed'
-          step.result = 'unsupported step kind — rejected'
-          setPlan([...steps])
-          continue
-        }
-        step.status = 'pending'
-        setPlan([...steps])
-        const res = await executeMcpTool(call.tool, call.args, PANEL_EXEC_CTX)
-        if (!res.ok) throw new Error(res.error?.message ?? 'step failed')
-        step.status = 'done'
-        if (call.tool === 'generate_vfx') {
-          const d = res.data as { clipName?: string; frames?: number } | undefined
-          step.result = d?.clipName ? `${d.clipName} · ${d.frames ?? '?'}f` : (res.summary ?? 'done')
-        } else {
-          step.result = res.summary ?? 'done'
-        }
-      } catch (err) {
-        step.status = 'failed'
-        step.result = err instanceof Error ? err.message : 'failed'
-      }
-      setPlan([...steps])
-    }
-    const agentSteps = steps.filter((s) => s.status === 'queued')
-    if (agentSteps.length > 0) {
-      const ok = await pushAgentTasks(agentSteps, planRevision, replacePending)
-      if (!ok) setError('Could not queue agent steps — is the MCP server running?')
-      else void pollBoard()
-    }
-    setRunning(false)
-  }, [plan, running, planRevision, replacePending, pollBoard])
-
-  /** Send the validated plan to PixelForge's built-in Agent instead of only
-   * putting creative work on the external MCP task board.  The Agent still
-   * performs L0 inspection first and shows an approval card for every edit or
-   * image-generation request. */
-  const runPlanInApp = useCallback(async () => {
-    if (!plan || running) return
-    // same freshness gate as the direct runner — the built-in Agent re-checks
-    // per-call too, but a stale plan should never reach it silently
-    const freshness = checkPlanFreshness(planRevision, await computeStateHash())
-    if (freshness.stale) {
-      setError(freshness.reason)
-      return
-    }
-    const steps = plan.map((step, index) => {
-      if (step.kind === 'app-vfx') {
-        return `${index + 1}. Create the procedural VFX “${step.effect ?? step.title}”${step.seed !== undefined ? ` with seed ${step.seed}` : ''}${step.light !== undefined ? ` and light ${step.light}` : ''}. Name it “${step.title}”.`
-      }
-      if (step.kind === 'app-palette') {
-        return `${index + 1}. Replace the project palette with these dark-to-bright colors: ${(step.colors ?? []).join(', ')}.`
-      }
-      return `${index + 1}. ${step.detail ?? step.title}`
-    })
-    const goalForAgent = [
-      'Execute this validated Second Brain plan in the open PixelForge project, in order.',
-      'Inspect the project first. Use the matching PixelForge tool for each step. Do not skip the normal approval flow: wait for the artist to approve every document-changing or image-generation action before continuing.',
-      '',
-      ...steps,
-    ].join('\n')
-    requestAgentRun(goalForAgent, 'brain')
-    setRightTab('agent')
-    setRightOpen(true)
-  }, [plan, planRevision, requestAgentRun, running, setRightOpen, setRightTab])
-
-  const resetUsage = () => setUsage(resetBrainUsage())
 
   const clearFinishedTasks = useCallback(async () => {
     const res = await mcpCtrl<{ tasks: typeof boardTasks }>({ kind: 'brain-clear' })
@@ -474,9 +282,21 @@ export function SecondBrain() {
     [pollBoard],
   )
 
-  const effectiveEnhanced = deepResult?.enhancedPrompt ?? localInterpretation?.enhancedPrompt ?? ''
-  const effectiveCorrections = deepResult?.corrections ?? localInterpretation?.corrections ?? []
-  const effectiveGuidance = deepResult?.pixelArtGuidance ?? localInterpretation?.pixelArtGuidance ?? []
+
+  const effectiveEnhanced = localInterpretation?.enhancedPrompt ?? ''
+  const effectiveCorrections = localInterpretation?.corrections ?? []
+  const effectiveGuidance = localInterpretation?.pixelArtGuidance ?? []
+
+  // local character kit — a prompt that names a bundled character can open the
+  // deterministic creator directly (no paired agent, no network)
+  const kitMatch = useMemo(() => matchKitCharacter(rawPrompt), [rawPrompt])
+  const openInCreator = (presetId?: string) => {
+    if (presetId) {
+      const sel = kitSelectionFromPreset(presetId)
+      if (sel) setCreatorDraft(sel)
+    }
+    requestRightTab('create')
+  }
 
   const handleCopyEnhanced = async () => {
     if (!effectiveEnhanced) return
@@ -511,37 +331,12 @@ export function SecondBrain() {
           <div className="flex min-w-0 items-center gap-1.5">
             <Brain className="h-4 w-4 shrink-0 text-frost-400" />
             <div className="min-w-0">
-              <p className="font-mono text-xs font-semibold text-zinc-100">Second Brain · {brainLabel}</p>
+              <p className="font-mono text-xs font-semibold text-zinc-100">Second Brain</p>
               <p className="truncate font-mono text-[10px] text-zinc-400">
                 Turn a rough idea into a usable pixel-art prompt.
               </p>
             </div>
           </div>
-          <span
-            className={`shrink-0 rounded border px-1.5 py-0.5 font-mono text-[9px] uppercase ${
-              hasKey
-                ? 'border-emerald-700/60 bg-emerald-950/40 text-emerald-300'
-                : 'border-amber-700/60 bg-amber-950/40 text-amber-300'
-            }`}
-          >
-            {hasKey ? `${brainLabel} Ready` : 'Local + Key Needed'}
-          </span>
-          {mcpStatus && (
-            <span
-              className={`shrink-0 rounded border px-1.5 py-0.5 font-mono text-[9px] uppercase ${
-                mcpStatus.mcpEnabled && mcpStatus.editorConnected
-                  ? 'border-sky-700/60 bg-sky-950/40 text-sky-300'
-                  : 'border-zinc-700/60 bg-zinc-900/60 text-zinc-400'
-              }`}
-              title={`MCP server ${mcpStatus.mcpEnabled ? 'enabled' : 'disabled'} · editor ${mcpStatus.editorConnected ? 'connected' : 'offline'} · ${mcpStatus.clientsPaired} paired agent(s) · ${mcpStatus.sessions} session(s)`}
-            >
-              {mcpStatus.mcpEnabled
-                ? mcpStatus.editorConnected
-                  ? `MCP · ${mcpStatus.clientsPaired} agent${mcpStatus.clientsPaired === 1 ? '' : 's'}`
-                  : 'MCP · no editor'
-                : 'MCP off'}
-            </span>
-          )}
         </div>
 
         {/* Live Project Context Pills */}
@@ -560,42 +355,6 @@ export function SecondBrain() {
           </span>
         </div>
 
-        {/* Auto-Enhance Master Toggle */}
-        <div className="mt-2 flex items-center justify-between gap-2 border-t border-zinc-800/80 pt-2">
-          <div className="min-w-0">
-            <p className="font-mono text-[10px] text-zinc-200">Auto-enhance studio & IDE prompts</p>
-            <p className="font-mono text-[9px] leading-tight text-zinc-500">
-              Automatically fix typos, expand shorthand & apply learned preferences
-            </p>
-          </div>
-          <Switch
-            checked={memory.autoEnhancePrompts}
-            onCheckedChange={(v) => writeBrainMemory({ autoEnhancePrompts: v })}
-            aria-label="Auto-enhance studio and IDE prompts"
-          />
-        </div>
-
-        {!hasKey && (
-          <p className="mt-2 rounded border border-amber-800/50 bg-amber-950/25 px-2 py-1.5 font-mono text-[10px] leading-tight text-amber-200">
-            Add your {brainLabel} API key in{' '}
-            <button
-              type="button"
-              className="underline hover:text-white"
-              onClick={() => document.querySelector<HTMLButtonElement>('[aria-label="Settings"]')?.click()}
-            >
-              Settings → AI
-            </button>{' '}
-            to unlock LLM deep reasoning, planning, and Q&A.
-          </p>
-        )}
-        {error && (
-          <div
-            role="alert"
-            className="mt-2 rounded border border-red-800/60 bg-red-950/30 px-2 py-1.5 font-mono text-[10px] leading-tight text-red-200"
-          >
-            <span className="font-semibold">Brain request failed:</span> {error}
-          </div>
-        )}
       </div>
 
       {/* ------------------------------------------------ 1. Intelligent Prompt Interpreter & Enhancer */}
@@ -611,42 +370,23 @@ export function SecondBrain() {
           )}
         </div>
         <p className="mb-2 font-mono text-[10px] leading-tight text-zinc-500">
-          Start with the idea. Second Brain handles the cleanup and project context.
+          Start with the idea. Second Brain handles the cleanup and project context. Deterministic — no model, no cost.
         </p>
 
         <div className="space-y-2">
           <Textarea
             value={rawPrompt}
             onChange={(e) => setRawPrompt(e.target.value)}
-            onKeyDown={(e) => {
-              if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && hasKey) {
-                e.preventDefault()
-                void deepInterpretWithGroq()
-              }
-            }}
             placeholder="Describe what you want to make. Typos and shorthand are okay."
             aria-label="Prompt to interpret and enhance"
             className="min-h-[112px] resize-none border-zinc-700 bg-zinc-950 px-3 py-2.5 font-mono text-sm leading-relaxed shadow-inner"
             spellCheck={false}
           />
-          {hasKey && (
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-8 w-full border-zinc-700 font-mono text-[11px] text-frost-300 hover:bg-frost-950/30"
-              onClick={() => void deepInterpretWithGroq()}
-              disabled={deepInterpreting || !rawPrompt.trim()}
-              title="Refine interpretation with Groq LLM"
-            >
-              {deepInterpreting ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Sparkles className="mr-1 h-3 w-3" />}
-              Refine with Groq
-            </Button>
-          )}
         </div>
 
         {/* Quick example chips */}
         <div className="mt-1.5 flex flex-wrap gap-1">
-          {QUICK_PROMPT_EXAMPLES.slice(0, 2).map((ex) => (
+          {QUICK_PROMPT_EXAMPLES.map((ex) => (
             <button
               key={ex}
               type="button"
@@ -680,19 +420,49 @@ export function SecondBrain() {
 
             {/* Enhanced prompt output */}
             <div>
-              <div className="flex items-center justify-between">
-                <p className="text-[9px] uppercase tracking-wider text-teal-400">Enhanced Prompt</p>
-                {deepResult && <span className="text-[8px] uppercase text-frost-400">Groq Refined</span>}
-              </div>
+              <p className="text-[9px] uppercase tracking-wider text-teal-400">Enhanced Prompt</p>
               <p className="mt-0.5 break-words rounded border border-zinc-800 bg-zinc-900/70 p-1.5 text-[10px] leading-relaxed text-zinc-100">
                 {effectiveEnhanced}
               </p>
             </div>
 
-            {deepResult?.reasoningSummary && (
-              <p className="break-words text-[9px] leading-snug text-frost-300/90">
-                Reason: {deepResult.reasoningSummary}
-              </p>
+            {/* Local character kit shortcut — sprite prompts match the bundled
+                32×32 characters; unsupported ones list what the kit supports. */}
+            {localInterpretation.detectedIntent === 'sprite-generation' && (
+              <div className="rounded border border-teal-800/60 bg-teal-950/30 p-1.5">
+                {kitMatch.kind === 'match' ? (
+                  <>
+                    <p className="text-[9px] leading-tight text-teal-200">
+                      <strong className="text-teal-300">{kitMatch.label}</strong> is in the bundled character kit — build it locally
+                      (no paired agent, fully offline).
+                    </p>
+                    <Button
+                      size="sm"
+                      className="mt-1 h-6 w-full font-mono text-[10px]"
+                      onClick={() => openInCreator(kitMatch.presetId)}
+                      title="Open the Create Character panel with this character pre-selected"
+                    >
+                      <WandSparkles className="mr-1 h-3 w-3" /> Open in Create Character
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-[9px] leading-tight text-amber-300/90">
+                      No bundled character matches this brief. {describeKit()} — open the creator and pick parts manually,
+                      or send the brief to a connected IDE agent below.
+                    </p>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="mt-1 h-6 w-full border-zinc-700 font-mono text-[10px]"
+                      onClick={() => openInCreator()}
+                      title="Open the Create Character panel for manual part selection"
+                    >
+                      Open Create Character
+                    </Button>
+                  </>
+                )}
+              </div>
             )}
 
             {/* Inferred context & recommended tools */}
@@ -729,30 +499,17 @@ export function SecondBrain() {
               </div>
             )}
 
-            {/* Action buttons & Continuous Learning Feedback */}
+            {/* Copy & Continuous Learning Feedback */}
             <div className="flex flex-wrap items-center justify-between gap-1.5 border-t border-zinc-800/80 pt-1.5">
-              <div className="flex flex-wrap items-center gap-1">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-6 px-2 font-mono text-[9px] text-zinc-300 hover:text-white"
-                  onClick={() => void handleCopyEnhanced()}
-                >
-                  {copiedEnhanced ? <Check className="mr-1 h-3 w-3 text-emerald-400" /> : <Copy className="mr-1 h-3 w-3" />}
-                  {copiedEnhanced ? 'Copied' : 'Copy'}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-6 px-2 font-mono text-[9px] text-frost-300 hover:text-frost-200"
-                  onClick={() => {
-                    setGoal(effectiveEnhanced)
-                    if (hasKey) void planGoal(effectiveEnhanced)
-                  }}
-                >
-                  <ArrowRight className="mr-1 h-3 w-3" /> Send to Orchestrator
-                </Button>
-              </div>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-6 px-2 font-mono text-[9px] text-zinc-300 hover:text-white"
+                onClick={() => void handleCopyEnhanced()}
+              >
+                {copiedEnhanced ? <Check className="mr-1 h-3 w-3 text-emerald-400" /> : <Copy className="mr-1 h-3 w-3" />}
+                {copiedEnhanced ? 'Copied' : 'Copy'}
+              </Button>
 
               <div className="flex items-center gap-1">
                 <input
@@ -793,99 +550,331 @@ export function SecondBrain() {
         )}
       </div>
 
-      {/* ------------------------------------------------ 2. Goal Orchestrator & Task Board */}
+      {/* ------------------------------------------------ 1.5 Asset Brief → IDE Agent */}
       <details className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-2.5">
         <summary className="flex cursor-pointer list-none items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-zinc-300 [&::-webkit-details-marker]:hidden">
-          <ListChecks className="h-3.5 w-3.5 text-frost-400" /> Goal Orchestrator & IDE Task Board
-          <span className="ml-auto normal-case tracking-normal text-zinc-500">Plan bigger work</span>
+          <ClipboardList className="h-3.5 w-3.5 text-teal-400" /> Asset Brief → IDE Agent
+          <span className="ml-auto normal-case tracking-normal text-zinc-500">game-ready work spec</span>
         </summary>
         <p className="mb-2 font-mono text-[9px] leading-tight text-zinc-500">
-          Break a goal into deterministic app actions (VFX, palette) + structured tasks for connected MCP IDE agents.
+          Describe the asset precisely; the composed brief lands on the agent task board (or your clipboard).
+          Deterministic — no model call.
         </p>
 
-        <div className="flex items-center gap-1">
-          <input
-            value={goal}
-            onChange={(e) => setGoal(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault()
-                void planGoal()
-              }
-            }}
-            placeholder="Goal: make my mimic game-ready…"
-            aria-label="Goal for the orchestrator"
-            className="h-7 min-w-0 flex-1 rounded border border-zinc-800 bg-zinc-950 px-2 font-mono text-[11px] text-zinc-100 placeholder:text-zinc-600"
-            spellCheck={false}
-          />
-          <Button
-            size="sm"
-            className="h-7 shrink-0 px-2.5 font-mono text-[10px]"
-            onClick={() => void planGoal()}
-            disabled={!hasKey || planning || running || !goal.trim()}
-          >
-            {planning ? <Loader2 className="h-3 w-3 animate-spin" /> : <ListChecks className="mr-1 h-3 w-3" />}
-            Plan
-          </Button>
-        </div>
-
-        {plan && plan.length > 0 && (
-          <div className="pixelforge-scroll mt-2 max-h-48 space-y-1 overflow-y-auto rounded border border-zinc-800 bg-zinc-950 p-2">
-            {plan.map((s, i) => (
-              <div key={i} className="flex items-start gap-1.5 font-mono text-[10px] leading-tight">
-                <span
-                  className={
-                    s.status === 'done'
-                      ? 'text-emerald-400'
-                      : s.status === 'failed'
-                        ? 'text-red-400'
-                        : s.status === 'queued'
-                          ? 'text-sky-400'
-                          : 'text-zinc-500'
-                  }
+        {!briefPreviewOpen ? (
+          <>
+            <div className="grid grid-cols-2 gap-1.5">
+              <label className="min-w-0 font-mono text-[9px] text-zinc-400">
+                Asset type
+                <Input
+                  value={brief.assetType}
+                  onChange={(e) => setBriefField('assetType', e.target.value)}
+                  placeholder="knight sprite / campfire / 4-frame walk"
+                  aria-label="Asset type"
+                  className="mt-0.5 h-6 border-zinc-800 bg-zinc-950 px-2 font-mono text-[10px]"
+                />
+              </label>
+              <label className="min-w-0 font-mono text-[9px] text-zinc-400">
+                Canvas
+                <Input
+                  value={`${project.width}×${project.height}`}
+                  readOnly
+                  aria-label="Canvas size (from project)"
+                  className="mt-0.5 h-6 border-zinc-800 bg-zinc-900 px-2 font-mono text-[10px] text-zinc-500"
+                />
+              </label>
+              <label className="min-w-0 font-mono text-[9px] text-zinc-400">
+                Camera angle
+                <select
+                  value={brief.cameraAngle}
+                  onChange={(e) => setBriefField('cameraAngle', e.target.value)}
+                  aria-label="Camera angle"
+                  className="mt-0.5 h-6 w-full rounded border border-zinc-800 bg-zinc-950 px-1.5 font-mono text-[10px] text-zinc-200"
                 >
-                  {s.status === 'done' ? '✓' : s.status === 'failed' ? '✗' : s.status === 'queued' ? '⏳' : '·'}
-                </span>
-                <span className="min-w-0 flex-1 break-words text-zinc-300">
-                  <span className="text-zinc-500">{s.kind === 'agent' ? 'agent' : 'app'}:</span> {s.title}
-                  {s.result ? <span className="text-zinc-500"> — {s.result}</span> : null}
-                </span>
+                  {['side view', 'top-down', 'isometric', 'front', '3/4 view'].map((v) => (
+                    <option key={v} value={v}>{v}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="min-w-0 font-mono text-[9px] text-zinc-400">
+                Facing
+                <select
+                  value={brief.facing}
+                  onChange={(e) => setBriefField('facing', e.target.value)}
+                  aria-label="Facing direction"
+                  className="mt-0.5 h-6 w-full rounded border border-zinc-800 bg-zinc-950 px-1.5 font-mono text-[10px] text-zinc-200"
+                >
+                  {['right', 'left', 'front', 'back', 'up', 'down'].map((v) => (
+                    <option key={v} value={v}>{v}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="min-w-0 font-mono text-[9px] text-zinc-400">
+                Pose / animation goal
+                <Input
+                  value={brief.poseGoal}
+                  onChange={(e) => setBriefField('poseGoal', e.target.value)}
+                  placeholder="4-frame walk cycle / idle bob / attack"
+                  aria-label="Pose or animation goal"
+                  className="mt-0.5 h-6 border-zinc-800 bg-zinc-950 px-2 font-mono text-[10px]"
+                />
+              </label>
+              <label className="min-w-0 font-mono text-[9px] text-zinc-400">
+                Color limit (palette has {project.palette.length})
+                <Input
+                  type="number"
+                  min={2}
+                  max={project.palette.length}
+                  value={brief.colorLimit}
+                  onChange={(e) => setBriefField('colorLimit', Math.max(2, Math.min(project.palette.length, Number(e.target.value) || project.palette.length)))}
+                  aria-label="Color limit"
+                  className="mt-0.5 h-6 border-zinc-800 bg-zinc-950 px-2 font-mono text-[10px]"
+                />
+              </label>
+              <label className="min-w-0 font-mono text-[9px] text-zinc-400">
+                Outline
+                <Input
+                  value={brief.outline}
+                  onChange={(e) => setBriefField('outline', e.target.value)}
+                  aria-label="Outline"
+                  className="mt-0.5 h-6 border-zinc-800 bg-zinc-950 px-2 font-mono text-[10px]"
+                />
+              </label>
+              <label className="min-w-0 font-mono text-[9px] text-zinc-400">
+                Lighting
+                <Input
+                  value={brief.lighting}
+                  onChange={(e) => setBriefField('lighting', e.target.value)}
+                  aria-label="Lighting"
+                  className="mt-0.5 h-6 border-zinc-800 bg-zinc-950 px-2 font-mono text-[10px]"
+                />
+              </label>
+              <label className="min-w-0 font-mono text-[9px] text-zinc-400">
+                Detail level
+                <select
+                  value={brief.detailLevel}
+                  onChange={(e) => setBriefField('detailLevel', e.target.value)}
+                  aria-label="Detail level"
+                  className="mt-0.5 h-6 w-full rounded border border-zinc-800 bg-zinc-950 px-1.5 font-mono text-[10px] text-zinc-200"
+                >
+                  {['low', 'medium', 'high'].map((v) => (
+                    <option key={v} value={v}>{v}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="min-w-0 font-mono text-[9px] text-zinc-400">
+                Must include
+                <Input
+                  value={brief.requiredDetails}
+                  onChange={(e) => setBriefField('requiredDetails', e.target.value)}
+                  placeholder="glow ember, wooden handle…"
+                  aria-label="Required details"
+                  className="mt-0.5 h-6 border-zinc-800 bg-zinc-950 px-2 font-mono text-[10px]"
+                />
+              </label>
+              <label className="min-w-0 font-mono text-[9px] text-zinc-400">
+                Avoid
+                <Input
+                  value={brief.avoid}
+                  onChange={(e) => setBriefField('avoid', e.target.value)}
+                  aria-label="Things to avoid"
+                  className="mt-0.5 h-6 border-zinc-800 bg-zinc-950 px-2 font-mono text-[10px]"
+                />
+              </label>
+              <label className="min-w-0 font-mono text-[9px] text-zinc-400">
+                Notes
+                <Input
+                  value={brief.notes}
+                  onChange={(e) => setBriefField('notes', e.target.value)}
+                  placeholder="optional extras"
+                  aria-label="Brief notes"
+                  className="mt-0.5 h-6 border-zinc-800 bg-zinc-950 px-2 font-mono text-[10px]"
+                />
+              </label>
+            </div>
+
+            {/* reference clips from the active project */}
+            {project.clips.length > 0 && (
+              <div className="mt-1.5">
+                <p className="font-mono text-[9px] uppercase tracking-wider text-zinc-500">Reference clips</p>
+                <div className="mt-0.5 flex flex-wrap gap-1">
+                  {project.clips.map((c) => {
+                    const on = brief.references.includes(c.name)
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() =>
+                          setBriefField(
+                            'references',
+                            on ? brief.references.filter((r) => r !== c.name) : [...brief.references, c.name],
+                          )
+                        }
+                        aria-pressed={on}
+                        aria-label={`Use clip ${c.name} as reference`}
+                        className={`rounded border px-1.5 py-0.5 font-mono text-[9px] ${
+                          on
+                            ? 'border-teal-600/60 bg-teal-950/40 text-teal-300'
+                            : 'border-zinc-800 bg-zinc-900 text-zinc-400 hover:text-zinc-200'
+                        }`}
+                      >
+                        {on ? '✓ ' : ''}{c.name} ({c.frames.length}f)
+                      </button>
+                    )
+                  })}
+                </div>
               </div>
-            ))}
+            )}
+
+            <Button
+              size="sm"
+              className="mt-2 h-7 w-full font-mono text-[10px]"
+              onClick={() => {
+                composeBrief()
+                setBriefPreviewOpen(true)
+              }}
+              disabled={!brief.assetType.trim() && !brief.poseGoal.trim()}
+              title="Compose the brief preview from these fields (fully editable before sending)"
+            >
+              <WandSparkles className="mr-1 h-3 w-3" /> Compose brief preview
+            </Button>
+          </>
+        ) : (
+          <>
+            {/* editable brief preview — this gates only the SEND; agent edits
+                on the canvas are not approval-gated in-app */}
+            <p className="mb-1 font-mono text-[9px] leading-tight text-zinc-500">
+              Editable preview — adjust freely, then Confirm to queue for a connected IDE agent.
+              {briefEdited ? ' (edited — recompose to discard manual edits)' : ''}
+            </p>
+            <Textarea
+              value={briefText}
+              onChange={(e) => {
+                setBriefText(e.target.value)
+                setBriefEdited(true)
+              }}
+              aria-label="Asset brief text (editable)"
+              className="pixelforge-scroll min-h-[140px] resize-y border-zinc-700 bg-zinc-950 px-2.5 py-2 font-mono text-[10px] leading-relaxed"
+              spellCheck={false}
+            />
+            <p className="mt-0.5 font-mono text-[9px] text-zinc-500">
+              {briefText.length}/2000 chars {briefText.length > 2000 ? '— too long, trim it' : ''}
+            </p>
             <div className="mt-1.5 grid grid-cols-2 gap-1">
               <Button
                 size="sm"
                 className="h-7 font-mono text-[10px]"
-                onClick={() => void runPlanInApp()}
-                disabled={running}
-                title="Run this plan with PixelForge's built-in Agent"
+                onClick={() => void confirmBrief()}
+                disabled={briefBusy || !briefText.trim() || briefText.length > 2000}
+                title="Queue this brief on the agent task board"
               >
-                <Bot className="mr-1 h-3 w-3" /> Run in app
+                {briefBusy ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Check className="mr-1 h-3 w-3" />}
+                Confirm & queue
               </Button>
               <Button
                 size="sm"
                 variant="outline"
                 className="h-7 border-zinc-700 font-mono text-[10px]"
-                onClick={() => void runPlan()}
-                disabled={running}
-                title="Run built-in steps and queue creative work for an external MCP/IDE agent"
+                onClick={() => void copyBrief()}
+                title="Copy the brief to the clipboard (fallback: paste into your IDE agent)"
               >
-                {running ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Play className="mr-1 h-3 w-3" />}
-                {running ? 'Running…' : 'Queue external'}
+                <Copy className="mr-1 h-3 w-3" /> Copy brief
               </Button>
             </div>
-            <label className="mt-1 flex items-center gap-1.5 font-mono text-[9px] text-zinc-400">
-              <input
-                type="checkbox"
-                checked={replacePending}
-                onChange={(e) => setReplacePending(e.target.checked)}
-                className="accent-teal-400"
-                aria-label="Replace pending tasks on the board instead of appending"
-              />
-              Replace pending board tasks (default: append)
-            </label>
+            <div className="mt-1 flex items-center justify-between gap-2">
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-6 px-1.5 font-mono text-[9px] text-zinc-400"
+                onClick={() => {
+                  setBriefPreviewOpen(false)
+                  setBriefStatus(null)
+                }}
+                aria-label="Cancel brief preview"
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-6 px-1.5 font-mono text-[9px] text-zinc-400"
+                onClick={recomposeBrief}
+                disabled={!briefEdited}
+                title="Regenerate the preview from the form fields (discards manual edits)"
+              >
+                <RotateCcw className="mr-1 h-2.5 w-2.5" /> Recompose from fields
+              </Button>
+            </div>
+          </>
+        )}
+
+        {briefStatus === 'sent' && (
+          <div role="status" className="mt-2 rounded border border-teal-700/60 bg-teal-950/30 px-2 py-1.5 font-mono text-[10px] leading-tight text-teal-200">
+            <strong>Brief sent to the task board</strong> — pending until an agent claims it. This is NOT “asset done”:
+            edits appear on the canvas when the connected agent finishes (watch the Agent Task Board below, ✓ rows).
           </div>
         )}
+        {briefStatus === 'copied' && (
+          <div role="status" className="mt-2 rounded border border-teal-700/60 bg-teal-950/30 px-2 py-1.5 font-mono text-[10px] leading-tight text-teal-200">
+            <strong>Brief copied — paste it into your IDE agent.</strong> It will execute the same tools on the
+            same project (paired via Settings → MCP).
+          </div>
+        )}
+        {briefStatus === 'not-connected-copied' && (
+          <div role="alert" className="mt-2 rounded border border-amber-700/60 bg-amber-950/30 px-2 py-1.5 font-mono text-[10px] leading-tight text-amber-200">
+            <strong>MCP is not connected — nothing was queued.</strong> Brief copied to your clipboard — paste it
+            into your IDE agent (pairing: Settings → MCP).
+          </div>
+        )}
+        {briefStatus === 'not-connected-copy-failed' && (
+          <div role="alert" className="mt-2 rounded border border-red-800/60 bg-red-950/30 px-2 py-1.5 font-mono text-[10px] leading-tight text-red-200">
+            <strong>MCP is not connected — nothing was queued</strong>, and clipboard copy failed. Copy the brief
+            text from the preview above manually.
+          </div>
+        )}
+        {briefStatus === 'uncertain-copied' && (
+          <div role="alert" className="mt-2 rounded border border-amber-700/60 bg-amber-950/30 px-2 py-1.5 font-mono text-[10px] leading-tight text-amber-200">
+            <strong>Brief copied to your clipboard — but couldn’t confirm whether it was queued.</strong> The
+            reply may have been lost after the server accepted it. Check the task board before retrying.
+          </div>
+        )}
+        {briefStatus === 'uncertain-copy-failed' && (
+          <div role="alert" className="mt-2 rounded border border-red-800/60 bg-red-950/30 px-2 py-1.5 font-mono text-[10px] leading-tight text-red-200">
+            <strong>Couldn’t confirm whether the brief was queued, and clipboard copy failed.</strong> Check the
+            task board before retrying; copy the brief text from the preview above manually if needed.
+          </div>
+        )}
+        {briefStatus === 'rejected-copied' && (
+          <div role="alert" className="mt-2 rounded border border-amber-700/60 bg-amber-950/30 px-2 py-1.5 font-mono text-[10px] leading-tight text-amber-200">
+            <strong>The task board rejected the brief — nothing was queued.</strong>
+            {briefError ? ` Reason: ${briefError}.` : ''} Brief copied to your clipboard — paste it into your IDE
+            agent instead.
+          </div>
+        )}
+        {briefStatus === 'rejected-copy-failed' && (
+          <div role="alert" className="mt-2 rounded border border-red-800/60 bg-red-950/30 px-2 py-1.5 font-mono text-[10px] leading-tight text-red-200">
+            <strong>The task board rejected the brief — nothing was queued</strong>
+            {briefError ? ` (reason: ${briefError})` : ''}, and clipboard copy failed. Copy the brief text from
+            the preview above manually.
+          </div>
+        )}
+        {briefStatus === 'copy-failed' && (
+          <div role="alert" className="mt-2 rounded border border-red-800/60 bg-red-950/30 px-2 py-1.5 font-mono text-[10px] leading-tight text-red-200">
+            <strong>Clipboard copy failed — the brief was NOT copied.</strong> Select the brief text in the
+            preview above and copy it manually.
+          </div>
+        )}
+      </details>
+
+      {/* ------------------------------------------------ 2. Agent Task Board */}
+      <details className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-2.5">
+        <summary className="flex cursor-pointer list-none items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-zinc-300 [&::-webkit-details-marker]:hidden">
+          <ListChecks className="h-3.5 w-3.5 text-frost-400" /> Agent Task Board
+          <span className="ml-auto normal-case tracking-normal text-zinc-500">delegated work</span>
+        </summary>
+        <p className="mb-2 font-mono text-[9px] leading-tight text-zinc-500">
+          Work queued by the artist's plans and external IDE agents. Pending tasks are claimable via brain_claim_task.
+        </p>
 
         {boardTasks.length > 0 && (
           <div className="pixelforge-scroll mt-2 max-h-40 space-y-1 overflow-y-auto rounded border border-zinc-800 bg-zinc-950 p-2 font-mono text-[9px] leading-tight">
@@ -971,11 +960,10 @@ export function SecondBrain() {
       <details className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-2.5">
         <summary className="flex cursor-pointer list-none items-center justify-between [&::-webkit-details-marker]:hidden">
           <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-zinc-300">
-            <Bot className="h-3.5 w-3.5 text-sky-400" /> Connected Agents &amp; Approvals
+            <Bot className="h-3.5 w-3.5 text-sky-400" /> Connected Agents
           </span>
           <span className="font-mono text-[9px] text-zinc-500">
             {mcpClients.filter((c) => !c.revoked).length} paired
-            {pendingApprovals.length > 0 ? ` · ${pendingApprovals.length} approval${pendingApprovals.length === 1 ? '' : 's'} pending` : ''}
           </span>
         </summary>
 
@@ -1014,61 +1002,6 @@ export function SecondBrain() {
               </div>
             ))}
           </div>
-        )}
-
-        <div className="mt-2 border-t border-zinc-800/80 pt-1.5">
-          <p className="font-mono text-[9px] uppercase tracking-wider text-amber-400/90">
-            Pending paid-op approvals ({pendingApprovals.length})
-          </p>
-          {pendingApprovals.length > 0 ? (
-            <ul className="mt-1 space-y-0.5 font-mono text-[9px] leading-tight text-zinc-400">
-              {pendingApprovals.map((a) => (
-                <li key={a.id} className="truncate" title={a.summary}>
-                  <span className="text-amber-300">{a.tool}</span> · <span className="text-zinc-300">{a.clientName}</span>: {a.summary}
-                </li>
-              ))}
-              <li className="text-zinc-500">Decide on the approval cards over the canvas — external agents can never approve their own spend.</li>
-            </ul>
-          ) : (
-            <p className="mt-0.5 font-mono text-[9px] text-zinc-500">Nothing waiting — paid agent requests (e.g. generate_sprite) park here.</p>
-          )}
-        </div>
-      </details>
-
-      {/* ------------------------------------------------ 4. Project-Aware Advisory Q&A */}
-      <details className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-2.5">
-        <summary className="flex cursor-pointer list-none items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-zinc-300 [&::-webkit-details-marker]:hidden">
-          <Brain className="h-3.5 w-3.5 text-emerald-400" /> Advisory Assistant (Q&A)
-          <span className="ml-auto normal-case tracking-normal text-zinc-500">Ask a question</span>
-        </summary>
-        <div className="flex items-center gap-1">
-          <input
-            value={question}
-            onChange={(e) => setQuestion(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault()
-                void ask()
-              }
-            }}
-            placeholder="Ask: what should I build next?"
-            aria-label="Ask the second brain"
-            className="h-7 min-w-0 flex-1 rounded border border-zinc-800 bg-zinc-950 px-2 font-mono text-[11px] text-zinc-100 placeholder:text-zinc-600"
-            spellCheck={false}
-          />
-          <Button
-            size="sm"
-            className="h-7 shrink-0 px-2.5 font-mono text-[10px]"
-            onClick={() => void ask()}
-            disabled={!hasKey || busy || !question.trim()}
-          >
-            {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
-          </Button>
-        </div>
-        {answer && (
-          <p className="pixelforge-scroll mt-2 max-h-44 overflow-y-auto whitespace-pre-wrap rounded border border-zinc-800 bg-zinc-950 p-2 font-mono text-[10px] leading-relaxed text-emerald-300/90">
-            {answer}
-          </p>
         )}
       </details>
 
@@ -1242,24 +1175,6 @@ export function SecondBrain() {
         </div>
       </details>
 
-      {/* ------------------------------------------------ Usage Footer */}
-      <div className="mt-auto flex items-center gap-2 rounded border border-zinc-800/60 bg-zinc-950/60 px-2.5 py-1.5 font-mono text-[9px] text-zinc-500">
-        <span title="today: calls / tokens in / tokens out">
-          today {usage.calls} calls · {usage.tokensIn} in · {usage.tokensOut} out
-        </span>
-        <span title="all time">
-          (all-time {usage.totalCalls} · {usage.totalTokensIn + usage.totalTokensOut} tok)
-        </span>
-        <button
-          type="button"
-          onClick={resetUsage}
-          aria-label="Reset usage counters"
-          title="Reset usage counters"
-          className="ml-auto rounded px-1 hover:bg-zinc-800 hover:text-zinc-300"
-        >
-          <RotateCcw className="h-2.5 w-2.5" />
-        </button>
-      </div>
     </div>
   )
 }

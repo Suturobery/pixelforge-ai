@@ -429,69 +429,6 @@ describe('second-brain prompt intelligence & IDE compatibility', () => {
     expect(untitledPronounRes.correctedPrompt).not.toContain('Painted 42 pixels');
   });
 
-  test('buildGenerationPrompt uses enhancedPrompt when auto-enhance is enabled and avoids duplicate style/preference tags', async () => {
-    const { defaultStyleProfile, styleProfilePromptTags } = await import('../../../packages/core/src/index');
-    const { writeBrainMemory } = await import('../../../src/lib/pixelforge/second-brain-intelligence');
-    const storeModPath = ['..', '..', '..', 'src', 'lib', 'pixelforge', 'store'].join('/');
-    const genModPath = ['..', '..', '..', 'src', 'lib', 'pixelforge', 'ai', 'generate'].join('/');
-    const { useEditor } = (await import(storeModPath)) as {
-      useEditor: {
-        getState: () => {
-          setStyleProfile: (p: unknown) => void;
-        };
-      };
-    };
-    const { buildGenerationPrompt } = (await import(genModPath)) as {
-      buildGenerationPrompt: (params: {
-        prompt: string;
-        recipeId: string;
-        taskSkill?: 'create' | 'variation';
-        styleTags?: string[];
-      }) => string;
-    };
-
-    writeBrainMemory({
-      autoEnhancePrompts: true,
-      prefer: ['crisp 1px pixel clusters'],
-      avoid: ['pillow shading'],
-    });
-
-    const profile = {
-      ...defaultStyleProfile(),
-      enabled: true,
-      artDirection: 'cozy 16-bit fantasy RPG',
-      lighting: 'top-left' as const,
-      outline: 'dark-1px' as const,
-      transparentBackground: true,
-      feedback: { prefer: ['warm rim light'], avoid: ['smooth gradients'] },
-    };
-    useEditor.getState().setStyleProfile(profile);
-
-    const styleTags = styleProfilePromptTags(profile);
-    const fullPrompt = buildGenerationPrompt({
-      prompt: 'knight with sword',
-      recipeId: 'free',
-      taskSkill: 'create',
-      styleTags: [...styleTags, 'crisp 1px pixel clusters'],
-    });
-
-    // Includes inferred canvas/palette/style context from enhancedPrompt
-    expect(fullPrompt).toContain('pixel art canvas');
-    expect(fullPrompt).toContain('palette:');
-    expect(fullPrompt).toContain('cozy 16-bit fantasy RPG');
-    expect(fullPrompt).toContain('warm rim light');
-
-    // Does not duplicate preference or style tags
-    const countOccurrences = (haystack: string, needle: string) =>
-      haystack.toLowerCase().split(needle.toLowerCase()).length - 1;
-    expect(countOccurrences(fullPrompt, 'crisp 1px pixel clusters')).toBe(1);
-    expect(countOccurrences(fullPrompt, 'pillow shading')).toBe(1);
-    expect(countOccurrences(fullPrompt, 'cozy 16-bit fantasy RPG')).toBe(1);
-    expect(countOccurrences(fullPrompt, 'warm rim light')).toBe(1);
-    expect(countOccurrences(fullPrompt, 'smooth gradients')).toBe(1);
-    expect(countOccurrences(fullPrompt, 'transparent background')).toBe(1);
-  });
-
   test('migrates only the legacy default top-left preference and preserves an explicit v2 preference', async () => {
     const { migrateSecondBrainMemory } = await import('../../../src/lib/pixelforge/second-brain-intelligence');
 

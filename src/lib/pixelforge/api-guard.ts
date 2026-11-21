@@ -54,13 +54,25 @@ export function guardStateChange(req: NextRequest): NextResponse | null {
   // There is no account/tenant model for safely exposing them to the internet,
   // so fail closed outside localhost. The packaged Electron renderer is served
   // from 127.0.0.1 and continues to work normally.
+  //
+  // PF_ALLOW_LAN=1 relaxes ONLY the loopback-host rule for viewing the studio
+  // from another device on the SAME local network (phone/tablet). The real
+  // tripwire — the custom agent header cross-origin pages cannot set — stays
+  // in force, so LAN exposure keeps the same drive-by protection as
+  // localhost. Never combine with an untrusted network.
+  const allowLan = process.env.PF_ALLOW_LAN === '1'
   const host = (req.headers.get('host') ?? '').toLowerCase()
   const hostname = host.startsWith('[') ? host.slice(1, host.indexOf(']')) : host.split(':')[0]
-  if (hostname !== '127.0.0.1' && hostname !== 'localhost' && hostname !== '::1') {
+  if (
+    !allowLan &&
+    hostname !== '127.0.0.1' &&
+    hostname !== 'localhost' &&
+    hostname !== '::1'
+  ) {
     return deny(
       'LOCAL_ONLY',
       'This local-first API is available only on localhost.',
-      'Use the packaged desktop app, or add authenticated multi-user API routes before deploying it publicly.',
+      'Use the packaged desktop app, start the server with PF_ALLOW_LAN=1 for same-network viewing, or add authenticated multi-user API routes before deploying it publicly.',
     )
   }
 

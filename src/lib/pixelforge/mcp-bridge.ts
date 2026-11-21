@@ -16,6 +16,7 @@
 // The server side checks Origin for the editor socket, so a drive-by page
 // cannot impersonate the editor (browsers always send Origin).
 
+import { AGENT_FETCH_HEADERS } from './agent-headers'
 import { useAppSettings } from './settings'
 import { getBus } from './store'
 import { notifyInBackground } from './desktop-bridge'
@@ -43,44 +44,7 @@ export interface BridgeState {
   bump: number
 }
 
-// Task 11 approval center: paid MCP ops park server-side until the human
-// clicks Approve/Deny here. Cards read this store; responses go over the
-// same editor socket. The agent has no MCP tool to approve its own spend.
-export interface ApprovalItem {
-  id: string
-  tool: string
-  clientId: string
-  clientName: string
-  requestedAt: string
-  timeoutSec: number
-  summary: string
-}
 
-type ApprovalListener = (items: ApprovalItem[]) => void
-const approvalListeners = new Set<ApprovalListener>()
-let approvalItems: ApprovalItem[] = []
-
-export function getApprovals(): ApprovalItem[] {
-  return approvalItems
-}
-
-export function subscribeApprovals(fn: ApprovalListener): () => void {
-  approvalListeners.add(fn)
-  return () => approvalListeners.delete(fn)
-}
-
-function setApprovals(items: ApprovalItem[]): void {
-  approvalItems = items
-  for (const fn of approvalListeners) fn(items)
-}
-
-/** Human decision → server resolves the parked MCP call. */
-export function respondApproval(id: string, approve: boolean): void {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: 'approval-response', id, approve }))
-  }
-  setApprovals(approvalItems.filter((a) => a.id !== id))
-}
 
 // minimal reactive store for the Settings UI (avoids a zustand dependency
 // cycle — plain subscribe/set here)
@@ -170,12 +134,16 @@ async function candidates(): Promise<string[]> {
 
   const list: string[] = []
   const host = typeof location !== 'undefined' ? location.host : ''
+  // Port from the persisted settings (default 3030) so an isolated dev
+  // instance can run its own MCP server without touching the main one.
+  // The gateway transform below still targets 3030 (proxy embeds only).
+  const mcpPort = useAppSettings.getState().mcpPort ?? 3030
   // loopback first — the server binds 127.0.0.1 and this is the real path on
   // any locally-run setup. The gateway transform below only matters when the
   // page itself is served through a proxy (non-loopback host, sandbox embed);
   // on a directly-opened localhost page it can never complete a handshake
   // and would only spam a browser console error on every failover cycle.
-  list.push('ws://127.0.0.1:3030/')
+  list.push(`ws://127.0.0.1:${mcpPort}/`)
   if (
     host &&
     host !== 'localhost' &&
@@ -226,7 +194,6 @@ async function openSocket(): Promise<void> {
     if (myGen !== generation || failedGens.has(myGen)) return
     failedGens.add(myGen)
     setState({ lastError: reason, status: 'disconnected', server: null })
-    setApprovals([]) // server lost the queue state; cards must not linger
     try {
       socket.close()
     } catch {
@@ -248,11 +215,35 @@ async function openSocket(): Promise<void> {
   }
   ws = socket
 
-  socket.onopen = () => {
+  
+// Editor-link auth (see mini-services/mcp-server/src/editor-auth.ts): the
+// MCP server requires this secret in hello — fetched from the app's own
+// guarded API so only the real editor page can present it.
+let editorKeyCache: string | null = null
+async function ensureEditorKey(): Promise<string | null> {
+  if (editorKeyCache) return editorKeyCache
+  try {
+    const res = await fetch('/api/mcp/editor-key', {
+      headers: { ...AGENT_FETCH_HEADERS },
+      // hello waits on this — without a deadline a hung request leaves the
+      // socket open-but-silent and triggers a reconnect loop
+      signal: AbortSignal.timeout(5000),
+    })
+    if (!res.ok) return null
+    const json = (await res.json()) as { key?: string }
+    editorKeyCache = typeof json.key === 'string' && json.key.length >= 32 ? json.key : null
+  } catch {
+    editorKeyCache = null
+  }
+  return editorKeyCache
+}
+
+socket.onopen = async () => {
     if (myGen !== generation) return
     socket.send(
       JSON.stringify({
         type: 'hello',
+        editorKey: await ensureEditorKey() ?? undefined,
         bridgeVersion: MCP_BRIDGE_VERSION,
         appVersion: 'pixelforge-editor',
         origin: typeof location !== 'undefined' ? location.origin : null,
@@ -279,7 +270,6 @@ async function openSocket(): Promise<void> {
     if (state.status === 'connected') {
       // a healthy link dropped (server restart) — retry from candidate 0
       setState({ status: 'disconnected', server: null })
-      setApprovals([])
       candidateIndex = 0
       scheduleReconnect()
       return
@@ -317,23 +307,6 @@ async function handleMessage(raw: string): Promise<void> {
     }
     case 'pong':
       return
-    case 'approval-request': {
-      const id = typeof msg.id === 'string' ? msg.id : ''
-      if (!id) return
-      const item: ApprovalItem = {
-        id,
-        tool: typeof msg.tool === 'string' ? msg.tool : 'unknown',
-        clientId: typeof msg.clientId === 'string' ? msg.clientId : 'unknown',
-        clientName: typeof msg.clientName === 'string' ? msg.clientName : 'unknown',
-        requestedAt: typeof msg.requestedAt === 'string' ? msg.requestedAt : new Date().toISOString(),
-        timeoutSec: typeof msg.timeoutSec === 'number' ? msg.timeoutSec : 300,
-        summary: typeof (msg.args as { summary?: unknown })?.summary === 'string' ? (msg.args as { summary: string }).summary : '',
-      }
-      setApprovals([...approvalItems.filter((a) => a.id !== id), item])
-      // minimized? surface the request as an OS notification (desktop only)
-      notifyInBackground(`Approval needed: ${item.tool}`, item.summary || `requested by ${item.clientName}`)
-      return
-    }
     case 'tool-request': {
       const id = typeof msg.id === 'string' ? msg.id : ''
       const tool = typeof msg.tool === 'string' ? msg.tool : ''

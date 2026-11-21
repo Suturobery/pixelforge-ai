@@ -25,6 +25,14 @@ export function rememberLastProject(id: string): void {
  * untitled boot — never clobber in-flight work). Returns the project name
  * on success, null when there is nothing (or nothing usable) to restore.
  */
+export function forgetLastProject(): void {
+  try {
+    localStorage.removeItem(KEY)
+  } catch {
+    /* private mode — nothing stored anyway */
+  }
+}
+
 export async function restoreLastProject(): Promise<string | null> {
   let id: string | null = null
   try {
@@ -39,6 +47,12 @@ export async function restoreLastProject(): Promise<string | null> {
 
   try {
     const res = await fetch(`/api/projects/${encodeURIComponent(id)}`, { headers: AGENT_FETCH_HEADERS })
+    // gone from the DB (deleted, or the dev DB was reset): drop the stale id
+    // so the next boot doesn't 404 again — a fresh start is the honest default
+    if (res.status === 404) {
+      forgetLastProject()
+      return null
+    }
     const json = (await res.json()) as { ok: boolean; project?: unknown }
     if (!json.ok || !isSerializedProject(json.project)) return null
     const { project } = await importLegacyProjectJson(json.project, id)
@@ -48,6 +62,6 @@ export async function restoreLastProject(): Promise<string | null> {
     cur.loadProject(project, { projectId: id })
     return project.name
   } catch {
-    return null // deleted or unreachable — a fresh start is the honest default
+    return null // unreachable — a fresh start is the honest default
   }
 }

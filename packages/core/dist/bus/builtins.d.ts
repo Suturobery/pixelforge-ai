@@ -8,7 +8,8 @@
  *
  * All commands are pure: (document in) → (new document out).
  */
-import type { LoopMode } from '../types/document';
+import type { BlendMode, LoopMode } from '../types/document';
+import { type StyleProfile } from '../style-profile';
 import type { CommandDefinition } from '../types/commands';
 interface RenamePayload {
     name: string;
@@ -62,6 +63,8 @@ export declare const layerDuplicate: CommandDefinition<{
     clipId: string;
     layerId: string;
 }>;
+/** Separable blend of one color channel: top (source) over bottom (backdrop), 0..255. */
+export declare function blendChannel(mode: BlendMode | undefined, t: number, b: number): number;
 /**
  * Alpha compositing of the top cel onto the one below, per frame (ported
  * from the prototype store's mergeDown). The top layer is removed; the
@@ -84,9 +87,16 @@ interface LayerSetPropsPayload {
         name?: string;
         visible?: boolean;
         opacity?: number;
+        locked?: boolean;
+        blend?: BlendMode;
     };
 }
 export declare const layerSetProps: CommandDefinition<LayerSetPropsPayload>;
+export declare const layerReorder: CommandDefinition<{
+    clipId: string;
+    layerId: string;
+    to: number;
+}>;
 /**
  * Linked-cel engine switch (C2/C19 — P0 engine support; UI toggle is P2).
  * ON  → pick the anchor frame's cel (first frame holding one) and share it
@@ -104,15 +114,28 @@ export declare const paletteAddColor: CommandDefinition<{
 export declare const paletteRemoveColor: CommandDefinition<{
     hex: string;
 }>;
+/** Replace the whole document palette in one undoable step (preset apply). */
+export declare const paletteReplaceAll: CommandDefinition<{
+    colors: string[];
+}>;
 export declare const trashRestore: CommandDefinition<{
     entryId: string;
 }>;
 export declare const trashPurge: CommandDefinition<{
     entryId: string;
 }>;
+export declare const canvasResize: CommandDefinition<{
+    width: number;
+    height: number;
+    anchor?: 'top-left' | 'center';
+}>;
 export declare const settingsSetOnion: CommandDefinition<{
     prev?: number;
     next?: number;
+}>;
+/** Persist the shared AI/style contract as an undoable document setting. */
+export declare const settingsSetStyleProfile: CommandDefinition<{
+    profile: StyleProfile;
 }>;
 export declare function builtinCommands(): CommandDefinition<never>[];
 export {};

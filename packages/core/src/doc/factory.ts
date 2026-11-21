@@ -15,6 +15,7 @@ import type {
   Project,
 } from '../types/document';
 import { CANVAS_MAX, CANVAS_MIN } from '../types/document';
+import { cloneStyleProfile, defaultStyleProfile } from '../style-profile';
 
 /** Default palette — the prototype's Forge-16 set (store.ts initialProject). */
 export const DEFAULT_PALETTE: string[] = [
@@ -128,6 +129,7 @@ export function createProject(opts: CreateProjectOptions = {}): Project {
     palette: [...(opts.palette ?? DEFAULT_PALETTE)],
     settings: {
       paletteEnforce: true,
+      styleProfile: defaultStyleProfile(),
       onion: { prev: 1, next: 0 },
     },
     clips: [
@@ -157,7 +159,11 @@ export function cloneProject(p: Project): Project {
   return {
     ...p,
     palette: [...p.palette],
-    settings: { paletteEnforce: p.settings.paletteEnforce, onion: { ...p.settings.onion } },
+    settings: {
+      paletteEnforce: p.settings.paletteEnforce,
+      ...(p.settings.styleProfile ? { styleProfile: cloneStyleProfile(p.settings.styleProfile) } : {}),
+      onion: { ...p.settings.onion },
+    },
     trash: p.trash.map((t) => ({ ...t })),
     clips: p.clips.map((c) => ({
       ...c,

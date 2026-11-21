@@ -34,24 +34,27 @@ import { isDesktop } from '@/lib/pixelforge/desktop-bridge'
 import { useSaveProject } from '@/components/pixelforge/use-save'
 import { useKeyboardShortcuts } from '@/components/pixelforge/use-keyboard'
 import { useIsMobile } from '@/components/pixelforge/use-is-mobile'
-import { Layers, Sparkles, Bot, PersonStanding, PanelRightClose, Maximize2, Minimize2, Loader2 } from 'lucide-react'
+import { Layers, Sparkles, Brain, Bot, PersonStanding, UserPlus, Images, PanelRightClose, Maximize2, Minimize2 } from 'lucide-react'
 import { Header } from '@/components/pixelforge/header'
 import { ToolRail } from '@/components/pixelforge/tool-rail'
 import { CanvasStage } from '@/components/pixelforge/canvas-stage'
 import { Timeline } from '@/components/pixelforge/timeline'
 import { LayersPanel } from '@/components/pixelforge/layers-panel'
-import { ApprovalCards } from '@/components/pixelforge/approval-cards'
 import { OnboardingTour } from '@/components/pixelforge/onboarding-tour'
-import { AiPanel } from '@/components/pixelforge/ai-panel'
+import { SecondBrain } from '@/components/pixelforge/second-brain'
 import { AgentPanel } from '@/components/pixelforge/agent-panel'
 import { MotionPanel } from '@/components/pixelforge/motion-panel'
+import { CharacterCreator } from '@/components/pixelforge/character-creator'
+import { ReferenceCreator } from '@/components/pixelforge/reference-creator'
 import { Footer } from '@/components/pixelforge/footer'
 import { cn } from '@/lib/utils'
 import { useToast } from '@/hooks/use-toast'
 
 const RIGHT_TABS: { id: RightTab; label: string; icon: React.ReactNode; tone: 'ember' | 'frost' }[] = [
   { id: 'layers', label: 'Layers', tone: 'ember', icon: <Layers className="h-3.5 w-3.5" aria-hidden /> },
-  { id: 'ai', label: 'AI', tone: 'frost', icon: <Sparkles className="h-3.5 w-3.5" aria-hidden /> },
+  { id: 'create', label: 'Create', tone: 'ember', icon: <UserPlus className="h-3.5 w-3.5" aria-hidden /> },
+  { id: 'reference', label: 'Reference', tone: 'ember', icon: <Images className="h-3.5 w-3.5" aria-hidden /> },
+  { id: 'brain', label: 'Brain', tone: 'frost', icon: <Brain className="h-3.5 w-3.5" aria-hidden /> },
   { id: 'motion', label: 'Motion', tone: 'frost', icon: <PersonStanding className="h-3.5 w-3.5" aria-hidden /> },
   { id: 'agent', label: 'Agent', tone: 'frost', icon: <Bot className="h-3.5 w-3.5" aria-hidden /> },
 ]
@@ -69,10 +72,27 @@ function RightDock({ mobile }: { mobile: boolean }) {
   const preExpandWidth = useRef(320)
 
   // on phones the dock is a slide-over drawer and starts CLOSED so the
-  // canvas + timeline always get the full width (mobile UI audit fix)
-  const [drawerOpen, setDrawerOpen] = useState(false)
+  // canvas + timeline always get the full width (mobile UI audit fix).
+  // Drawer state lives in the store so requestRightTab can open it from any
+  // event handler without store writes during render (React 19 warns when a
+  // render updates another subscribed component, e.g. CanvasStage).
+  const drawerOpen = useEditor((s) => s.rightDrawerOpen)
+  const setDrawerOpen = useEditor((s) => s.setRightDrawerOpen)
   const open = mobile ? drawerOpen : rightOpen
   const setOpen = (v: boolean) => (mobile ? setDrawerOpen(v) : setRightOpen(v))
+
+  // Keep the documented Brain shortcut functional even when the panels dock
+  // is hidden (or is a closed drawer on small screens). Keydown = event
+  // context, so store writes here are fine.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || !event.shiftKey || event.key.toLowerCase() !== 'b') return
+      event.preventDefault()
+      useEditor.getState().requestRightTab('brain')
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
 
   if (!open) {
     return (
@@ -153,6 +173,7 @@ function RightDock({ mobile }: { mobile: boolean }) {
                 type="button"
                 aria-selected={rightTab === t.id}
                 onClick={() => setRightTab(t.id)}
+                title={t.id === 'brain' ? 'Brain (Ctrl+Shift+B)' : t.label}
                 className={`flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-all ${
                   rightTab === t.id
                     ? t.tone === 'frost'
@@ -168,13 +189,26 @@ function RightDock({ mobile }: { mobile: boolean }) {
           </div>
         </div>
 
-        {/* active panel */}
-        <div role="tabpanel" className="min-h-0 flex-1 overflow-hidden">
-          {rightTab === 'layers' && <LayersPanel />}
-          {rightTab === 'ai' && <AiPanel />}
-          {rightTab === 'motion' && <MotionPanel />}
-          {rightTab === 'agent' && <AgentPanel />}
-        </div>
+        {/* panels stay MOUNTED across tab switches (keep-alive): drafts and
+            live state in Brain/Motion/Agent survive switching to any other
+            panel. Inactive ones are hidden, not unmounted. */}
+        {([
+          ['layers', <LayersPanel key="layers" />],
+          ['create', <CharacterCreator key="create" />],
+          ['reference', <ReferenceCreator key="reference" />],
+          ['brain', <SecondBrain key="brain" />],
+          ['motion', <MotionPanel key="motion" />],
+          ['agent', <AgentPanel key="agent" />],
+        ] as Array<[RightTab, React.ReactNode]>).map(([id, element]) => (
+          <div
+            key={id}
+            role="tabpanel"
+            aria-hidden={rightTab !== id}
+            className={rightTab === id ? 'h-full min-h-0 w-full overflow-hidden' : 'hidden'}
+          >
+            {element}
+          </div>
+        ))}
 
       {/* width drag handle (desktop) */}
       {!mobile && (
@@ -206,13 +240,16 @@ export default function Home() {
   const dirty = useEditor((s) => s.dirty)
   const autosave = useEditor((s) => s.autosave)
   const autosaveDelay = useAppSettings((s) => s.autosaveDelay)
+  const uiTextScale = useAppSettings((s) => s.uiTextScale)
   const { save } = useSaveProject()
   const mobile = useIsMobile()
 
   // skip the pre-hydration frame: the persisted settings store rehydrates
   // after first paint, and the factory-default layout (floating palette,
   // empty stage) flashes before the real one — hold a splash until mounted
+  // (post-hydration flip is the point of this flag — not a data effect)
   const [mounted, setMounted] = useState(false)
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional mount flag, see comment above
   useEffect(() => setMounted(true), [])
 
   // Cmd/Ctrl+S · transport · tools — shared keyboard hook
@@ -250,20 +287,14 @@ export default function Home() {
     })
   }, [mounted, toast])
 
+  // pre-mount paint: plain dark canvas only (Screen A removed — the studio
+  // mounts directly; settings rehydrate within the first frame)
   if (!mounted) {
-    return (
-      <div className="flex h-dvh flex-col items-center justify-center gap-3 bg-zinc-950" aria-busy="true" aria-label="Loading studio">
-        <div className="flex items-center gap-2">
-          <Sparkles className="h-5 w-5 text-frost-400" />
-          <span className="font-mono text-sm font-semibold text-zinc-100">PixelForge AI</span>
-        </div>
-        <Loader2 className="h-4 w-4 animate-spin text-zinc-500" />
-      </div>
-    )
+    return <div className="h-dvh bg-zinc-950" aria-hidden="true" />
   }
 
   return (
-    <div className="flex h-dvh min-h-0 flex-col overflow-hidden bg-zinc-950 text-zinc-100">
+    <div className={cn('pixelforge-studio flex h-dvh min-h-0 flex-col overflow-hidden bg-zinc-950 text-zinc-100', uiTextScale === 'large' && 'pixelforge-text-large')}>
       <Header />
 
       <div className="relative flex min-h-0 flex-1">
@@ -277,8 +308,6 @@ export default function Home() {
         <RightDock mobile={mobile} />
       </div>
 
-      {/* Task 11: paid-op approval cards — visible over any panel state */}
-      <ApprovalCards />
 
       {/* first-run onboarding (shown once per browser) */}
       <OnboardingTour />

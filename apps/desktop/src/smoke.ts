@@ -94,9 +94,9 @@ export async function runSmokeTest(win: BrowserWindow, logger: Logger): Promise<
     if (probe.info?.version !== app.getVersion()) {
       throw new Error(`renderer/main version mismatch: renderer=${probe.info?.version ?? 'unknown'} main=${app.getVersion()}`);
     }
-    if (mode === 'dev-server' && probe.hasCanvas !== true) {
-      // The prototype's canvas-stage must be present — proves the React editor
-      // mounted. Poll: dev compilation + hydration can exceed the settle delay.
+    if ((mode === 'dev-server' || app.isPackaged) && probe.hasCanvas !== true) {
+      // The editor canvas must be present — proves the React editor mounted.
+      // Poll because startup/hydration can exceed the initial settle delay.
       const deadline = Date.now() + CANVAS_POLL_TIMEOUT_MS;
       let hasCanvas = false;
       while (Date.now() < deadline) {
@@ -258,7 +258,11 @@ export async function runSmokeTest(win: BrowserWindow, logger: Logger): Promise<
         e2eStdout = res.stdout;
       } catch (err) {
         const e = err as { stdout?: string; stderr?: string; message?: string };
-        throw new Error(`MCP E2E client failed: ${e.message ?? String(err)}${e.stderr ? ` :: ${e.stderr.slice(-400)}` : ''}`);
+        // Bun reports a non-zero exit for failed assertions on stdout. Keep
+        // that tail in the smoke failure so a desktop QA run identifies the
+        // real failed check instead of only showing an empty process error.
+        const output = [e.stdout?.slice(-6000), e.stderr?.slice(-1200)].filter(Boolean).join(' :: ');
+        throw new Error(`MCP E2E client failed: ${e.message ?? String(err)}${output ? ` :: ${output}` : ''}`);
       }
       const summary = e2eStdout.trim().split('\n').pop() ?? '';
       const passed = /\d+\/\d+ checks passed/.test(summary) && !summary.startsWith('0/');
@@ -428,7 +432,8 @@ export async function runSmokeTest(win: BrowserWindow, logger: Logger): Promise<
                 continue;
               }
               if (job.status === 'done') return { ok: Array.isArray(job.images) && job.images.length > 0, status: job.status, images: job.images?.length ?? 0 };
-              if (job.status === 'failed' || job.status === 'cancelled') return { ok: false, status: job.status, error: job.error ?? null };
+              // AiJobStatus is 'error' (not 'failed') — 'failed' never occurs
+              if (job.status === 'error' || job.status === 'cancelled') return { ok: false, status: job.status, error: job.error ?? null };
               await new Promise((r) => setTimeout(r, 150));
             }
             return { ok: false, error: 'AI job timed out' };
@@ -448,6 +453,7 @@ export async function runSmokeTest(win: BrowserWindow, logger: Logger): Promise<
       } else {
       const aiProbe = (await win.webContents.executeJavaScript(
         `(async () => {
+          try {
           const b = window.pixelforge;
           if (!b || b.bridgeVersion < 5 || !b.ai) return { bridgeV5: false };
           const ai = window.__pfAi;
@@ -493,6 +499,13 @@ export async function runSmokeTest(win: BrowserWindow, logger: Logger): Promise<
             importWorked: afterImport.layers === layersBefore + 1 && afterImport.topLayerName === 'AI: smoke',
             undoRestored: afterUndo.layers === layersBefore,
           };
+          } catch (err) {
+            return {
+              bridgeV5: true,
+              probe: false,
+              error: err instanceof Error ? err.name + ': ' + err.message : String(err),
+            };
+          }
         })()`,
       )) as {
         bridgeV5: boolean; probe: boolean; candidateReady?: boolean; colors?: number;
@@ -521,15 +534,24 @@ export async function runSmokeTest(win: BrowserWindow, logger: Logger): Promise<
       }
     }
 
-    const dir = path.join(process.cwd(), 'artifacts');
-    fs.mkdirSync(dir, { recursive: true });
-    const file = path.join(dir, `smoke-${mode}.png`);
-    const image = await win.webContents.capturePage();
-    fs.writeFileSync(file, image.toPNG());
+    let screenshot: string | null = null;
+    try {
+      const dir = path.join(process.cwd(), 'artifacts');
+      fs.mkdirSync(dir, { recursive: true });
+      const file = path.join(dir, `smoke-${mode}.png`);
+      const image = await win.webContents.capturePage();
+      fs.writeFileSync(file, image.toPNG());
+      screenshot = file;
+      logger.info('smoke.screenshot', { file });
+    } catch (err) {
+      // A packaged app can run on a Windows session without a capturable
+      // display surface. That does not invalidate the bridge/renderer probes
+      // above, so retain the successful smoke result and log the limitation.
+      logger.warn('smoke.screenshot.unavailable', { error: String(err) });
+    }
 
     logger.info('smoke.probe', probe);
-    logger.info('smoke.screenshot', { file });
-    console.log('[SMOKE:OK]', JSON.stringify({ mode, ...probe, screenshot: file }));
+    console.log('[SMOKE:OK]', JSON.stringify({ mode, ...probe, screenshot }));
     app.exit(0);
   } catch (err) {
     logger.error('smoke.fail', { mode, error: String(err) });

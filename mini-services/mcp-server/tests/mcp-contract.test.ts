@@ -273,8 +273,9 @@ describe('pairing + tool workflow (real MCP protocol)', () => {
     const names = tools.tools.map((t) => t.name);
     expect(names).toContain('get_project_state');
     expect(names).toContain('set_pixels');
-    // L3 generate_sprite is registered (tier-gated); macros registered
-    expect(names).toContain('generate_sprite');
+    // paid generation tools were removed from the catalog (subscription-only)
+    expect(names).not.toContain('generate_sprite');
+    expect(names).not.toContain('get_candidates');
     expect(names).toContain('import_frame_strip');
     expect(names).toContain('macro_run');
     // Task 11 completion: save_project registered (L2)
@@ -561,197 +562,7 @@ describe('Task 13a — allowlist persistence & pairing lifecycle across restart'
   });
 });
 
-// --------------------------------------------------- Task 9: AI candidates
 
-describe('Task 9: AI candidate tools over the real protocol', () => {
-  test('get_candidates is L0-readable; L0 clients CAN read candidates', async () => {
-    toolResponders.set('get_candidates', () => ({
-      candidates: [
-        {
-          id: 'cand-1',
-          status: 'review',
-          prompt: 'teal potion bottle',
-          providerLabel: 'Mock (offline)',
-          model: 'mock-pattern',
-          recipe: 'item',
-          requestSize: '1024x1024',
-          width: 32,
-          height: 32,
-          seed: null,
-          costEstimateUsd: null,
-          cacheHit: false,
-          hasNormalized: true,
-          normalizedSize: { w: 32, h: 32, colors: 6 },
-          normalizedPng: 'data:image/png;base64,iVBORw0KGgo=',
-          error: null,
-        },
-      ],
-      historyCount: 3,
-    }));
-    const { token } = await generatePairing('L0');
-    const pc = await sdkClient(token);
-    const paired = textEnvelope(await pc.callTool({ name: 'pair_client', arguments: { name: 'candidate-reader' } }));
-    const clientToken = (paired.data as { token: string }).token;
-    await pc.close();
-
-    const client = await sdkClient(clientToken);
-    const env = textEnvelope(await client.callTool({ name: 'get_candidates', arguments: { limit: 4 } }));
-    expect(env.ok).toBe(true);
-    const data = env.data as { candidates: Array<{ id: string; status: string; hasNormalized: boolean }>; historyCount: number };
-    expect(data.candidates[0]!.id).toBe('cand-1');
-    expect(data.candidates[0]!.hasNormalized).toBe(true);
-    expect(data.historyCount).toBe(3);
-    await client.close();
-  });
-
-  test('accept_candidate (L1) relays layer mode; L0 clients are denied', async () => {
-    toolResponders.set('accept_candidate', (args) => ({ candidateId: args.candidateId, mode: args.mode, layerId: 'layer-x' }));
-    const { token } = await generatePairing('L0');
-    const pc = await sdkClient(token);
-    const paired = textEnvelope(await pc.callTool({ name: 'pair_client', arguments: { name: 'candidate-l0' } }));
-    const l0Token = (paired.data as { token: string }).token;
-    await pc.close();
-    const l0 = await sdkClient(l0Token);
-    const denied = textEnvelope(await l0.callTool({ name: 'accept_candidate', arguments: { candidateId: 'cand-1', mode: 'layer' } }));
-    expect(denied.ok).toBe(false);
-    expect(denied.error?.code).toBe('permission_denied');
-    await l0.close();
-
-    const { token: l1PairToken } = await generatePairing('L1');
-    const pcL1 = await sdkClient(l1PairToken);
-    const pairedL1 = textEnvelope(await pcL1.callTool({ name: 'pair_client', arguments: { name: 'candidate-l1' } }));
-    const l1Token = (pairedL1.data as { token: string }).token;
-    await pcL1.close();
-    const l1 = await sdkClient(l1Token);
-    const env = textEnvelope(await l1.callTool({ name: 'accept_candidate', arguments: { candidateId: 'cand-1', mode: 'layer' } }));
-    expect(env.ok).toBe(true);
-    expect((env.data as { mode: string }).mode).toBe('layer');
-    await l1.close();
-  });
-
-  test('reject_candidate removes candidates; apply_normalize re-runs the pipeline', async () => {
-    toolResponders.set('reject_candidate', (args) => ({ candidateId: args.candidateId, rejected: true }));
-    toolResponders.set('apply_normalize', (args) => ({
-      candidateId: args.candidateId,
-      width: args.width ?? 32,
-      height: args.height ?? 32,
-      stats: { paletteUsed: args.paletteMode ?? 'auto', colorsOut: 8 },
-      previewPng: 'data:image/png;base64,iVBORw0KGgo=',
-    }));
-    const { token } = await generatePairing('L1');
-    const pc = await sdkClient(token);
-    const paired = textEnvelope(await pc.callTool({ name: 'pair_client', arguments: { name: 'candidate-worker' } }));
-    const clientToken = (paired.data as { token: string }).token;
-    await pc.close();
-    const client = await sdkClient(clientToken);
-
-    const rej = textEnvelope(await client.callTool({ name: 'reject_candidate', arguments: { candidateId: 'cand-1' } }));
-    expect(rej.ok).toBe(true);
-    expect((rej.data as { rejected: boolean }).rejected).toBe(true);
-
-    const renorm = textEnvelope(await client.callTool({
-      name: 'apply_normalize',
-      arguments: { candidateId: 'cand-2', width: 16, height: 16, paletteMode: 'project', maxColors: 8 },
-    }));
-    expect(renorm.ok).toBe(true);
-    const data = renorm.data as { width: number; stats: { paletteUsed: string } };
-    expect(data.width).toBe(16);
-    expect(data.stats.paletteUsed).toBe('project');
-
-    // schema validation: paletteMode is an enum — garbage is rejected by zod
-    const bad = await client.callTool({
-      name: 'apply_normalize',
-      arguments: { candidateId: 'cand-2', paletteMode: 'blUR' },
-    }).catch((err) => ({ isError: true, message: String(err) }));
-    expect(bad).toBeTruthy();
-    await client.close();
-  });
-
-  test('generate_sprite is REGISTERED but L3-tier gated (paid op — approval via caller identity)', async () => {
-    // an L1 client sees the tool advertised but is denied at relay time
-    const { token } = await generatePairing('L1');
-    const pc = await sdkClient(token);
-    const paired = textEnvelope(await pc.callTool({ name: 'pair_client', arguments: { name: 'l3-probe' } }));
-    const clientToken = (paired.data as { token: string }).token;
-    await pc.close();
-    const client = await sdkClient(clientToken);
-    const tools = await client.listTools();
-    expect(tools.tools.map((t) => t.name)).toContain('generate_sprite');
-    const denied = await client.callTool({ name: 'generate_sprite', arguments: { prompt: 'x' } });
-    const env = JSON.parse((denied as { content?: Array<{ type: string; text?: string }> }).content?.[0]?.text ?? '{}');
-    expect(env.ok).toBe(false);
-    expect(env.error?.code).toBe('permission_denied');
-    await client.close();
-    // an L3 client passes the tier gate — but the op now PARKS at the
-    // approval center until the mock human approves (Task 11 §5.2)
-    toolResponders.set('generate_sprite', () => ({ ok: true, candidateIds: ['c1'] }));
-    approvalAuto = 'approve';
-    const { token: t3 } = await generatePairing('L3');
-    const pc3 = await sdkClient(t3);
-    const paired3 = textEnvelope(await pc3.callTool({ name: 'pair_client', arguments: { name: 'l3-real' } }));
-    const client3 = await sdkClient((paired3.data as { token: string }).token);
-    const ok = textEnvelope(await client3.callTool({ name: 'generate_sprite', arguments: { prompt: 'x' } }));
-    expect(ok.ok).toBe(true);
-    expect(approvalRequests.length).toBe(1);
-    await client3.close();
-    approvalAuto = 'none';
-  });
-});
-
-// --------------------------------------------- Task 11: approval center
-
-describe('Task 11: paid-op approval center', () => {
-  test('generate_sprite parks until approve — pending visible via get_approvals', async () => {
-    approvalAuto = 'none';
-    approvalRequests.length = 0;
-    toolResponders.set('generate_sprite', () => ({ ok: true, candidateIds: ['c1'] }));
-    const { token } = await generatePairing('L3');
-    const pc = await sdkClient(token);
-    const paired = textEnvelope(await pc.callTool({ name: 'pair_client', arguments: { name: 'l3-approval' } }));
-    const client = await sdkClient((paired.data as { token: string }).token);
-
-    // fire WITHOUT awaiting — the call must park
-    const inFlight = client.callTool({ name: 'generate_sprite', arguments: { prompt: 'a donut citadel', count: 2 } });
-    await new Promise((r) => setTimeout(r, 150));
-
-    // the editor got exactly one approval-request card
-    expect(approvalRequests.length).toBe(1);
-    const card = approvalRequests[0] as { tool: string; clientName: string; args: { summary: string } };
-    expect(card.tool).toBe('generate_sprite');
-    expect(card.clientName).toBe('l3-approval');
-    expect(card.args.summary).toContain('a donut citadel');
-
-    // get_approvals (L0, server-local) sees it pending
-    const approvals = textEnvelope(await client.callTool({ name: 'get_approvals', arguments: {} }));
-    expect(approvals.ok).toBe(true);
-    expect((approvals.data as { pending: Array<{ tool: string }> }).pending).toHaveLength(1);
-    expect((approvals.data as { pending: Array<{ tool: string }> }).pending[0].tool).toBe('generate_sprite');
-
-    // the human approves over the bridge → the parked call resumes and relays
-    const firstCard = approvalRequests[0] as { id: string };
-    wsSend({ type: 'approval-response', id: firstCard.id, approve: true });
-    const ok = textEnvelope(await inFlight);
-    expect(ok.ok).toBe(true);
-    await client.close();
-  });
-
-  test('deny returns approval_denied and spends nothing', async () => {
-    approvalAuto = 'deny';
-    approvalRequests.length = 0;
-    const { token } = await generatePairing('L3');
-    const pc = await sdkClient(token);
-    const paired = textEnvelope(await pc.callTool({ name: 'pair_client', arguments: { name: 'l3-deny' } }));
-    const client = await sdkClient((paired.data as { token: string }).token);
-    const denied = textEnvelope(await client.callTool({ name: 'generate_sprite', arguments: { prompt: 'x' } }));
-    expect(denied.ok).toBe(false);
-    expect(denied.error?.code).toBe('approval_denied');
-    const approvals = textEnvelope(await client.callTool({ name: 'get_approvals', arguments: {} }));
-    const recent = (approvals.data as { recent: Array<{ decision: string }> }).recent;
-    expect(recent[0].decision).toBe('denied');
-    await client.close();
-    approvalAuto = 'none';
-  });
-});
 
 // ------------------------------------------------ Task 10: motion presets
 
@@ -1099,15 +910,15 @@ describe('shared-Brain phase 5 — status / capabilities / ask / plan / resource
     expect(dataL0.tier).toBe('L0');
     expect(dataL0.tools.every((t) => t.tier === 'L0')).toBe(true);
     expect(dataL0.tools.some((t) => t.name === 'brain_get_status')).toBe(true);
-    expect(dataL0.tools.some((t) => t.name === 'brain_ask')).toBe(false);
+    expect(dataL0.tools.some((t) => t.name === 'brain_ask')).toBe(false); // removed: LLM path
     expect(dataL0.counts.granted).toBeLessThan(dataL0.counts.total);
     await l0.close();
 
     const l1 = await pairedClient('L1', 'brain-caps-l1');
     const envL1 = textEnvelope(await l1.callTool({ name: 'brain_get_capabilities', arguments: {} }));
     const dataL1 = envL1.data as { tools: Array<{ name: string }>; counts: { granted: number } };
-    expect(dataL1.tools.some((t) => t.name === 'brain_ask')).toBe(true);
-    expect(dataL1.tools.some((t) => t.name === 'brain_plan_goal')).toBe(true);
+    expect(dataL1.tools.some((t) => t.name === 'brain_ask')).toBe(false);
+    expect(dataL1.tools.some((t) => t.name === 'brain_plan_goal')).toBe(false);
     expect(dataL1.counts.granted).toBeGreaterThan(dataL0.counts.granted);
     await l1.close();
   });
@@ -1127,37 +938,9 @@ describe('shared-Brain phase 5 — status / capabilities / ask / plan / resource
     await client.close();
   });
 
-  test('brain_ask relays to the editor and never carries provider secrets', async () => {
-    let relayed: Record<string, unknown> | null = null;
-    toolResponders.set('brain_ask', (args) => {
-      relayed = args;
-      return { question: args.question, answer: 'Build the coin pickup next.' };
-    });
-    const client = await pairedClient('L1', 'brain-asker');
-    const env = textEnvelope(await client.callTool({ name: 'brain_ask', arguments: { question: 'what should I build next?' } }));
-    expect(env.ok).toBe(true);
-    expect((env.data as { answer: string }).answer).toContain('coin pickup');
-    expect(relayed && Object.values(relayed).join(' ')).not.toMatch(/pfm_|gsk_/);
-    await client.close();
-  });
+  ;
 
-  test('brain_plan_goal returns a plan proposal that explicitly executes nothing', async () => {
-    // the mock mirrors the REAL editor-side handler's response shape
-    // (mcp-tools.ts brain_plan_goal) — including its execution disclaimer
-    toolResponders.set('brain_plan_goal', (args) => ({
-      plan: [{ kind: 'app-vfx', title: 'Campfire', effect: 'fire/campfire', light: 0.6, palette: 'project' }],
-      revision: 'rev-123',
-      note: 'Plan proposal only — NOTHING was executed or queued.',
-    }));
-    const client = await pairedClient('L1', 'brain-planner');
-    const env = textEnvelope(await client.callTool({ name: 'brain_plan_goal', arguments: { goal: 'add a warm campfire' } }));
-    expect(env.ok).toBe(true);
-    const data = env.data as { plan: unknown[]; revision: string; note: string };
-    expect(data.plan).toHaveLength(1);
-    expect(data.revision).toBe('rev-123');
-    expect(data.note).toContain('NOTHING was executed');
-    await client.close();
-  });
+  ;
 
   test('read-only resources: capabilities snapshot + live project summary', async () => {
     const client = await pairedClient('L1', 'resource-reader');
@@ -1165,7 +948,7 @@ describe('shared-Brain phase 5 — status / capabilities / ask / plan / resource
     const capsText = (caps.contents[0] as { text: string }).text;
     const capsJson = JSON.parse(capsText) as { tier: string; tools: Array<{ name: string }> };
     expect(capsJson.tier).toBe('L1');
-    expect(capsJson.tools.some((t) => t.name === 'brain_plan_goal')).toBe(true);
+    expect(capsJson.tools.some((t) => t.name === 'brain_interpret_prompt')).toBe(true);
 
     const proj = await client.readResource({ uri: 'pixelforge://project/active' });
     const projJson = JSON.parse((proj.contents[0] as { text: string }).text) as { ok: boolean; data?: { name?: string } };

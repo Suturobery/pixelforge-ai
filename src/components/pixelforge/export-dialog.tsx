@@ -44,7 +44,7 @@ import { Input } from '@/components/ui/input'
 import { useToast } from '@/hooks/use-toast'
 import { cn, friendlyError } from '@/lib/utils'
 import { FileImage, FolderDown, LayoutGrid, Loader2 } from 'lucide-react'
-import type { ExportOutcome } from '@/lib/pixelforge/export'
+import type { ExportOutcome, ExportScale } from '@/lib/pixelforge/export'
 
 // ---------------------------------------------------------------------------
 // tiny segmented control (radiogroup) — matches the studio's transport styling
@@ -101,6 +101,8 @@ export function ExportDialog({
   const { toast } = useToast()
   const [scope, setScope] = useState<ExportScope>('clip')
   const [format, setFormat] = useState<ExportFormat | 'gif'>('sheet')
+  const [exportScale, setExportScale] = useState<ExportScale>(1)
+  const [gifBg, setGifBg] = useState('#101014')
   const [layoutMode, setLayoutMode] = useState<'horizontal' | 'grid'>('grid')
   const [columns, setColumns] = useState(4)
   const [padding, setPadding] = useState(0)
@@ -238,11 +240,12 @@ export function ExportDialog({
           return { width: st.project.width, height: st.project.height, data: new Uint8ClampedArray(rgba) }
         })
         const durations = clip.frames.map((f) => f.durationMs > 0 ? f.durationMs : Math.round(1000 / clip.fps))
-        await exportGif(frames, durations, `${effectiveBase}-${slugify(clip.name)}.gif`, { scale: 6, checker: false })
-        toast({ title: 'Export complete', description: `1 file → browser downloads (GIF, ${clip.frames.length} frames)` })
+        const gifScale = exportScale
+        await exportGif(frames, durations, `${effectiveBase}-${slugify(clip.name)}.gif`, { scale: gifScale, checker: false, bg: gifBg })
+        toast({ title: 'Export complete', description: `1 file → browser downloads (GIF, ${clip.frames.length} frames, ${gifScale}×)` })
         return
       }
-      const outcome = await runExport(st.project, { ...exportRequest, overwrite })
+      const outcome = await runExport(st.project, { ...exportRequest, overwrite, scale: exportScale })
       describeOutcome(outcome)
     } catch (err) {
       toast({
@@ -270,12 +273,12 @@ export function ExportDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="grid gap-4 sm:grid-cols-[auto_1fr]">
+        <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(14rem,0.85fr)_minmax(0,1.15fr)]">
           {/* left column: preview (landscape feel — the visual anchor) */}
-          <div className="space-y-1">
+          <div className="min-w-0 space-y-1">
             <div
               className={cn(
-                'flex max-h-[220px] items-center justify-center overflow-hidden rounded-md border border-zinc-800 p-2',
+                'grid h-[236px] w-full max-w-[320px] place-items-center overflow-hidden rounded-md border border-zinc-800 p-2',
                 CHECKER_CLASS,
               )}
             >
@@ -287,13 +290,13 @@ export function ExportDialog({
                 <canvas
                   ref={canvasRef}
                   aria-label="Export preview at native pixel size"
-                  className="max-h-[204px] w-auto max-w-full [image-rendering:pixelated]"
+                  className="block h-auto max-h-full w-auto max-w-full [image-rendering:pixelated]"
                 />
               )}
             </div>
-            <p className="font-mono text-[10px] text-zinc-400">
+            <p className="break-words font-mono text-[10px] text-zinc-400">
               {previewDims
-                ? `Preview ${previewDims.w}×${previewDims.h} px · native size · transparent background`
+                ? `Output ${previewDims.w * exportScale}×${previewDims.h * exportScale} px · ${exportScale}× scale · transparent background`
                 : 'Preview unavailable'}
             </p>
           </div>
@@ -301,7 +304,7 @@ export function ExportDialog({
           {/* right column: all controls */}
           <div className="min-w-0 space-y-4">
           {/* scope + format */}
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1">
               <span className="font-mono text-[10px] uppercase tracking-wide text-zinc-400">Scope</span>
               <Segmented
@@ -332,9 +335,26 @@ export function ExportDialog({
             </div>
           </div>
 
+          {/* scale multiplier */}
+          <div className="space-y-1">
+            <span className="font-mono text-[10px] uppercase tracking-wide text-zinc-400">Scale (nearest-neighbor)</span>
+            <Segmented
+              className="grid-cols-4"
+              ariaLabel="Export scale"
+              value={String(exportScale) as '1' | '2' | '4' | '8'}
+              onChange={(v) => setExportScale(Number(v) as ExportScale)}
+              options={[
+                { value: '1', label: '1× (native)' },
+                { value: '2', label: '2×' },
+                { value: '4', label: '4×' },
+                { value: '8', label: '8×' },
+              ]}
+            />
+          </div>
+
           {format === 'sheet' && (
             <div className="space-y-3 rounded-md border border-zinc-800 bg-zinc-900/40 p-3">
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <div className="space-y-1">
                   <span className="font-mono text-[10px] uppercase tracking-wide text-zinc-400">Layout</span>
                   <Segmented
@@ -361,7 +381,7 @@ export function ExportDialog({
                   />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <div className="space-y-1">
                   <span className="font-mono text-[10px] uppercase tracking-wide text-zinc-400">Padding (outer)</span>
                   <StepperInput
@@ -395,13 +415,33 @@ export function ExportDialog({
           )}
 
           {format === 'gif' && (
-            <p className="rounded-md border border-zinc-800 bg-zinc-900/40 px-2.5 py-2 font-mono text-[10px] leading-snug text-zinc-400">
-              Animated GIF of the ACTIVE clip ({activeClip.frames.length} frames · loop) — per-frame durations apply. Scale 6×.
-            </p>
+            <div className="space-y-2 rounded-md border border-zinc-800 bg-zinc-900/40 p-3">
+              <div className="grid grid-cols-1 items-center gap-2 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <span className="font-mono text-[10px] uppercase tracking-wide text-zinc-400">GIF background</span>
+                  <Segmented
+                    className="grid-cols-4"
+                    ariaLabel="GIF background"
+                    value={gifBg}
+                    onChange={setGifBg}
+                    options={[
+                      { value: 'transparent', label: 'Trans' },
+                      { value: '#101014', label: 'Dark' },
+                      { value: '#000000', label: 'Black' },
+                      { value: '#ffffff', label: 'White' },
+                    ]}
+                  />
+                </div>
+                <p className="font-mono text-[10px] leading-snug text-zinc-400">
+                  Animated GIF of the ACTIVE clip ({activeClip.frames.length} frames · loop) — per-frame durations apply. Scale {exportScale}×.
+                  GIF has no soft transparency: color modes flatten alpha onto the background; Trans dithers soft alpha into hard pixels.
+                </p>
+              </div>
+            </div>
           )}
 
           {/* naming */}
-          <div className="grid grid-cols-[1fr_auto] items-end gap-2">
+          <div className="grid grid-cols-1 items-end gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
             <div className="space-y-1">
               <span className="font-mono text-[10px] uppercase tracking-wide text-zinc-400">File name base</span>
               <Input

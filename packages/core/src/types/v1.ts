@@ -8,6 +8,7 @@
  */
 
 import type { LoopMode } from './document';
+import type { StyleProfile } from '../style-profile';
 
 /** v1 layer inside a per-frame layer stack, PNG encoded as a data URL. */
 export interface V1SerializedLayer {
@@ -81,6 +82,8 @@ export interface V1SerializedProject {
       prev?: number;
       next?: number;
     };
+    /** Optional project style contract; classic v1 readers ignore this field. */
+    styleProfile?: StyleProfile;
   };
 }
 

@@ -24,7 +24,7 @@ const STEPS = [
   {
     icon: Package,
     title: '3 — Ship it',
-    body: 'Export a sprite sheet, PNG frames or GIF — game-engine ready. The AI panel and MCP agent can do the heavy lifting for you.',
+    body: 'Export a sprite sheet, PNG frames or GIF — game-engine ready. Your IDE agent (via MCP) and the Brain panel can do the heavy lifting for you.',
   },
 ]
 
@@ -40,6 +40,9 @@ export function OnboardingTour() {
     } catch {
       seen = false
     }
+    // intentional mount check — the tour can only open after hydration reads
+    // localStorage; this is a one-shot UI gate, not a data effect
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (!seen) setOpen(true)
   }, [])
 

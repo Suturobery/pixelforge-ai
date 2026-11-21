@@ -128,10 +128,6 @@ function handleCtrl(msg: EditorInbound, reply: (id: string, ok: boolean, data?: 
       reply(id, true, { ops: store.recentOps(limit) });
       return;
     }
-    case 'approvals-list': {
-      reply(id, true, { approvals: host.approvals.list() });
-      return;
-    }
     // second-brain orchestration: the editor (AI panel) queues a plan for
     // IDE agents to claim, and reads board state for the UI
     case 'brain-push': {
@@ -427,7 +423,6 @@ export function createPixelForgeServer() {
         switch (msg.type) {
           case 'ping':
           case 'tool-result':
-          case 'approval-response':
           case 'event':
             link.handleInbound(msg, data.editorSocket ?? undefined);
             return;

@@ -45,6 +45,7 @@ import {
   Pause,
   Play,
   Plus,
+  Sparkles,
   Square,
   Trash2,
 } from 'lucide-react'
@@ -106,17 +107,20 @@ export function MotionPanel() {
   const [newClipName, setNewClipName] = useState('idle-1')
 
   // leaving the Motion panel (or unmounting the studio) clears the timeline
-  // QA badges coming from the live plan preview
+  // QA badges coming from the live plan preview + on-canvas draft part boxes
   useEffect(() => {
     return () => {
       useEditor.getState().setMotionPreviewIssues([])
+      useEditor.getState().setMotionDraftParts([])
     }
   }, [])
 
   // draft parts start as a copy of the committed clip parts; draft state is
   // reset whenever the clip or the document changes (render-time adjustment —
   // the React-endorsed pattern for derived-state resets, no sync effect)
-  const [draftParts, setDraftParts] = useState<DraftPart[]>([])
+  const [draftParts, setDraftParts] = useState<DraftPart[]>(() =>
+    clip.parts.map((p) => ({ name: p.name, layerId: p.layerId, ...(p.rect ? { rect: { ...p.rect } } : {}) }))
+  )
   const syncKey = `${clip.id}:${docVersion}`
   const [lastSyncKey, setLastSyncKey] = useState(syncKey)
   if (lastSyncKey !== syncKey) {
@@ -126,6 +130,10 @@ export function MotionPanel() {
     setAnchorIndex((i) => Math.min(i, clip.frames.length - 1))
     setPlan(null)
   }
+
+  useEffect(() => {
+    useEditor.getState().setMotionDraftParts(draftParts)
+  }, [draftParts])
 
   // --- preset state ----------------------------------------------------------
   const [presetId, setPresetId] = useState<MotionPresetId>('idle')
@@ -285,6 +293,69 @@ export function MotionPanel() {
     toast({ title: 'Parts saved', description: `${draftParts.length} part${draftParts.length === 1 ? '' : 's'} tagged on "${clip.name}".` })
   }
 
+  const autoDetectParts = () => {
+    if (!anchorFrame || !layerId) return
+    const W = project.width
+    const H = project.height
+    const rgba = composeFrameRgba(project, clip, anchorFrame)
+    let minX = W
+    let minY = H
+    let maxX = -1
+    let maxY = -1
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        if (rgba[(y * W + x) * 4 + 3] > 0) {
+          if (x < minX) minX = x
+          if (y < minY) minY = y
+          if (x > maxX) maxX = x
+          if (y > maxY) maxY = y
+        }
+      }
+    }
+    if (maxX < minX || maxY < minY) {
+      minX = Math.floor(W * 0.2)
+      minY = Math.floor(H * 0.15)
+      maxX = Math.max(minX + 3, Math.floor(W * 0.8) - 1)
+      maxY = Math.max(minY + 5, Math.floor(H * 0.85) - 1)
+    }
+    const clampR = (x: number, y: number, w: number, h: number): PartRect => {
+      const cx = Math.max(0, Math.min(W - 1, Math.round(x)))
+      const cy = Math.max(0, Math.min(H - 1, Math.round(y)))
+      const cw = Math.max(1, Math.min(W - cx, Math.round(w)))
+      const ch = Math.max(1, Math.min(H - cy, Math.round(h)))
+      return { x: cx, y: cy, w: cw, h: ch }
+    }
+    const boxW = Math.max(4, maxX - minX + 1)
+    const boxH = Math.max(6, maxY - minY + 1)
+    const headH = Math.max(1, Math.round(boxH * 0.35))
+    const bodyY = Math.min(H - 2, minY + headH)
+    const bodyH = Math.max(1, Math.round(boxH * 0.35))
+    const legY = Math.min(H - 1, bodyY + bodyH)
+    const legH = Math.max(1, maxY + 1 - legY)
+    const armW = Math.max(1, Math.round(boxW * 0.25))
+    const midW = Math.max(1, boxW - armW * 2)
+    const halfW = Math.max(1, Math.floor(boxW / 2))
+
+    const detected: DraftPart[] = [
+      { name: 'head', layerId, rect: clampR(minX + Math.floor(boxW * 0.15), minY, Math.max(2, Math.round(boxW * 0.7)), headH) },
+      { name: 'body', layerId, rect: clampR(minX + armW, bodyY, midW, bodyH) },
+      { name: 'armL', layerId, rect: clampR(minX, bodyY, armW, bodyH) },
+      { name: 'armR', layerId, rect: clampR(minX + boxW - armW, bodyY, armW, bodyH) },
+      { name: 'legL', layerId, rect: clampR(minX, legY, halfW, legH) },
+      { name: 'legR', layerId, rect: clampR(minX + halfW, legY, Math.max(1, boxW - halfW), legH) },
+    ]
+    setDraftParts(detected)
+    if (setClipParts(clip.id, detected.map((p) => ({ ...p })))) {
+      setDirtyDraft(false)
+      toast({
+        title: '6 parts auto-detected & saved',
+        description: `Silhouette (${boxW}×${boxH}px) split into head, body, armL, armR, legL, legR.`,
+      })
+    } else {
+      setDirtyDraft(true)
+    }
+  }
+
   const accept = () => {
     if (!plan) return
     const target =
@@ -391,29 +462,40 @@ export function MotionPanel() {
 
       {/* ---------------------------- step 2 · parts ---------------------------- */}
       <section aria-label="Body parts" className="rounded-xl border border-zinc-800/80 bg-zinc-900/60 p-3">
-        <header className="mb-2.5 flex items-center justify-between">
+        <header className="mb-2.5 flex items-center justify-between gap-1">
           <span className="flex items-center gap-2">
             <span className="flex h-5 w-5 items-center justify-center rounded-full bg-frost-500/15 text-[10px] font-semibold text-frost-300">2</span>
             <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-300">Tag body parts</span>
           </span>
-          {dirtyDraft && (
-            <div className="flex gap-1">
-              <Button size="sm" className="h-7 rounded-md bg-frost-600 px-2.5 text-xs font-medium hover:bg-frost-500" onClick={saveParts}>
-                Save parts
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                className="h-7 rounded-md px-2.5 text-xs text-zinc-400"
-                onClick={() => {
-                  setDraftParts(clip.parts.map((p) => ({ name: p.name, layerId: p.layerId, ...(p.rect ? { rect: { ...p.rect } } : {}) })))
-                  setDirtyDraft(false)
-                }}
-              >
-                Revert
-              </Button>
-            </div>
-          )}
+          <div className="flex items-center gap-1">
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 gap-1 rounded-md border-frost-500/40 bg-frost-500/10 px-2 text-[11px] font-medium text-frost-300 hover:bg-frost-500/20"
+              onClick={autoDetectParts}
+              title="Automatically slice the sprite's silhouette into head, body, arms, and legs"
+            >
+              <Sparkles className="h-3 w-3" /> Auto-detect
+            </Button>
+            {dirtyDraft && (
+              <>
+                <Button size="sm" className="h-7 rounded-md bg-frost-600 px-2.5 text-xs font-medium hover:bg-frost-500" onClick={saveParts}>
+                  Save parts
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 rounded-md px-2 text-xs text-zinc-400"
+                  onClick={() => {
+                    setDraftParts(clip.parts.map((p) => ({ name: p.name, layerId: p.layerId, ...(p.rect ? { rect: { ...p.rect } } : {}) })))
+                    setDirtyDraft(false)
+                  }}
+                >
+                  Revert
+                </Button>
+              </>
+            )}
+          </div>
         </header>
 
         {/* source preview with part rects */}
@@ -426,20 +508,31 @@ export function MotionPanel() {
           />
           <div className="min-w-0 flex-1 space-y-1.5">
             <p className="text-[11px] leading-snug text-zinc-500">
-              Regions only — never cuts. Overlaps are owned by the highest part.
+              Regions only — never cuts. Click a chip to inspect its box.
             </p>
             <div className="flex flex-wrap gap-1">
               {draftParts.map((p, i) => (
                 <span
                   key={`${p.name}-${i}`}
-                  className="inline-flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-950 px-1.5 py-0.5 text-[11px] text-zinc-300"
+                  onClick={() => {
+                    setDraftName(p.name)
+                    if (p.rect) {
+                      setDraftRect({ ...p.rect })
+                      setDraftWholeLayer(false)
+                    } else {
+                      setDraftWholeLayer(true)
+                    }
+                  }}
+                  title={p.rect ? `${p.name}: (${p.rect.x}, ${p.rect.y}) ${p.rect.w}×${p.rect.h} — click to load` : `${p.name}: whole layer`}
+                  className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-950 px-1.5 py-0.5 text-[11px] text-zinc-300 hover:border-frost-500/50"
                 >
                   <span className="h-2 w-2 rounded-sm" style={{ background: PART_COLORS[i % PART_COLORS.length] }} />
                   {p.name}
                   <button
                     className="text-zinc-500 hover:text-red-400"
                     aria-label={`Remove part ${p.name}`}
-                    onClick={() => {
+                    onClick={(e) => {
+                      e.stopPropagation()
                       setDraftParts((ps) => ps.filter((_, j) => j !== i))
                       setDirtyDraft(true)
                     }}
@@ -449,7 +542,7 @@ export function MotionPanel() {
                 </span>
               ))}
               {draftParts.length === 0 && (
-                <span className="text-[11px] text-zinc-600">No parts tagged yet</span>
+                <span className="text-[11px] text-zinc-600">No parts tagged yet — press Auto-detect or drag a selection</span>
               )}
             </div>
           </div>

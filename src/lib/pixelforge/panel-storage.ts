@@ -113,10 +113,13 @@ export function loadPanelRaw(key: PanelStorageKey): unknown | null {
   }
 }
 
+let panelWriteTimer: ReturnType<typeof setTimeout> | null = null
+let pendingPanelPatch: Record<string, Record<string, never>> = {}
+
 /**
  * Persist a panel's raw shape: localStorage immediately (web + desktop) and,
- * desktop only, mirrored into the versioned settings file (fire-and-forget —
- * a failed mirror must never break dragging).
+ * desktop only, mirrored (debounced) into the versioned settings file so
+ * dragging a floating panel at 60Hz does not hammer disk I/O on every frame.
  */
 export function savePanelRaw(key: PanelStorageKey, value: unknown): void {
   if (typeof window === 'undefined') return
@@ -129,9 +132,16 @@ export function savePanelRaw(key: PanelStorageKey, value: unknown): void {
   const bridge = window.pixelforge
   const panelId = PANEL_IDS[key]
   if (!bridge?.settings || !panelId) return
-  void bridge.settings.update({ panels: { [panelId]: value as Record<string, never> } }).catch(() => {
-    /* mirror failure is non-fatal */
-  })
+  pendingPanelPatch[panelId] = value as Record<string, never>
+  if (panelWriteTimer) clearTimeout(panelWriteTimer)
+  panelWriteTimer = setTimeout(() => {
+    panelWriteTimer = null
+    const patch = pendingPanelPatch
+    pendingPanelPatch = {}
+    void bridge.settings.update({ panels: patch }).catch(() => {
+      /* mirror failure is non-fatal */
+    })
+  }, 250)
 }
 
 /** Subscribe to the desktop hydration pass (panels re-read their saved shape).

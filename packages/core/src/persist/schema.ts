@@ -16,6 +16,7 @@ import type {
 } from '../types/serialized';
 import { PersistError, type PersistIssue } from './errors';
 import { assertSafeCelSrc, isSafeId } from './paths';
+import { parseStyleProfile } from '../style-profile';
 
 const HEX = /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
 const LOOP_MODES = ['forward', 'reverse', 'pingpong'] as const;
@@ -70,6 +71,9 @@ export function validateSerializedProjectV2(doc: unknown): PersistIssue[] {
   } else {
     const s = p.settings as Partial<SerializedProjectV2['settings']>;
     if (typeof s.paletteEnforce !== 'boolean') add('settings.paletteEnforce', 'must be a boolean');
+    if (s.styleProfile !== undefined && !parseStyleProfile(s.styleProfile)) {
+      add('settings.styleProfile', 'must be a valid bounded style profile');
+    }
     if (!isRecord(s.onion)) {
       add('settings.onion', 'must be an object');
     } else {

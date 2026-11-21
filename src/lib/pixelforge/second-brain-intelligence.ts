@@ -415,7 +415,7 @@ export const RECOMMENDED_TOOL_CHAINS: Record<DetectedIntent, readonly string[]> 
   'procedural-vfx': ['list_vfx', 'generate_vfx', 'preview_animation'],
   'palette-style': ['get_knowledge', 'apply_library_palette', 'set_palette'],
   'layer-pixel-edit': ['batch', 'set_pixels', 'beautify_layer', 'validate_style'],
-  'sprite-generation': ['generate_sprite', 'apply_normalize', 'accept_candidate', 'validate_style'],
+  'sprite-generation': ['set_pixels', 'beautify_layer', 'validate_style'],
   'project-workflow': [],
 }
 

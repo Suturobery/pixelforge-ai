@@ -115,10 +115,48 @@ function isAllowed(filePath: unknown): string | null {
   return null;
 }
 
-function assertAllowed(filePath: unknown): string {
-  const resolved = isAllowed(filePath);
-  if (!resolved) throw new Error(`path is outside the session-allowed directories: ${String(filePath).slice(0, 128)}`);
-  return resolved;
+/**
+ * Async containment check that resolves symlinks: a symlink planted inside a
+ * picker-approved root must not let pf:fs-* reach outside it. New files
+ * (writes/mkdir) realpath their deepest EXISTING ancestor, so creating a
+ * file inside an approved root still works.
+ */
+async function assertAllowed(filePath: unknown): Promise<string> {
+  if (typeof filePath !== 'string' || filePath.length === 0 || filePath.length > MAX_PATH_LEN) {
+    throw new Error(`path is outside the session-allowed directories: ${String(filePath).slice(0, 128)}`);
+  }
+  const resolved = path.resolve(filePath);
+  if (!isAllowed(resolved)) {
+    throw new Error(`path is outside the session-allowed directories: ${String(filePath).slice(0, 128)}`);
+  }
+  // realpath the deepest existing ancestor (the path itself may not exist yet)
+  let probe = resolved;
+  const rootOf = path.parse(resolved).root;
+  for (;;) {
+    try {
+      await fsp.realpath(probe);
+      break;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT' && probe !== rootOf) {
+        probe = path.dirname(probe);
+        continue;
+      }
+      throw new Error(`path is outside the session-allowed directories: ${String(filePath).slice(0, 128)}`);
+    }
+  }
+  const realProbe = await fsp.realpath(probe);
+  const tail = path.relative(probe, resolved);
+  const realResolved = tail ? path.join(realProbe, tail) : realProbe;
+  for (const root of allowedRoots) {
+    let realRoot: string;
+    try {
+      realRoot = await fsp.realpath(root);
+    } catch {
+      continue;
+    }
+    if (realResolved === realRoot || realResolved.startsWith(realRoot + path.sep)) return realResolved;
+  }
+  throw new Error(`path is outside the session-allowed directories: ${String(filePath).slice(0, 128)}`);
 }
 
 function asUint8Array(value: unknown): Uint8Array {
@@ -378,8 +416,8 @@ export function registerBridgeHandlers(logger: Logger): void {
   // A Save/rename can produce a new filename inside an already picker-approved
   // root. Persist only such an existing capability; this never grants a new
   // folder or lets renderer code choose an arbitrary disk location.
-  ipcMain.handle('pf:project-remember-current', (_event, raw: unknown): BridgeRegisterResult => {
-    const resolved = assertAllowed(raw);
+  ipcMain.handle('pf:project-remember-current', async (_event, raw: unknown): Promise<BridgeRegisterResult> => {
+    const resolved = await assertAllowed(raw);
     if (!validProjectPath(resolved)) throw new Error('project file must use the .pixelforgeproj extension');
     rememberTrustedProject(resolved);
     return { ok: true, root: path.dirname(resolved) };
@@ -408,24 +446,24 @@ export function registerBridgeHandlers(logger: Logger): void {
   // --- Task 4: allowlisted primitive fs transport (core FileFs adapter) ----
 
   ipcMain.handle('pf:fs-read', async (_event, raw: unknown): Promise<Uint8Array> => {
-    const p = assertAllowed(raw);
+    const p = await assertAllowed(raw);
     return new Uint8Array(await fsp.readFile(p));
   });
 
   ipcMain.handle('pf:fs-write', async (_event, rawPath: unknown, rawData: unknown): Promise<void> => {
-    const p = assertAllowed(rawPath);
+    const p = await assertAllowed(rawPath);
     const data = asUint8Array(rawData);
     await fsp.writeFile(p, data);
   });
 
   ipcMain.handle('pf:fs-rename', async (_event, rawFrom: unknown, rawTo: unknown): Promise<void> => {
-    const from = assertAllowed(rawFrom);
-    const to = assertAllowed(rawTo);
+    const from = await assertAllowed(rawFrom);
+    const to = await assertAllowed(rawTo);
     await fsp.rename(from, to);
   });
 
   ipcMain.handle('pf:fs-unlink', async (_event, raw: unknown): Promise<void> => {
-    const p = assertAllowed(raw);
+    const p = await assertAllowed(raw);
     try {
       await fsp.unlink(p);
     } catch (err) {
@@ -434,7 +472,7 @@ export function registerBridgeHandlers(logger: Logger): void {
   });
 
   ipcMain.handle('pf:fs-exists', async (_event, raw: unknown): Promise<boolean> => {
-    const p = assertAllowed(raw);
+    const p = await assertAllowed(raw);
     try {
       await fsp.access(p);
       return true;
@@ -444,18 +482,18 @@ export function registerBridgeHandlers(logger: Logger): void {
   });
 
   ipcMain.handle('pf:fs-mkdir', async (_event, raw: unknown): Promise<void> => {
-    const p = assertAllowed(raw);
+    const p = await assertAllowed(raw);
     await fsp.mkdir(p, { recursive: true });
   });
 
   ipcMain.handle('pf:fs-listdir', async (_event, raw: unknown): Promise<string[]> => {
-    const p = assertAllowed(raw);
+    const p = await assertAllowed(raw);
     const entries = await fsp.readdir(p, { withFileTypes: true });
     return entries.filter((d) => d.isFile() || d.isSymbolicLink()).map((d) => d.name);
   });
 
   ipcMain.handle('pf:fs-stat', async (_event, raw: unknown): Promise<BridgeStatResult | null> => {
-    const p = assertAllowed(raw);
+    const p = await assertAllowed(raw);
     try {
       const st = await fsp.stat(p);
       return { mtimeMs: st.mtimeMs, size: st.size };
