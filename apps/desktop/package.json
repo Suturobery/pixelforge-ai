@@ -1,7 +1,7 @@
 {
   "name": "@pixelforge/desktop",
   "productName": "PixelForge AI",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "private": true,
   "description": "PixelForge AI desktop shell \u2014 Electron main + secure preload (v3.1 Plan \u00a712 Task 1). Interim renderer: existing web prototype via dev server; renderer port lands in Task 4.",
   "main": "dist/main/index.js",

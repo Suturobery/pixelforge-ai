@@ -59,3 +59,6 @@ NUL
 
 # build outputs
 apps/desktop/release/
+
+# mcp verification session data
+artifacts/*/mcp-data/
