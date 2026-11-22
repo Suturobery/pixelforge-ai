@@ -61,14 +61,14 @@ describe('task board reliability (P0-3)', () => {
     expect(list.length).toBe(1);
     expect(list[0]!.status).toBe('pending');
 
-    const claimed = store.brainClaim(list[0]!.id, 'agent-A', 'client-A');
+    const { task: claimed } = store.brainClaim(list[0]!.id, 'agent-A', 'client-A');
     expect(claimed?.status).toBe('claimed');
     expect(claimed?.claimedByClient).toBe('client-A');
 
     // second agent cannot claim the same task
-    expect(store.brainClaim(list[0]!.id, 'agent-B', 'client-B')).toBeNull();
+    expect(store.brainClaim(list[0]!.id, 'agent-B', 'client-B').task).toBeNull();
 
-    const done = store.brainFinish(list[0]!.id, 'client-A', true, 'validate_style PASS');
+    const { task: done } = store.brainFinish(list[0]!.id, 'client-A', true, 'validate_style PASS');
     expect(done?.status).toBe('done');
   });
 
@@ -77,7 +77,7 @@ describe('task board reliability (P0-3)', () => {
     store.brainPush([{ title: 'Task', detail: 'd' }]);
     const t = store.brainList()[0]!;
     store.brainClaim(t.id, 'agent-A', 'client-A');
-    expect(store.brainFinish(t.id, 'client-B', true, 'sneaky')).toBeNull();
+    expect(store.brainFinish(t.id, 'client-B', true, 'sneaky').task).toBeNull();
     expect(store.brainList()[0]!.status).toBe('claimed');
   });
 
@@ -88,16 +88,16 @@ describe('task board reliability (P0-3)', () => {
     store.brainClaim(t, 'agent-A', 'client-A');
 
     // before timeout: still claimed, B cannot claim
-    expect(store.brainClaim(t, 'agent-B', 'client-B')).toBeNull();
+    expect(store.brainClaim(t, 'agent-B', 'client-B').task).toBeNull();
 
     // real time passes beyond the 30 ms timeout
     await new Promise((r) => setTimeout(r, 60));
 
     // after timeout: requeued → B claims it → A cannot finish it anymore
     expect(store.brainList()[0]!.status).toBe('pending');
-    const claimed = store.brainClaim(t, 'agent-B', 'client-B');
+    const { task: claimed } = store.brainClaim(t, 'agent-B', 'client-B');
     expect(claimed?.claimedByClient).toBe('client-B');
-    expect(store.brainFinish(t, 'client-A', true, 'late work')).toBeNull();
+    expect(store.brainFinish(t, 'client-A', true, 'late work').task).toBeNull();
     expect(store.brainFinish(t, 'client-B', true, 'redone properly')).not.toBeNull();
   });
 
@@ -199,13 +199,13 @@ describe('task board v2 — append/replace, idempotency, progress, cancel', () =
     const t = store.brainList()[0]!.id;
     store.brainClaim(t, 'agent-A', 'client-A');
 
-    expect(store.brainProgress(t, 'client-B', 'sneaky')).toBeNull();
-    const updated = store.brainProgress(t, 'client-A', 'outline pass 1/3');
+    expect(store.brainProgress(t, 'client-B', 'sneaky').task).toBeNull();
+    const { task: updated } = store.brainProgress(t, 'client-A', 'outline pass 1/3');
     expect(updated?.status).toBe('running');
     expect(updated?.progress).toBe('outline pass 1/3');
 
     // progress refreshes the lease — before expiry B still cannot claim
-    expect(store.brainClaim(t, 'agent-B', 'client-B')).toBeNull();
+    expect(store.brainClaim(t, 'agent-B', 'client-B').task).toBeNull();
 
     // without progress, the stale running task is requeued like a claim
     const store2 = freshStore(30);
@@ -247,7 +247,7 @@ describe('task board v2 — append/replace, idempotency, progress, cancel', () =
     store.brainClaim(mine.id, 'agent-A', 'client-A');
     expect(store.brainCancel(mine.id, 'client-B')).toBeNull(); // not the owner
     expect(store.brainCancel(mine.id, 'client-A')?.status).toBe('cancelled');
-    expect(store.brainFinish(mine.id, 'client-A', true, 'late')).toBeNull();
+    expect(store.brainFinish(mine.id, 'client-A', true, 'late').task).toBeNull();
   });
 
   test('CLEAR removes cancelled tasks too; retry leaves them alone', () => {

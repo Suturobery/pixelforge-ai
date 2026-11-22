@@ -14,6 +14,9 @@ import { MCP_TOOLS } from '@/lib/pixelforge/mcp-tool-catalog'
 import { useEditor } from '@/lib/pixelforge/store'
 import { useAppSettings } from '@/lib/pixelforge/settings'
 import { copyText } from '@/lib/pixelforge/desktop-bridge'
+import { composeFrameRgba, validateStyleCandidate, type StyleCheck } from '@pixelforge/core'
+import { getRecentRemoteEdits, subscribeBridge } from '@/lib/pixelforge/mcp-bridge'
+import { drawSpritePreview } from './sprite-preview'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/hooks/use-toast'
@@ -24,7 +27,7 @@ import {
   buildAgentInstructions,
   type AgentToolCall,
 } from '@/lib/pixelforge/ai/agent-chat'
-import { Bot, Copy, History, Loader2, Play, Square, ChevronDown } from 'lucide-react'
+import { Bot, Copy, History, Loader2, Play, Square, ChevronDown, Eye, Undo2, Film } from 'lucide-react'
 
 interface SessionOp {
   id: number
@@ -116,13 +119,35 @@ export function AgentPanel() {
   const [nlText, setNlText] = useState('')
   const [toolFilter, setToolFilter] = useState('')
   const [showManual, setShowManual] = useState(false)
+  // interpreted-action preview: plain language ABOVE the JSON, filled by
+  // applyCommand (typed commands) before anything runs
+  const [interpreted, setInterpreted] = useState<{ plain: string; target: string } | null>(null)
+  // clarify choices for ambiguous commands ("add 4 frames" — empty or copies?)
+  const [clarify, setClarify] = useState<{ plain: string; options: Array<{ label: string; tool: string; args: Record<string, unknown> }> } | null>(null)
+  // Review Result state: the affected target + before/after RGBA + checks
+  const [review, setReview] = useState<{
+    tool: string
+    clipId: string
+    clipName: string
+    frameId: string
+    frameNumber: number
+    layerId: string
+    layerName: string
+    before: Uint8ClampedArray | null
+    after: Uint8ClampedArray
+    checks: StyleCheck[]
+  } | null>(null)
+  const lastRunnerRef = useRef<'local' | 'mcp'>('local')
+  const remoteEdits = useRef(getRecentRemoteEdits())
   // AI agent approval gate: resolves the pending Promise from the UI buttons
   const pendingResolveRef = useRef<((v: 'run' | 'skip') => void) | null>(null)
   const [mcpStatus, setMcpStatus] = useState<{ reachable: boolean; authRequired: boolean; serverName?: string } | null>(null)
+  const reviewOpenRef = useRef<HTMLDivElement | null>(null)
+  const project = useEditor((s) => s.project)
 
   /** Rule-based natural-language → tool mapping. Fills the form for review;
    *  nothing runs until the user presses Run. */
-  const parseCommand = (text: string): { tool: string; args: Record<string, unknown> } | null => {
+  const parseCommand = (text: string): ({ tool: string; args: Record<string, unknown> } | { clarify: string }) | null => {
     const t = text.toLowerCase().trim()
     const num = t.match(/\b(\d+)\b/)?.[1]
     if (/\b(flip|mirror)\b/.test(t)) {
@@ -140,7 +165,22 @@ export function AgentPanel() {
     }
     if (/\bundo\b/.test(t)) return { tool: 'undo', args: {} }
     if (/\bredo\b/.test(t)) return { tool: 'redo', args: {} }
-    if (/\badd\b.*\bframe\b/.test(t)) return { tool: 'add_frame', args: num ? { copyContent: true } : {} }
+    const frameCount = num ? Math.min(8, Math.max(1, parseInt(num, 10))) : 1
+    const wantsCopies = /\b(cop\w*|duplicate\w*|clone\w*)\b/.test(t)
+    const wantsEmpty = /\b(empty|blank)\b/.test(t)
+    if (/\badd\b.*\bframes?\b/.test(t)) {
+      if (frameCount === 1) return { tool: 'add_frame', args: wantsCopies ? { copyContent: true } : {} }
+      // N frames: one undoable BATCH (all-or-nothing) — but empty vs copies
+      // must be explicit when N > 1 (silently guessing destroys work intent)
+      if (!wantsCopies && !wantsEmpty) {
+        return { clarify: `Add ${frameCount} frames - empty or copies of the current frame?` }
+      }
+      const steps: Array<{ tool: string; args: Record<string, unknown> }> = []
+      for (let i = 0; i < frameCount; i++) {
+        steps.push(wantsCopies ? { tool: 'add_frame', args: { copyContent: true } } : { tool: 'add_frame', args: {} })
+      }
+      return { tool: 'batch', args: { steps } }
+    }
     if (/\bduplicate\b.*\bframe\b/.test(t)) return { tool: 'duplicate_frame', args: {} }
     if (/\bdelete\b.*\bframe\b/.test(t)) return { tool: 'delete_frame', args: {} }
     if (/\badd\b.*\blayer\b/.test(t)) {
@@ -162,24 +202,63 @@ export function AgentPanel() {
   const applyCommand = () => {
     const mapped = parseCommand(nlText)
     if (!mapped) {
+      // explain what the panel understood and what it supports — NOTHING runs
+      // or edits until the user corrects the command
+      const verbs = ['flip', 'rotate', 'shift', 'move', 'undo', 'redo', 'add', 'duplicate', 'delete', 'merge', 'opacity', 'create'].filter((v) =>
+        new RegExp('\\b' + v, 'i').test(nlText),
+      )
+      const understood =
+        verbs.length > 0
+          ? `I recognized ${verbs.map((v) => `"${v}"`).join(', ')} but couldn't map them to a supported edit.`
+          : 'No supported edit found in that command.'
       toast({
-        title: 'No matching command',
-        description: 'Try: flip h · flip v · rotate ccw · shift left · add frame · add layer · merge · opacity 50 · undo · redo',
+        title: understood,
+        description:
+          'Supported: flip h/v · rotate cw/ccw · shift left/right/up/down · add N empty frames · add N copies · duplicate frame · add layer · merge · opacity N · new project · undo · redo',
         variant: 'destructive',
       })
+      setInterpreted(null)
+      setClarify(null)
       return
     }
-    const tool = MCP_TOOLS.find((x) => x.name === mapped.tool)
+    if ('clarify' in mapped) {
+      const msg = (mapped as { clarify: string }).clarify
+      const n = parseInt(nlText.match(/\b(\d+)\b/)?.[1] ?? '4', 10) || 4
+      setClarify({
+        plain: msg,
+        options: [
+          { label: `Add ${n} empty frames`, tool: 'batch', args: { steps: Array.from({ length: n }, () => ({ tool: 'add_frame', args: {} })) } },
+          { label: `Add ${n} copies of the current frame`, tool: 'batch', args: { steps: Array.from({ length: n }, () => ({ tool: 'add_frame', args: { copyContent: true } })) } },
+        ],
+      })
+      setInterpreted(null)
+      return
+    }
+    const mappedTool = mapped as { tool: string; args: Record<string, unknown> }
+    const tool = MCP_TOOLS.find((x) => x.name === mappedTool.tool)
     if (!tool) return
-    setToolName(tool.name)
-    const merged = { ...structuredClone(tool.example), ...mapped.args }
+    const merged = { ...structuredClone(tool.example), ...mappedTool.args }
     for (const [k, v] of Object.entries(merged)) {
       if (typeof v === 'string' && /^<.*>$/.test(v.trim())) delete merged[k]
     }
+    setToolName(tool.name)
     setArgsText(JSON.stringify(merged, null, 2))
     setResult(null)
+    setClarify(null)
     setShowManual(true)
-    toast({ title: `Ready: ${tool.name}`, description: 'Review the args, then press Run.' })
+    // plain-language interpreted action + target ABOVE the JSON controls
+    const st = useEditor.getState()
+    const clip = st.project.clips.find((c) => c.id === st.activeClipId) ?? st.project.clips[0]
+    const target = clip
+      ? `clip "${clip.name}" (${clip.layers.length} layer${clip.layers.length === 1 ? '' : 's'}, ${clip.frames.length} frame${clip.frames.length === 1 ? '' : 's'})`
+      : 'active clip'
+    const stepCount = (mappedTool.args as { steps?: unknown[] }).steps?.length
+    const plain =
+      mappedTool.tool === 'batch'
+        ? `Will: run ${stepCount ?? '?'} add_frame steps as ONE undoable operation on ${target} — nothing runs until you press Run.`
+        : `Will: ${tool.description.split('.')[0]} on ${target} — nothing runs until you press Run.`
+    setInterpreted({ plain, target: mappedTool.tool })
+    toast({ title: `Ready: ${tool.name}`, description: 'Review the interpreted action, then press Run.' })
   }
 
   const pickTool = (name: string) => {
@@ -354,7 +433,7 @@ export function AgentPanel() {
         <div className="flex flex-wrap gap-1">
           {([
             ['Outline + shade', 'beautify_layer', {}],
-            ['Idle 4-frame clip', 'add_clip', { name: 'idle-2', fps: 8, frameCount: 4 }],
+            ['Create 4 empty frames', 'add_clip', { name: 'idle-2', fps: 8, frameCount: 4 }],
           ] as const).map(([label, tool, args]) => (
             <button
               key={label}
@@ -381,6 +460,42 @@ export function AgentPanel() {
               {label}
             </button>
           ))}
+          <button
+            type="button"
+            disabled={running}
+            onClick={() => {
+              // open the EXISTING Motion workflow on the active clip
+              useEditor.getState().requestRightTab('motion')
+              const st = useEditor.getState()
+              const clip = st.project.clips.find((c) => c.id === st.activeClipId) ?? st.project.clips[0]
+              if (clip && clip.parts.length === 0) {
+                toast({
+                  title: 'Configure parts first',
+                  description: 'In the Motion panel (step 2) tag head/body/leg parts with Auto-detect or a marquee — then Generate preview → Accept.',
+                })
+              } else {
+                toast({ title: 'Motion panel opened', description: 'Pick Idle (default) → Generate preview → Accept to commit frames.' })
+              }
+            }}
+            className="flex items-center gap-1 rounded border border-frost-800/60 bg-frost-950/40 px-2 py-1 font-mono text-[10px] text-frost-300 hover:border-frost-500/60 disabled:opacity-40"
+            aria-label="Preview Idle Animation"
+            title="Opens the existing Motion workflow: pick Idle, Generate preview, Accept"
+          >
+            <Film className="h-3 w-3" /> Preview Idle Animation
+          </button>
+          {review && (
+            <button
+              type="button"
+              onClick={() => {
+                reviewOpenRef.current?.scrollIntoView({ block: 'start' })
+              }}
+              className="flex items-center gap-1 rounded border border-teal-700/60 bg-teal-950/40 px-2 py-1 font-mono text-[10px] text-teal-300 hover:border-teal-500"
+              aria-label="Review Result"
+              title="Show the affected target, before/after, and technical checks for the last edit"
+            >
+              <Eye className="h-3 w-3" /> Review Result
+            </button>
+          )}
         </div>
       </div>
 
@@ -464,6 +579,43 @@ export function AgentPanel() {
         </div>
       </div>
 
+      {interpreted && (
+        <div className="rounded-lg border border-frost-800/60 bg-frost-950/30 p-2.5" aria-label="Interpreted action">
+          <p className="font-mono text-[9px] uppercase tracking-wider text-frost-400">Interpreted action · {interpreted.target}</p>
+          <p className="mt-1 text-[11px] leading-snug text-zinc-200">{interpreted.plain}</p>
+        </div>
+      )}
+      {clarify && (
+        <div className="rounded-lg border border-amber-800/60 bg-amber-950/20 p-2.5" aria-label="Clarify command">
+          <p className="text-[11px] leading-snug text-amber-200">{clarify.plain}</p>
+          <div className="mt-1.5 flex flex-wrap gap-1.5">
+            {clarify.options.map((opt) => (
+              <button
+                key={opt.label}
+                type="button"
+                onClick={() => {
+                  setToolName(opt.tool)
+                  setArgsText(JSON.stringify(opt.args, null, 2))
+                  const tool = MCP_TOOLS.find((x) => x.name === opt.tool)
+                  const st = useEditor.getState()
+                  const clip = st.project.clips.find((c) => c.id === st.activeClipId) ?? st.project.clips[0]
+                  setInterpreted({
+                    plain: 'Will: run ' + (opt.args as { steps?: unknown[] }).steps?.length + ' add_frame steps as ONE undoable operation on clip "' + (clip?.name ?? 'idle') + '" — nothing runs until you press Run.',
+                    target: opt.tool,
+                  })
+                  setClarify(null)
+                  setShowManual(true)
+                  toast({ title: 'Ready: ' + (tool?.name ?? opt.tool), description: 'Review the interpreted action, then press Run.' })
+                }}
+                className="rounded border border-amber-700/60 bg-amber-950/40 px-2 py-1 font-mono text-[10px] text-amber-200 hover:border-amber-500"
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          <p className="mt-1 text-[10px] text-zinc-500">Nothing runs until you pick one (or correct the command).</p>
+        </div>
+      )}
       <div>
         <label className="mb-1 block font-mono text-[10px] uppercase tracking-wider text-zinc-400" htmlFor="mcp-args">
           Arguments (JSON)
@@ -531,17 +683,94 @@ export function AgentPanel() {
       )}
       </div>
 
+      {/* ---------------------------- Review Result ---------------------------- */}
+      {review && (
+        <div ref={reviewOpenRef} className="rounded-lg border border-teal-800/50 bg-teal-950/10 p-2.5" aria-label="Review Result">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <span className="font-mono text-[10px] font-semibold uppercase tracking-wider text-teal-300">Review Result</span>
+            <span className="font-mono text-[9px] text-zinc-500">
+              {review.tool} · {review.clipName} · frame {review.frameNumber} · layer "{review.layerName}"
+            </span>
+          </div>
+          <p className="mb-2 font-mono text-[9px] text-zinc-500">
+            performed by:{' '}
+            {lastRunnerRef.current === 'mcp' ? (
+              <span className="text-frost-300">connected agent (ZCode via MCP)</span>
+            ) : (
+              <span className="text-zinc-300">this Agent panel (local runner)</span>
+            )}{' '}
+            · undo via <button type="button" className="inline-flex items-center gap-0.5 rounded border border-zinc-700 px-1 text-[9px] text-zinc-300 hover:text-zinc-100" onClick={async () => { const r = await executeMcpTool('undo', {}, { clientId: 'agent-console', clientName: 'agent-console', tier: 'L1' }); toast({ title: r.ok ? 'Undone' : 'Undo failed', description: r.summary ?? r.error?.message }); }}><Undo2 className="inline h-2.5 w-2.5" /> undo</button>
+          </p>
+          <div className="mb-2.5 flex flex-wrap items-start gap-3 rounded-lg border border-zinc-800/80 bg-zinc-950/60 p-2.5">
+            {review.before && (
+              <figure className="shrink-0 text-center">
+                <div className="flex items-end gap-1.5">
+                  <canvas className="rounded border border-zinc-800" style={{ imageRendering: 'pixelated', width: project.width, height: project.height }} aria-label="before at actual size" ref={(c) => drawSpritePreview(c, review.before, project.width)} />
+                  <canvas className="rounded border border-zinc-700" style={{ imageRendering: 'pixelated', width: project.width * 3, height: project.height * 3 }} aria-label="before at zoom" ref={(c) => drawSpritePreview(c, review.before, project.width)} />
+                </div>
+                <figcaption className="mt-0.5 text-[10px] text-zinc-500">before · 1× · 3×</figcaption>
+              </figure>
+            )}
+            <figure className="shrink-0 text-center">
+              <div className="flex items-end gap-1.5">
+                <canvas className="rounded border border-zinc-800" style={{ imageRendering: 'pixelated', width: project.width, height: project.height }} aria-label="after at actual size" ref={(c) => drawSpritePreview(c, review.after, project.width)} />
+                <canvas className="rounded border border-zinc-700" style={{ imageRendering: 'pixelated', width: project.width * 3, height: project.height * 3 }} aria-label="after at zoom" ref={(c) => drawSpritePreview(c, review.after, project.width)} />
+              </div>
+              <figcaption className="mt-0.5 text-[10px] text-zinc-500">after · 1× · 3×</figcaption>
+            </figure>
+            {!review.before && (
+              <p className="min-w-0 flex-1 self-center text-[11px] leading-snug text-zinc-500">
+                No before image for this run — the frame was empty or the tool did not change pixels. The after view and
+                checks below still reflect the exact edit.
+              </p>
+            )}
+          </div>
+          <ul className="space-y-1" aria-label="Review technical checks">
+            {review.checks.map((c) => (
+              <li
+                key={c.id}
+                className={`flex items-start gap-1.5 rounded-md px-2 py-1.5 text-[11px] leading-snug ${
+                  c.status === 'pass'
+                    ? 'bg-emerald-500/10 text-emerald-300'
+                    : c.status === 'warning'
+                      ? 'bg-amber-500/10 text-amber-300'
+                      : 'bg-zinc-800/60 text-zinc-400'
+                }`}
+              >
+                <span>
+                  <span className="font-medium">{c.label}</span>
+                  <span className="block text-[10px] opacity-80">{c.detail}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-1.5 text-center text-[10px] text-zinc-500">
+            Technical checks only — style approval is yours. Latest edit is highlighted in the session log below.
+          </p>
+        </div>
+      )}
+
+
+
       <div className="border-t border-zinc-800 pt-2">
         <div className="mb-1.5 flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-zinc-400">
           <History className="h-3 w-3" /> Session log
           <span className="ml-auto normal-case text-zinc-400">server-wide log: Settings → MCP</span>
         </div>
-        {ops.length === 0 ? (
+        {ops.length === 0 && remoteEdits.current.length === 0 ? (
           <p className="font-mono text-[10px] text-zinc-400">No tool runs this session.</p>
         ) : (
           <ul className="pixelforge-scroll max-h-48 space-y-1 overflow-y-auto pr-1">
             {ops.map((op) => (
-              <li key={op.id} className="rounded border border-zinc-800/70 bg-zinc-900/40 px-2 py-1">
+              <li
+                key={'local-' + op.id}
+                className={`rounded border px-2 py-1 ${
+                  review && op === ops[0]
+                    ? 'border-teal-600/70 bg-teal-950/30 ring-1 ring-teal-600/50'
+                    : 'border-zinc-800/70 bg-zinc-900/40'
+                }`}
+                aria-label={review && op === ops[0] ? 'Latest edit' : undefined}
+              >
                 <div className="flex items-center justify-between gap-2">
                   <span className={`font-mono text-[10px] ${op.ok ? 'text-frost-300' : 'text-red-300'}`}>
                     {op.ok ? '✓' : '✗'} {op.tool}
@@ -565,7 +794,22 @@ export function AgentPanel() {
                   </span>
                 </div>
                 <p className="truncate font-mono text-[10px] text-zinc-400" title={op.summary}>
+                  <span className="mr-1 rounded border border-zinc-700 px-1 text-[9px] text-zinc-500">local runner</span>
                   {op.summary}
+                </p>
+              </li>
+            ))}
+            {remoteEdits.current.map((r, i) => (
+              <li key={'remote-' + i} className="rounded border border-frost-900/60 bg-frost-950/20 px-2 py-1">
+                <div className="flex items-center justify-between gap-2">
+                  <span className={`font-mono text-[10px] ${r.ok ? 'text-frost-300' : 'text-red-300'}`}>
+                    {r.ok ? '✓' : '✗'} {r.tool}
+                  </span>
+                  <span className="font-mono text-[9px] text-zinc-400">{r.at}</span>
+                </div>
+                <p className="truncate font-mono text-[10px] text-zinc-400">
+                  <span className="mr-1 rounded border border-frost-800/60 px-1 text-[9px] text-frost-400">ZCode (MCP)</span>
+                  performed by connected agent "{r.clientName}"
                 </p>
               </li>
             ))}

@@ -168,6 +168,7 @@ export function ReferenceCreator() {
   const docVersion = useEditor((s) => s.docVersion)
   const setStyleProfile = useEditor((s) => s.setStyleProfile)
   const importCandidateAsLayer = useEditor((s) => s.importCandidateAsLayer)
+  const referenceDraft = useEditor((s) => s.referenceDraft)
   const { toast } = useToast()
 
   const profile: StyleProfile = project.settings.styleProfile ?? defaultStyleProfile()
@@ -193,6 +194,27 @@ export function ReferenceCreator() {
   useEffect(() => {
     void referenceProviderKeyStatus().then(setKeyStatus)
   }, [])
+
+  // Adopt a brief handed over from the Brain panel (Open in Reference), once
+  // per draft — render-time adjustment on LOCAL state only (no store writes
+  // during render: React 19 warns about cross-component updates mid-render)
+  const [adoptedRefDraft, setAdoptedRefDraft] = useState<string | null>(null)
+  if (referenceDraft && adoptedRefDraft !== referenceDraft) {
+    setAdoptedRefDraft(referenceDraft)
+    setBrief(referenceDraft)
+  }
+
+  // one-time guidance when a handed-over brief arrives without a reference
+  const guidedNoRefRef = useRef(false)
+  useEffect(() => {
+    if (adoptedRefDraft && !profile.references[0] && !guidedNoRefRef.current) {
+      guidedNoRefRef.current = true
+      toast({
+        title: 'No approved reference yet',
+        description: 'Import a 16×16/32×32 PNG or pick a clip frame in section 2 — the brief stays prefilled.',
+      })
+    }
+  }, [adoptedRefDraft, profile.references])
 
   // target size: this release supports 16×16 and 32×32 square canvases
   const targetSize = useMemo(

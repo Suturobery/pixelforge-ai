@@ -136,6 +136,9 @@ export interface EditorEvent {
   stateHash?: string | null;
   name?: string | null;
   dirty?: boolean;
+  /** Active project identity (task-board claim gating). */
+  projectKey?: string | null;
+  projectName?: string | null;
 }
 
 export interface EditorServerStatus {

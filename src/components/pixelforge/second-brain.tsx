@@ -35,7 +35,9 @@ import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { useEditor } from '@/lib/pixelforge/store'
-import { mcpCtrl } from '@/lib/pixelforge/mcp-bridge'
+import { useToast } from '@/hooks/use-toast'
+import { currentProjectIdentity, mcpCtrl } from '@/lib/pixelforge/mcp-bridge'
+import type { RemoteEditRecord } from '@/lib/pixelforge/mcp-bridge'
 import { copyText, desktopConfirm } from '@/lib/pixelforge/desktop-bridge'
 import {
   addBrainPreference,
@@ -85,6 +87,8 @@ export function SecondBrain() {
   const activeLayerId = useEditor((s) => s.activeLayerId)
   const activeFrameIndex = useEditor((s) => s.activeFrameIndex)
   const setCreatorDraft = useEditor((s) => s.setCreatorDraft)
+  const setReferenceDraft = useEditor((s) => s.setReferenceDraft)
+  const { toast } = useToast()
   const requestRightTab = useEditor((s) => s.requestRightTab)
   // Continuous learning memory state
   const [memory, setMemory] = useState<SecondBrainMemory>(() => readBrainMemory())
@@ -125,6 +129,7 @@ export function SecondBrain() {
     mcpEnabled: boolean
     editorConnected: boolean
     clientsPaired: number
+    clientsConnected: number
     sessions: number
     lastProjectName: string | null
   } | null>(null)
@@ -132,7 +137,17 @@ export function SecondBrain() {
     Array<{ clientId: string; name: string; tier: string; lastSeen: string | null; revoked: boolean }>
   >([])
   const [boardTasks, setBoardTasks] = useState<
-    Array<{ id: string; title: string; status: string; claimedBy: string | null; result: string | null; progress: string | null; verified: boolean | null }>
+    Array<{
+      id: string
+      title: string
+      status: string
+      claimedBy: string | null
+      result: string | null
+      progress: string | null
+      verified: boolean | null
+      targetProjectName?: string | null
+      targetProjectKey?: string | null
+    }>
   >([])
 
   // --- Asset Brief (deterministic work spec → task board; no model call) ---
@@ -229,7 +244,17 @@ export function SecondBrain() {
   // Poll the MCP agent task board + overview facts on one timer
   const pollBoard = useCallback(async () => {
     const res = await mcpCtrl<{
-      tasks: Array<{ id: string; title: string; status: string; claimedBy: string | null; result: string | null; progress: string | null; verified: boolean | null }>
+      tasks: Array<{
+        id: string
+        title: string
+        status: string
+        claimedBy: string | null
+        result: string | null
+        progress: string | null
+        verified: boolean | null
+        targetProjectName?: string | null
+        targetProjectKey?: string | null
+      }>
     }>({
       kind: 'brain-tasks',
     })
@@ -238,6 +263,7 @@ export function SecondBrain() {
       mcpEnabled: boolean
       editorConnected: boolean
       clientsPaired: number
+      clientsConnected: number
       sessions: number
       lastProjectName: string | null
     }>({ kind: 'status' })
@@ -296,6 +322,19 @@ export function SecondBrain() {
       if (sel) setCreatorDraft(sel)
     }
     requestRightTab('create')
+  }
+
+  /** Hand a custom sprite brief to the Reference panel: prefill the brief and
+   *  guide to the approved reference when the project has none. */
+  const openInReference = (briefText: string) => {
+    setReferenceDraft(briefText.trim() || rawPrompt.trim())
+    requestRightTab('reference')
+    if ((project.settings.styleProfile?.references?.length ?? 0) === 0) {
+      toast({
+        title: 'No approved reference yet',
+        description: 'Import a 16×16/32×32 PNG or pick a clip frame in section 2 — it is saved with the project style.',
+      })
+    }
   }
 
   const handleCopyEnhanced = async () => {
@@ -426,8 +465,10 @@ export function SecondBrain() {
               </p>
             </div>
 
-            {/* Local character kit shortcut — sprite prompts match the bundled
-                32×32 characters; unsupported ones list what the kit supports. */}
+            {/* Hand-off actions — sprite prompts route to the right workflow:
+                bundled characters → Create Character; custom sprites → the
+                Reference panel (uses the project's approved reference +
+                style); anything queued for an IDE agent stays separate. */}
             {localInterpretation.detectedIntent === 'sprite-generation' && (
               <div className="rounded border border-teal-800/60 bg-teal-950/30 p-1.5">
                 {kitMatch.kind === 'match' ? (
@@ -447,18 +488,17 @@ export function SecondBrain() {
                   </>
                 ) : (
                   <>
-                    <p className="text-[9px] leading-tight text-amber-300/90">
-                      No bundled character matches this brief. {describeKit()} — open the creator and pick parts manually,
-                      or send the brief to a connected IDE agent below.
+                    <p className="text-[9px] leading-tight text-teal-200">
+                      Custom sprite brief — open the <strong className="text-teal-300">Reference panel</strong> to work from the
+                      project's approved reference and style (offline import or, later, a provider).
                     </p>
                     <Button
                       size="sm"
-                      variant="outline"
-                      className="mt-1 h-6 w-full border-zinc-700 font-mono text-[10px]"
-                      onClick={() => openInCreator()}
-                      title="Open the Create Character panel for manual part selection"
+                      className="mt-1 h-6 w-full font-mono text-[10px]"
+                      onClick={() => openInReference(rawPrompt)}
+                      title="Open the Reference panel with this brief prefilled; uses the project's approved reference and style"
                     >
-                      Open Create Character
+                      <WandSparkles className="mr-1 h-3 w-3" /> Open in Reference
                     </Button>
                   </>
                 )}
@@ -760,16 +800,26 @@ export function SecondBrain() {
             <p className="mt-0.5 font-mono text-[9px] text-zinc-500">
               {briefText.length}/2000 chars {briefText.length > 2000 ? '— too long, trim it' : ''}
             </p>
+            <p className="col-span-2 font-mono text-[9px] leading-tight text-zinc-400" aria-live="polite">
+              agent:{' '}
+              {mcpStatus?.editorConnected && (mcpStatus?.clientsConnected ?? 0) > 0 ? (
+                <span className="text-emerald-300">connected ({mcpStatus.clientsConnected} live) · task waits on the board until claimed</span>
+              ) : mcpStatus?.editorConnected ? (
+                <span className="text-amber-300">MCP live · no agent connected — the queued task waits to be claimed</span>
+              ) : (
+                <span className="text-zinc-500">not connected — queue anyway, or copy the brief</span>
+              )}
+            </p>
             <div className="mt-1.5 grid grid-cols-2 gap-1">
               <Button
                 size="sm"
                 className="h-7 font-mono text-[10px]"
                 onClick={() => void confirmBrief()}
                 disabled={briefBusy || !briefText.trim() || briefText.length > 2000}
-                title="Queue this brief on the agent task board"
+                title="Queue this brief on the agent task board for a connected IDE agent"
               >
                 {briefBusy ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Check className="mr-1 h-3 w-3" />}
-                Confirm & queue
+                Send to Connected Agent
               </Button>
               <Button
                 size="sm"
@@ -932,12 +982,17 @@ export function SecondBrain() {
                 </span>
                 <span className="min-w-0 flex-1 truncate text-zinc-400" title={t.result ?? t.progress ?? t.title}>
                   {t.title}
-                  {t.claimedBy ? <span className="text-zinc-600"> · {t.claimedBy}</span> : null}
+                  {t.targetProjectName ? (
+                    <span className="text-frost-400/80"> · {t.targetProjectName}</span>
+                  ) : (
+                    <span className="text-amber-500/70"> · no target project</span>
+                  )}
+                  {t.claimedBy ? <span className="text-zinc-600"> · claimed by {t.claimedBy}</span> : null}
                   {(t.result || t.progress) ? (
                     <span className="text-zinc-600"> · {t.status === 'running' && t.progress ? t.progress : (t.result ?? t.progress)}</span>
                   ) : null}
-                  {t.status === 'done' && t.verified === true ? <span className="text-emerald-500/80"> · state ✓</span> : null}
-                  {t.status === 'done' && t.verified === false ? <span className="text-amber-500/80"> · state unchanged</span> : null}
+                  {t.status === 'done' && t.verified === true ? <span className="text-emerald-500/80"> · changes detected</span> : null}
+                  {t.status === 'done' && t.verified === false ? <span className="text-amber-500/80"> · no changes detected</span> : null}
                 </span>
                 {(t.status === 'pending' || t.status === 'claimed' || t.status === 'running') && (
                   <button

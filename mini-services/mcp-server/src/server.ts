@@ -291,6 +291,13 @@ export class McpHost {
 
   // ------------------------------------------------------------- execution
 
+  /** Active project identity from the editor link (task-board gating). */
+  private get currentProject(): { key: string; name: string } | null {
+    const key = this.link.currentProjectKey;
+    if (!key) return null;
+    return { key, name: this.link.currentProjectName ?? 'active project' };
+  }
+
   private async runTool(def: ToolDef, args: Record<string, unknown>, identity: RequestIdentity | null): Promise<ToolEnvelope> {
     if (!identity) {
       return fail(ERROR_CODES.UNAUTHORIZED, 'No authenticated identity for this call.');
@@ -462,24 +469,77 @@ export class McpHost {
       }
       if (def.name === 'brain_claim_task') {
         // anchor the claim to the CURRENT document fingerprint so completion
-        // can later be verified against actual state change
-        const claimed = this.store.brainClaim(String(args?.id ?? ''), identity.name, identity.clientId, this.link.lastStateHash);
+        // can later be verified against actual state change; the claim is also
+        // GATED on the task's target project (queued from the Brain panel)
+        const { task: claimed, blockedBy } = this.store.brainClaim(
+          String(args?.id ?? ''),
+          identity.name,
+          identity.clientId,
+          this.link.lastStateHash,
+          this.currentProject,
+        );
+        if (blockedBy) {
+          return fail(
+            ERROR_CODES.BAD_REQUEST,
+            `Task "${blockedBy.title}" targets project "${blockedBy.targetProjectName ?? blockedBy.targetProjectKey}" - project "${this.currentProject?.name ?? 'unknown'}" is active. Switch the editor to the target project and retry.`,
+          );
+        }
         if (!claimed) return fail(ERROR_CODES.BAD_REQUEST, 'Task not claimable (unknown id or not pending).');
-        return { ok: true, data: { task: claimed }, summary: 'claimed: ' + claimed.title };
+        const legacyNote = claimed.targetProjectKey
+          ? ''
+          : ' (legacy task without a target project - the artist should confirm the target on the board)';
+        return { ok: true, data: { task: claimed, needsTargetConfirm: !claimed.targetProjectKey }, summary: 'claimed: ' + claimed.title + legacyNote };
       }
       if (def.name === 'brain_complete_task') {
-        const done = this.store.brainFinish(String(args?.id ?? ''), identity.clientId, true, String(args?.result ?? ''), this.link.lastStateHash);
+        const { task: done, blockedBy } = this.store.brainFinish(
+          String(args?.id ?? ''),
+          identity.clientId,
+          true,
+          String(args?.result ?? ''),
+          this.link.lastStateHash,
+          this.currentProject,
+        );
+        if (blockedBy) {
+          return fail(
+            ERROR_CODES.BAD_REQUEST,
+            `Continuation blocked: task "${blockedBy.title}" targets project "${blockedBy.targetProjectName ?? blockedBy.targetProjectKey}" but project "${this.currentProject?.name ?? 'unknown'}" is active. The task returned to the board - switch projects and claim again.`,
+          );
+        }
         if (!done) return fail(ERROR_CODES.BAD_REQUEST, 'Task not completable (unknown id, not claimed, or claimed by another agent).');
-        const verification = done.verified === true ? ' (state verified)' : done.verified === false ? ' (UNVERIFIED — document unchanged since claim)' : '';
+        const verification = done.verified === true ? ' (changes detected)' : done.verified === false ? ' (UNVERIFIED - no changes detected since claim)' : '';
         return { ok: true, data: { task: done }, summary: 'done: ' + done.title + verification };
       }
       if (def.name === 'brain_fail_task') {
-        const failed = this.store.brainFinish(String(args?.id ?? ''), identity.clientId, false, String(args?.reason ?? ''), this.link.lastStateHash);
+        const { task: failed, blockedBy } = this.store.brainFinish(
+          String(args?.id ?? ''),
+          identity.clientId,
+          false,
+          String(args?.reason ?? ''),
+          this.link.lastStateHash,
+          this.currentProject,
+        );
+        if (blockedBy) {
+          return fail(
+            ERROR_CODES.BAD_REQUEST,
+            `Continuation blocked: task "${blockedBy.title}" targets project "${blockedBy.targetProjectName ?? blockedBy.targetProjectKey}" but project "${this.currentProject?.name ?? 'unknown'}" is active. The task returned to the board.`,
+          );
+        }
         if (!failed) return fail(ERROR_CODES.BAD_REQUEST, 'Task not failable (unknown id, not claimed, or claimed by another agent).');
         return { ok: true, data: { task: failed }, summary: 'failed: ' + failed.title };
       }
       if (def.name === 'brain_update_task_progress') {
-        const updated = this.store.brainProgress(String(args?.id ?? ''), identity.clientId, String(args?.progress ?? ''));
+        const { task: updated, blockedBy } = this.store.brainProgress(
+          String(args?.id ?? ''),
+          identity.clientId,
+          String(args?.progress ?? ''),
+          this.currentProject,
+        );
+        if (blockedBy) {
+          return fail(
+            ERROR_CODES.BAD_REQUEST,
+            `Continuation blocked: task "${blockedBy.title}" targets project "${blockedBy.targetProjectName ?? blockedBy.targetProjectKey}" but project "${this.currentProject?.name ?? 'unknown'}" is active. The task returned to the board.`,
+          );
+        }
         if (!updated) return fail(ERROR_CODES.BAD_REQUEST, 'Task not updatable (unknown id, not claimed/running, or claimed by another agent).');
         return { ok: true, data: { task: updated }, summary: 'progress: ' + updated.title };
       }

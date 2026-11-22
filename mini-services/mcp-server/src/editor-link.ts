@@ -59,6 +59,11 @@ export class EditorLink {
   origin: string | null = null;
   connectedAt: string | null = null;
   lastStateHash: string | null = null;
+  /** Active project identity reported by the editor (projectChanged events).
+   *  Task-board claims/continuations are gated against this so agent work
+   *  stays in the project it was queued for. */
+  currentProjectKey: string | null = null;
+  currentProjectName: string | null = null;
   lastProjectName: string | null = null;
   lastDirty: boolean | null = null;
 
@@ -270,6 +275,8 @@ export class EditorLink {
         if (!msg.event) return;
         if (msg.event.type === 'projectChanged') {
           if (msg.event.stateHash !== undefined) this.lastStateHash = msg.event.stateHash;
+          if (typeof msg.event.projectKey === 'string') this.currentProjectKey = msg.event.projectKey;
+          if (typeof msg.event.projectName === 'string') this.currentProjectName = msg.event.projectName;
           if (msg.event.name !== undefined) this.lastProjectName = msg.event.name;
           if (msg.event.dirty !== undefined) this.lastDirty = msg.event.dirty;
         }

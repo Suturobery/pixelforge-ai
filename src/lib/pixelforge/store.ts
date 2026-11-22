@@ -373,6 +373,11 @@ export interface EditorState {
   /** Run a motion preset through the composer; returns the created/target clip id. */
   applyMotionPreset: (payload: MotionApplyPayload) => string | null
 
+  // --- Create from Reference hand-off (Brain → Reference panel) ---
+  /** Brief text handed to the Reference panel (adopted once, then cleared). */
+  referenceDraft: string | null
+  setReferenceDraft: (brief: string | null) => void
+
   // --- character creator (Create Character panel) ---
   /** Draft part selection handed to the creator panel (Brain → Open in Create
    *  Character); the panel adopts it when the reference changes. */
@@ -1357,11 +1362,16 @@ export const useEditor = create<EditorState>()((set, get) => ({
     return bus.getProject().clips.at(-1)?.id ?? null
   },
 
+  // --- Create from Reference hand-off ---
+  referenceDraft: null,
+
   // --- character creator ---
   creatorDraft: null,
   rightDrawerOpen: false,
 
   setCreatorDraft: (selection) => set({ creatorDraft: selection }),
+
+  setReferenceDraft: (brief) => set({ referenceDraft: brief }),
 
   requestRightTab: (tab) => set({ rightTab: tab, rightOpen: true, rightDrawerOpen: true }),
 

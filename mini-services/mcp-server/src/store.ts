@@ -50,6 +50,10 @@ export interface BrainTask {
   stateHashAtFinish: string | null;
   /** true when the document actually changed between claim and successful finish */
   verified: boolean | null;
+  /** project the task targets (queued from the Brain panel) — claim/continue
+   *  is gated against the editor's ACTIVE project so work stays in place. */
+  targetProjectKey: string | null;
+  targetProjectName: string | null;
 }
 
 const BRAIN_STATUSES: readonly BrainTaskStatus[] = ['pending', 'claimed', 'running', 'done', 'failed', 'cancelled'];
@@ -72,6 +76,8 @@ function normalizeBrainTask(raw: Partial<BrainTask>): BrainTask {
     idempotencyKey: typeof raw.idempotencyKey === 'string' ? raw.idempotencyKey.slice(0, 120) : null,
     stateHashAtClaim: typeof raw.stateHashAtClaim === 'string' ? raw.stateHashAtClaim.slice(0, 64) : null,
     stateHashAtFinish: typeof raw.stateHashAtFinish === 'string' ? raw.stateHashAtFinish.slice(0, 64) : null,
+    targetProjectKey: typeof raw.targetProjectKey === 'string' ? raw.targetProjectKey.slice(0, 160) : null,
+    targetProjectName: typeof raw.targetProjectName === 'string' ? raw.targetProjectName.slice(0, 120) : null,
     verified: typeof raw.verified === 'boolean' ? raw.verified : null,
   };
 }
@@ -299,7 +305,7 @@ export class McpStore {
    * steps against still-active/completed tasks (failed/cancelled re-create).
    */
   brainPush(
-    tasks: Array<{ title: string; detail: string; idempotencyKey?: string }>,
+    tasks: Array<{ title: string; detail: string; idempotencyKey?: string; targetProject?: { key: string; name: string } | null }>,
     opts: { replacePending?: boolean; planId?: string | null } = {},
   ): BrainTask[] {
     if (!Array.isArray(this.brainTasks)) this.loadBrainTasks();
@@ -327,6 +333,14 @@ export class McpStore {
         stateHashAtClaim: null,
         stateHashAtFinish: null,
         verified: null,
+        targetProjectKey:
+          t.targetProject && typeof t.targetProject.key === 'string' && t.targetProject.key.trim()
+            ? t.targetProject.key.slice(0, 160)
+            : null,
+        targetProjectName:
+          t.targetProject && typeof t.targetProject.name === 'string'
+            ? t.targetProject.name.slice(0, 120)
+            : null,
       });
     }
     // replace mode: a new plan supersedes ALL still-pending items (history stays);
@@ -342,11 +356,27 @@ export class McpStore {
     return this.brainTasks;
   }
 
-  brainClaim(id: string, claimedBy: string, claimedByClient: string, stateHash?: string | null): BrainTask | null {
+  /** Project-gated claim result: `task` when claimed, `blockedBy` when the
+   *  task targets a DIFFERENT project than the one currently active in the
+   *  editor (work must stay in its queued project). */
+  brainClaim(
+    id: string,
+    claimedBy: string,
+    claimedByClient: string,
+    stateHash?: string | null,
+    currentProject?: { key: string; name: string } | null,
+  ): { task: BrainTask | null; blockedBy: BrainTask | null } {
     if (!Array.isArray(this.brainTasks)) this.loadBrainTasks();
     this.sweepStaleClaims();
     const t = this.brainTasks.find((x) => x.id === id && x.status === 'pending');
-    if (!t) return null;
+    if (!t) return { task: null, blockedBy: null };
+    if (
+      t.targetProjectKey &&
+      currentProject?.key &&
+      currentProject.key !== t.targetProjectKey
+    ) {
+      return { task: null, blockedBy: t };
+    }
     t.status = 'claimed';
     t.claimedBy = claimedBy.slice(0, 80);
     t.claimedByClient = claimedByClient.slice(0, 80);
@@ -357,23 +387,43 @@ export class McpStore {
     t.stateHashAtFinish = null;
     t.verified = null;
     this.saveBrainTasks();
+    return { task: t, blockedBy: null };
+  }
+
+  /** Artist confirmation for LEGACY tasks (queued before project targeting
+   *  existed): binds the task to the editor's current project. */
+  brainSetTarget(id: string, project: { key: string; name: string } | null): BrainTask | null {
+    if (!Array.isArray(this.brainTasks)) this.loadBrainTasks();
+    const t = this.brainTasks.find((x) => x.id === id);
+    if (!t || t.targetProjectKey) return t && t.targetProjectKey ? t : null;
+    t.targetProjectKey = project && typeof project.key === 'string' && project.key.trim() ? project.key.slice(0, 160) : null;
+    t.targetProjectName = project && typeof project.name === 'string' ? project.name.slice(0, 120) : null;
+    this.saveBrainTasks();
     return t;
   }
 
   /** Owner-only bounded progress note; first update moves claimed → running
    * and refreshes the claim lease (progress doubles as a heartbeat). */
-  brainProgress(id: string, claimedByClient: string, progress: string): BrainTask | null {
+  brainProgress(
+    id: string,
+    claimedByClient: string,
+    progress: string,
+    currentProject?: { key: string; name: string } | null,
+  ): { task: BrainTask | null; blockedBy: BrainTask | null } {
     if (!Array.isArray(this.brainTasks)) this.loadBrainTasks();
     this.sweepStaleClaims();
     const t = this.brainTasks.find(
       (x) => x.id === id && (x.status === 'claimed' || x.status === 'running') && x.claimedByClient === claimedByClient,
     );
-    if (!t) return null;
+    if (!t) return { task: null, blockedBy: null };
+    if (t.targetProjectKey && currentProject?.key && currentProject.key !== t.targetProjectKey) {
+      return { task: null, blockedBy: t };
+    }
     t.status = 'running';
     t.progress = String(progress ?? '').slice(0, 200);
     t.claimedAt = Date.now();
     this.saveBrainTasks();
-    return t;
+    return { task: t, blockedBy: null };
   }
 
   /**
@@ -400,7 +450,14 @@ export class McpStore {
     return t;
   }
 
-  brainFinish(id: string, claimedByClient: string, ok: boolean, result: string, stateHash?: string | null): BrainTask | null {
+  brainFinish(
+    id: string,
+    claimedByClient: string,
+    ok: boolean,
+    result: string,
+    stateHash?: string | null,
+    currentProject?: { key: string; name: string } | null,
+  ): { task: BrainTask | null; blockedBy: BrainTask | null } {
     if (!Array.isArray(this.brainTasks)) this.loadBrainTasks();
     this.sweepStaleClaims();
     const t = this.brainTasks.find(
@@ -409,7 +466,18 @@ export class McpStore {
         x.claimedByClient === claimedByClient &&
         x.id === id,
     );
-    if (!t) return null;
+    if (!t) return { task: null, blockedBy: null };
+    if (t.targetProjectKey && currentProject?.key && currentProject.key !== t.targetProjectKey) {
+      // continuation gate: the claim lease is RELEASED so the task returns to
+      // the board for the correct project context to claim it again
+      t.status = 'pending';
+      t.claimedBy = null;
+      t.claimedByClient = null;
+      t.claimedAt = null;
+      t.progress = null;
+      this.saveBrainTasks();
+      return { task: null, blockedBy: t };
+    }
     t.status = ok ? 'done' : 'failed';
     t.result = String(result ?? '').slice(0, 2000);
     // verify against the claim anchor when both fingerprints are known:
@@ -420,7 +488,7 @@ export class McpStore {
         ? t.stateHashAtFinish !== t.stateHashAtClaim
         : null;
     this.saveBrainTasks();
-    return t;
+    return { task: t, blockedBy: null };
   }
 
   /** Remove finished (`done` / `failed` / `cancelled`) tasks while preserving active ones. */

@@ -1,0 +1,6 @@
+  /** Active project identity from the editor link (task-board gating). */
+  private get currentProject(): { key: string; name: string } | null {
+    const key = this.link.currentProjectKey;
+    if (!key) return null;
+    return { key, name: this.link.currentProjectName ?? 'active project' };
+  }

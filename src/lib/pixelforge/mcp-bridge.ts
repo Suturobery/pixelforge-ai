@@ -18,7 +18,7 @@
 
 import { AGENT_FETCH_HEADERS } from './agent-headers'
 import { useAppSettings } from './settings'
-import { getBus } from './store'
+import { getBus, useEditor } from './store'
 import { notifyInBackground } from './desktop-bridge'
 import { executeMcpTool, computeStateHash } from './mcp-tools'
 
@@ -57,6 +57,26 @@ function setState(patch: Partial<BridgeState>): void {
   for (const fn of listeners) fn(state)
 }
 
+export interface RemoteEditRecord {
+  tool: string
+  clientName: string
+  ok: boolean
+  at: string
+}
+
+const remoteEdits: RemoteEditRecord[] = []
+
+/** Document-mutating tool calls relayed to CONNECTED MCP agents (e.g. ZCode) —
+ *  the Agent panel labels these 'performed by: connected agent'. */
+function recordRemoteEdit(tool: string, clientName: string, ok: boolean): void {
+  remoteEdits.unshift({ tool, clientName, ok, at: new Date().toLocaleTimeString() })
+  if (remoteEdits.length > 20) remoteEdits.length = 20
+}
+
+export function getRecentRemoteEdits(): RemoteEditRecord[] {
+  return [...remoteEdits]
+}
+
 export function getBridgeState(): BridgeState {
   return state
 }
@@ -64,6 +84,39 @@ export function getBridgeState(): BridgeState {
 export function subscribeBridge(fn: Listener): () => void {
   listeners.add(fn)
   return () => listeners.delete(fn)
+}
+
+// ---------------------------------------------------------------------------
+// active project identity (durable where possible; session-stable otherwise)
+// ---------------------------------------------------------------------------
+
+let unsavedDocCounter = 0
+
+/**
+ * Durable-ish identity for the OPEN document, used to keep task-board work in
+ * its queued project. Saved projects key on the DB id or desktop file path;
+ * unsaved ones key on a session-stable name so two different unsaved projects
+ * never collide unless they share a name (the Brain card shows the name).
+ */
+function getEditorState() {
+  return useEditor.getState()
+}
+
+export function currentProjectIdentity(): { key: string; name: string } {
+  const st = getEditorState()
+  const project = st.project
+  if (st.projectId) return { key: `db:${st.projectId}`, name: project.name }
+  if (st.filePath) return { key: `file:${st.filePath}`, name: project.name }
+  return { key: `unsaved:${project.name}:${unsavedDocCounter}`, name: project.name }
+}
+
+/**
+ * Called when the editor replaces the active document (new/load): bump the
+ * unsaved counter so a SECOND unsaved project in the same session never
+ * inherits the previous one's identity.
+ */
+export function noteDocumentReplaced(): void {
+  unsavedDocCounter++
 }
 
 // ---------------------------------------------------------------------------
@@ -311,11 +364,13 @@ async function handleMessage(raw: string): Promise<void> {
       const id = typeof msg.id === 'string' ? msg.id : ''
       const tool = typeof msg.tool === 'string' ? msg.tool : ''
       if (!id || !tool) return
+      const clientName = typeof msg.clientName === 'string' ? msg.clientName : 'unknown'
       const result = await executeMcpTool(tool, msg.args, {
         clientId: typeof msg.clientId === 'string' ? msg.clientId : 'unknown',
-        clientName: typeof msg.clientName === 'string' ? msg.clientName : 'unknown',
+        clientName,
         tier: msg.tier === 'L2' ? 'L2' : msg.tier === 'L3' ? 'L3' : msg.tier === 'L1' ? 'L1' : 'L0',
       })
+      recordRemoteEdit(tool, clientName, result.ok)
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'tool-result', id, ...result }))
       }
@@ -350,10 +405,18 @@ function pushProjectChanged(): void {
       if (hash === lastSentHash) return
       lastSentHash = hash
       const project = getBus().getProject()
+      const identity = currentProjectIdentity()
       ws.send(
         JSON.stringify({
           type: 'event',
-          event: { type: 'projectChanged', stateHash: hash, name: project.name, dirty: getBus().isDirty() },
+          event: {
+            type: 'projectChanged',
+            stateHash: hash,
+            name: project.name,
+            dirty: getBus().isDirty(),
+            projectKey: identity.key,
+            projectName: identity.name,
+          },
         })
       )
     } catch {
@@ -420,6 +483,11 @@ export function initMcpBridge(): void {
   // document events (bus changes only — pointer strokes bump renderTick, not
   // the bus; playhead moves never touch the bus)
   unsubBus = getBus().onChange(() => pushProjectChanged())
+  // document REPLACEMENT (new/load): bump the unsaved identity counter so a
+  // second unsaved project in the session never inherits the first one's key
+  useEditor.subscribe((s, prev) => {
+    if (s.loadEpoch !== prev.loadEpoch) noteDocumentReplaced()
+  })
   // dev only: a hot-reload re-evaluates this module (started resets to false)
   // while the OLD socket still holds the server's single editor slot — dispose
   // it explicitly so the fresh socket isn't rejected in a connect/reject loop
