@@ -122,7 +122,7 @@ export type CtrlRequest =
   /** Remove a client record only after it has been revoked. */
   | { kind: 'client-remove'; clientId: string }
   | { kind: 'ops-recent'; limit?: number }
-  | { kind: 'brain-push'; tasks: Array<{ title: string; detail: string; idempotencyKey?: string }>; replacePending?: boolean; planId?: string }
+  | { kind: 'brain-push'; tasks: Array<{ title: string; detail: string; idempotencyKey?: string; targetProject?: { key: string; name: string } | null }>; replacePending?: boolean; planId?: string }
   | { kind: 'brain-tasks' }
   | { kind: 'brain-clear' }
   | { kind: 'brain-retry'; id?: string }

@@ -132,8 +132,18 @@ function handleCtrl(msg: EditorInbound, reply: (id: string, ok: boolean, data?: 
     // IDE agents to claim, and reads board state for the UI
     case 'brain-push': {
       const tasks = Array.isArray(ctrl.tasks) ? ctrl.tasks : [];
+      // Stamp the pushing editor's current project on tasks that omit a target
+      // (claim gating needs an identity; legacy senders never provided one).
+      const stamped = tasks.map((t) => ({
+        ...t,
+        targetProject:
+          t.targetProject ??
+          (link.currentProjectKey
+            ? { key: link.currentProjectKey, name: link.currentProjectName ?? '' }
+            : null),
+      }));
       reply(id, true, {
-        tasks: store.brainPush(tasks, {
+        tasks: store.brainPush(stamped, {
           replacePending: ctrl.replacePending === true,
           planId: typeof ctrl.planId === 'string' ? ctrl.planId : undefined,
         }),

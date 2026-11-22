@@ -21,6 +21,7 @@ import { useAppSettings } from './settings'
 import { getBus, useEditor } from './store'
 import { notifyInBackground } from './desktop-bridge'
 import { executeMcpTool, computeStateHash } from './mcp-tools'
+import { composeFrameRgba } from '@pixelforge/core'
 
 export const MCP_BRIDGE_VERSION = 1
 
@@ -62,14 +63,30 @@ export interface RemoteEditRecord {
   clientName: string
   ok: boolean
   at: string
+  /** before/after snapshots for pixel-affecting agent edits (Review Result). */
+  review?: {
+    clipId: string
+    clipName: string
+    frameId: string
+    frameNumber: number
+    layerId: string
+    layerName: string
+    before: Uint8ClampedArray | null
+    after: Uint8ClampedArray
+    width: number
+    height: number
+  } | null
 }
 
 const remoteEdits: RemoteEditRecord[] = []
 
+/** Pixel tools whose relayed calls get Review Result snapshots. */
+const REMOTE_PIXEL_TOOLS = new Set(['set_pixels', 'fill_rect', 'replace_color', 'flip_frame', 'rotate_frame', 'shift_frame', 'resize_canvas'])
+
 /** Document-mutating tool calls relayed to CONNECTED MCP agents (e.g. ZCode) —
  *  the Agent panel labels these 'performed by: connected agent'. */
-function recordRemoteEdit(tool: string, clientName: string, ok: boolean): void {
-  remoteEdits.unshift({ tool, clientName, ok, at: new Date().toLocaleTimeString() })
+function recordRemoteEdit(tool: string, clientName: string, ok: boolean, review?: RemoteEditRecord['review']): void {
+  remoteEdits.unshift({ tool, clientName, ok, at: new Date().toLocaleTimeString(), review: review ?? null })
   if (remoteEdits.length > 20) remoteEdits.length = 20
 }
 
@@ -352,6 +369,11 @@ async function handleMessage(raw: string): Promise<void> {
       pingTimer = setInterval(() => {
         if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping' }))
       }, 15000)
+      // fresh server-side link (restart or first connect): re-report the
+      // project identity even if the state hash is unchanged, so claim
+      // gating never sits on a null target after a reconnect
+      lastSentHash = null
+      pushProjectChanged()
       return
     }
     case 'status': {
@@ -365,12 +387,47 @@ async function handleMessage(raw: string): Promise<void> {
       const tool = typeof msg.tool === 'string' ? msg.tool : ''
       if (!id || !tool) return
       const clientName = typeof msg.clientName === 'string' ? msg.clientName : 'unknown'
+      // snapshot the target frame before/after so the Agent panel's Review
+      // Result can show exactly what the connected agent changed
+      let reviewBefore: { clipId: string; clipName: string; frameId: string; frameNumber: number; layerId: string; layerName: string; before: Uint8ClampedArray | null } | null = null
+      if (REMOTE_PIXEL_TOOLS.has(tool)) {
+        const st = useEditor.getState()
+        const clip = st.project.clips.find((c) => c.id === st.activeClipId) ?? st.project.clips[0]
+        const frame = clip?.frames[st.activeFrameIndex] ?? clip?.frames[0]
+        if (clip && frame) {
+          const layer = clip.layers.find((l) => l.id === st.activeLayerId) ?? clip.layers[clip.layers.length - 1] ?? clip.layers[0]
+          reviewBefore = {
+            clipId: clip.id,
+            clipName: clip.name,
+            frameId: frame.id,
+            frameNumber: st.activeFrameIndex + 1,
+            layerId: layer?.id ?? '',
+            layerName: layer?.name ?? '',
+            before: composeFrameRgba(st.project, clip, frame),
+          }
+        }
+      }
       const result = await executeMcpTool(tool, msg.args, {
         clientId: typeof msg.clientId === 'string' ? msg.clientId : 'unknown',
         clientName,
         tier: msg.tier === 'L2' ? 'L2' : msg.tier === 'L3' ? 'L3' : msg.tier === 'L1' ? 'L1' : 'L0',
       })
-      recordRemoteEdit(tool, clientName, result.ok)
+      let review: RemoteEditRecord['review'] = null
+      if (reviewBefore && result.ok) {
+        const st = useEditor.getState()
+        const clip = st.project.clips.find((c) => c.id === reviewBefore.clipId)
+        const frame = clip?.frames.find((f) => f.id === reviewBefore.frameId)
+        if (clip && frame) {
+          review = {
+            ...reviewBefore,
+            after: composeFrameRgba(st.project, clip, frame),
+            width: st.project.width,
+            height: st.project.height,
+          }
+        }
+      }
+      recordRemoteEdit(tool, clientName, result.ok, review)
+      setState({}) // nudge subscribers (Agent panel) to re-read remoteEdits
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'tool-result', id, ...result }))
       }

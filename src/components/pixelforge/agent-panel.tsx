@@ -296,6 +296,36 @@ export function AgentPanel() {
       return
     }
 
+    // pixel-affecting runs capture the target frame before/after so Review
+    // Result can show exactly what changed and where
+    const PIXEL_TOOLS = new Set(['set_pixels', 'fill_rect', 'replace_color', 'flip_frame', 'rotate_frame', 'shift_frame', 'resize_canvas'])
+    let reviewCapture: {
+      clipId: string
+      clipName: string
+      frameId: string
+      frameNumber: number
+      layerId: string
+      layerName: string
+      before: Uint8ClampedArray | null
+    } | null = null
+    if (PIXEL_TOOLS.has(toolName)) {
+      const st = useEditor.getState()
+      const clip = st.project.clips.find((c) => c.id === st.activeClipId) ?? st.project.clips[0]
+      const frame = clip?.frames[st.activeFrameIndex] ?? clip?.frames[0]
+      if (clip && frame) {
+        const layer = clip.layers.find((l) => l.id === st.activeLayerId) ?? clip.layers[clip.layers.length - 1] ?? clip.layers[0]
+        reviewCapture = {
+          clipId: clip.id,
+          clipName: clip.name,
+          frameId: frame.id,
+          frameNumber: st.activeFrameIndex + 1,
+          layerId: layer?.id ?? '',
+          layerName: layer?.name ?? '',
+          before: composeFrameRgba(st.project, clip, frame),
+        }
+      }
+    }
+
     setRunning(true)
     try {
       // strip example placeholders ("<projectId>") — the executor resolves
@@ -314,6 +344,40 @@ export function AgentPanel() {
       })
       setResult(JSON.stringify(res, null, 2))
       setResultOk(res.ok)
+      // refresh the Review Result block for pixel edits; stale reviews for
+      // other tool runs are cleared so the block always matches the last edit
+      lastRunnerRef.current = 'local'
+      if (reviewCapture && res.ok) {
+        const st = useEditor.getState()
+        const clip = st.project.clips.find((c) => c.id === reviewCapture.clipId)
+        const frame = clip?.frames.find((f) => f.id === reviewCapture.frameId)
+        if (clip && frame) {
+          const after = composeFrameRgba(st.project, clip, frame)
+          setReview({
+            tool: toolName,
+            clipId: clip.id,
+            clipName: clip.name,
+            frameId: frame.id,
+            frameNumber: reviewCapture.frameNumber,
+            layerId: reviewCapture.layerId,
+            layerName: reviewCapture.layerName,
+            before: reviewCapture.before,
+            after,
+            checks: validateStyleCandidate({
+              buffer: after,
+              width: st.project.width,
+              height: st.project.height,
+              targetWidth: st.project.width,
+              targetHeight: st.project.height,
+              palette: st.project.palette ?? [],
+            }),
+          })
+        } else {
+          setReview(null)
+        }
+      } else if (!reviewCapture) {
+        setReview(null)
+      }
       setOps((prev) =>
         [
           {
@@ -348,6 +412,39 @@ export function AgentPanel() {
     return () => {
       alive = false
     }
+  }, [])
+
+  // live remote-edit feed: refresh the session log and, when a CONNECTED agent
+  // (e.g. ZCode) just changed pixels, flip Review Result to that edit
+  useEffect(() => {
+    const unsubscribe = subscribeBridge(() => {
+      remoteEdits.current = getRecentRemoteEdits()
+      const newest = remoteEdits.current.find((r) => r.review)
+      if (newest?.ok && newest.review) {
+        lastRunnerRef.current = 'mcp'
+        const st = useEditor.getState()
+        setReview({
+          tool: newest.tool,
+          clipId: newest.review.clipId,
+          clipName: newest.review.clipName,
+          frameId: newest.review.frameId,
+          frameNumber: newest.review.frameNumber,
+          layerId: newest.review.layerId,
+          layerName: newest.review.layerName,
+          before: newest.review.before,
+          after: newest.review.after,
+          checks: validateStyleCandidate({
+            buffer: newest.review.after,
+            width: newest.review.width,
+            height: newest.review.height,
+            targetWidth: newest.review.width,
+            targetHeight: newest.review.height,
+            palette: st.project.palette ?? [],
+          }),
+        })
+      }
+    })
+    return unsubscribe
   }, [])
 
   // Agent API disabled in Settings → MCP: show a notice instead of the console.
