@@ -13,6 +13,7 @@ import type {
   BlendMode,
   Cel,
   Clip,
+  ClipTag,
   Frame,
   Layer,
   LoopMode,
@@ -150,7 +151,7 @@ export const clipDelete: CommandDefinition<{ clipId: string }> = {
 
 interface ClipSetPropsPayload {
   clipId: string;
-  patch: { name?: string; fps?: number; loop?: boolean; loopMode?: LoopMode };
+  patch: { name?: string; fps?: number; loop?: boolean; loopMode?: LoopMode; tags?: ClipTag[] };
 }
 
 export const clipSetProps: CommandDefinition<ClipSetPropsPayload> = {
@@ -159,12 +160,25 @@ export const clipSetProps: CommandDefinition<ClipSetPropsPayload> = {
   validate(payload, ctx) {
     const p = assertObject(payload, 'clip.setProps');
     const { clipId } = parseRef(p);
-    if (!findClip(ctx.project, clipId)) failNotFound(`clip.setProps: clip "${clipId}" not found`);
+    const clip = findClip(ctx.project, clipId);
+    if (!clip) failNotFound(`clip.setProps: clip "${clipId}" not found`);
     const patch = assertObject(p.patch, 'clip.setProps patch');
     const name = getOptionalString(patch, 'name', 'clip.setProps');
     if (name !== undefined && name.length > 120) fail('clip.setProps: name too long');
     getOptionalInt(patch, 'fps', 'clip.setProps', 1, 60);
     getOptionalLoopMode(patch, 'loopMode', 'clip.setProps');
+    if (patch.tags !== undefined) {
+      if (!Array.isArray(patch.tags)) fail('clip.setProps: tags must be an array');
+      const maxIndex = Math.max(0, clip.frames.length - 1);
+      for (const [i, tag] of patch.tags.entries()) {
+        const t = assertObject(tag, `clip.setProps tags[${i}]`);
+        const tagName = getString(t, 'name', `clip.setProps tags[${i}]`).trim();
+        if (!tagName) fail(`clip.setProps tags[${i}]: name cannot be empty`);
+        if (tagName.length > 64) fail(`clip.setProps tags[${i}]: name too long`);
+        const from = getInt(t, 'from', `clip.setProps tags[${i}]`, 0, maxIndex);
+        getInt(t, 'to', `clip.setProps tags[${i}]`, from, maxIndex);
+      }
+    }
   },
   apply(payload, ctx) {
     const { clipId, patch } = payload;
@@ -175,8 +189,42 @@ export const clipSetProps: CommandDefinition<ClipSetPropsPayload> = {
         ...(patch.fps !== undefined ? { fps: Math.min(60, Math.max(1, Math.round(patch.fps))) } : {}),
         ...(patch.loop !== undefined ? { loop: patch.loop } : {}),
         ...(patch.loopMode !== undefined ? { loopMode: patch.loopMode } : {}),
+        ...(patch.tags !== undefined
+          ? { tags: patch.tags.map((t) => ({ name: t.name.trim(), from: t.from, to: t.to })) }
+          : {}),
       })),
       label: 'Clip properties',
+    };
+  },
+};
+
+export const clipSetTags: CommandDefinition<{ clipId: string; tags: ClipTag[] }> = {
+  type: 'clip.setTags',
+  defaultLabel: 'Set animation tags',
+  validate(payload, ctx) {
+    const p = assertObject(payload, 'clip.setTags');
+    const { clipId } = parseRef(p);
+    const clip = findClip(ctx.project, clipId);
+    if (!clip) failNotFound(`clip.setTags: clip "${clipId}" not found`);
+    if (!Array.isArray(p.tags)) fail('clip.setTags: tags must be an array');
+    const maxIndex = Math.max(0, clip.frames.length - 1);
+    for (const [i, tag] of p.tags.entries()) {
+      const t = assertObject(tag, `clip.setTags tags[${i}]`);
+      const name = getString(t, 'name', `clip.setTags tags[${i}]`).trim();
+      if (!name) fail(`clip.setTags tags[${i}]: name cannot be empty`);
+      if (name.length > 64) fail(`clip.setTags tags[${i}]: name too long`);
+      const from = getInt(t, 'from', `clip.setTags tags[${i}]`, 0, maxIndex);
+      getInt(t, 'to', `clip.setTags tags[${i}]`, from, maxIndex);
+    }
+  },
+  apply(payload, ctx) {
+    const { clipId, tags } = payload;
+    return {
+      project: mapClip(ctx.project, clipId, (c) => ({
+        ...c,
+        tags: tags.map((t) => ({ name: t.name.trim(), from: t.from, to: t.to })),
+      })),
+      label: 'Set animation tags',
     };
   },
 };
@@ -971,6 +1019,7 @@ export function builtinCommands(): CommandDefinition<never>[] {
     clipAdd,
     clipDelete,
     clipSetProps,
+    clipSetTags,
     frameAdd,
     frameDelete,
     frameMove,

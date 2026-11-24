@@ -30,6 +30,7 @@ import {
   writeExportPlan,
   type CommandOrigin,
   type CustomBrush,
+  type ClipTag,
   type MotionApplyPayload,
   type PartRect,
   type Project,
@@ -339,8 +340,10 @@ export interface EditorState {
   moveLayer: (layerId: string, dir: -1 | 1) => void
   reorderLayer: (layerId: string, toIndex: number) => void
   setLayerProp: (layerId: string, patch: Partial<Pick<{ name: string; visible: boolean; opacity: number; locked: boolean; blend: string }, 'name' | 'visible' | 'opacity' | 'locked' | 'blend'>>) => void
+  setLayerLinked: (layerId: string, linked: boolean) => void
   addClip: (name: string) => void
   deleteClip: (clipId: string) => void
+  setClipTags: (tags: ClipTag[]) => void
   setClipProp: (
     clipId: string,
     patch: Partial<Pick<{ name: string; fps: number; loop: boolean; loopMode: 'forward' | 'reverse' | 'pingpong' }, 'name' | 'fps' | 'loop' | 'loopMode'>>
@@ -1178,6 +1181,26 @@ export const useEditor = create<EditorState>()((set, get) => ({
       bus.execute('layer.setProps', { clipId: refs.clipId, layerId, patch }, ORIGIN)
     } catch {
       /* invalid patch — ignore */
+    }
+  },
+
+  setLayerLinked: (layerId, linked) => {
+    const refs = activeRefs(get())
+    if (!refs) return
+    try {
+      bus.execute('layer.setLinked', { clipId: refs.clipId, layerId, linked }, ORIGIN)
+    } catch (err) {
+      toast({ title: 'Could not change layer link', description: friendlyError(err), variant: 'destructive' })
+    }
+  },
+
+  setClipTags: (tags) => {
+    const refs = activeRefs(get())
+    if (!refs) return
+    try {
+      bus.execute('clip.setTags', { clipId: refs.clipId, tags }, ORIGIN)
+    } catch (err) {
+      toast({ title: 'Could not update tags', description: friendlyError(err), variant: 'destructive' })
     }
   },
 

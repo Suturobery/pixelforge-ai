@@ -1,1 +1,1 @@
-export { exportGif } from './export'
+export { exportGif, generateGodot4SpriteFramesTres, type GodotTresInput } from './export'

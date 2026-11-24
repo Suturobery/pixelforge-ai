@@ -60,6 +60,7 @@ Details: [AI and agents](ai-agents.md), [Knowledge base](knowledge-base.md).
 ### Layers
 
 - A layer stack per clip, with per-frame cels.
+- Linked layers: share one cel across all frames of a clip (for backgrounds, shadows, or static props).
 - Visibility, opacity, paint lock, and blend modes (normal, multiply, screen, overlay, darken,
   lighten).
 - Add, duplicate, delete, merge down, reorder. Deletes go to a project trash (20 entries).
@@ -68,10 +69,12 @@ Details: [AI and agents](ai-agents.md), [Knowledge base](knowledge-base.md).
 
 - Named clips (idle, walk, attack…) with their own layer stack, 1–60 fps, loop on or off, and
   forward, reverse or ping-pong playback.
+- Animation tags: label frame ranges (e.g. idle, walk, attack) directly on the timeline.
 - Per-frame duration overrides.
-- Timeline with drag-and-drop reordering, duplicate, copy, delete and a scrubber.
+- Timeline with drag-and-drop reordering, duplicate, copy, delete, tags popover and scrubber.
 - Import a PNG sequence as an animated clip.
 - Floating preview that mirrors the shared playback clock.
+- Game-ready export: sprite sheet with JSON metadata, animated GIF, and Godot 4 `SpriteFrames` (`.tres`) resources.
 
 ### Motion Composer
 

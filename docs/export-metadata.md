@@ -1,9 +1,8 @@
 # PixelForge AI — Export Metadata Schema (Task 7)
 
-> **Status (2026-11-25): current, with one stale note.** The schema below matches
-> `EXPORT_METADATA_VERSION = 2` in the code. The closing "Out of scope" section is outdated: GIF
-> export exists in the export dialog, the MCP tools `export_sheet` and `export_gif` return data
-> URLs rather than writing files, and a Godot `.tres` exporter is still absent. File formats are
+> **Status (2026-11-25): current.** The schema below matches `EXPORT_METADATA_VERSION = 2` in the
+> code. GIF export is supported in the export dialog via `gifenc`, and Godot 4 `.tres` (SpriteFrames)
+> resource export is supported directly alongside sprite-sheet and JSON sidecars. File formats are
 > summarised in [Project and file formats](project-format.md#exports).
 
 Stable contract for the JSON sidecar emitted with every sprite-sheet export
@@ -155,8 +154,7 @@ The `playback.interpretation` field carries the same rules verbatim:
   overwrite is off; partial failures are reported per file.
 - Canceled dialogs write nothing.
 
-## Out of scope (later tasks)
+## Game Engine Exporters
 
-GIF export + Godot `.tres` SpriteFrames resources are P1 (plan Task 12).
-The MCP server's sheet tool currently operates on the legacy v1 serialized
-contract and will be unified onto this service in Task 8.
+- **Godot 4**: Direct export of native `.tres` `SpriteFrames` resource referencing the sheet texture and rects, with full animation speed, looping, and tagged animation tracks ready to use in `AnimatedSprite2D`.
+- **JSON Metadata**: Sidecar for any engine (Godot, Unity, Defold, PixiJS, Phaser) mapping frame sequences, durations, and pixel coordinates.

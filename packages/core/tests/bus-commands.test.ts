@@ -319,6 +319,32 @@ describe('pixels.applyOp behaviors', () => {
     expect(() => bus.execute('canvas.resize', { width: 8, height: 8 }, 'ui')).toThrow(CommandError);
   });
 
+  test('clip.setTags updates clip tags with validation and undo/redo', () => {
+    const { bus, project } = makeBus();
+    const clipId = project.clips[0].id;
+
+    // Add a second frame so we have indices 0 and 1
+    bus.execute('frame.add', { clipId, copy: false }, 'ui');
+
+    // Validation failures
+    expect(() => bus.execute('clip.setTags', { clipId, tags: [{ name: '', from: 0, to: 0 }] }, 'ui')).toThrow(CommandError);
+    expect(() => bus.execute('clip.setTags', { clipId, tags: [{ name: 'walk', from: -1, to: 0 }] }, 'ui')).toThrow(CommandError);
+    expect(() => bus.execute('clip.setTags', { clipId, tags: [{ name: 'walk', from: 1, to: 0 }] }, 'ui')).toThrow(CommandError);
+    expect(() => bus.execute('clip.setTags', { clipId, tags: [{ name: 'walk', from: 0, to: 5 }] }, 'ui')).toThrow(CommandError);
+
+    // Valid tags
+    bus.execute('clip.setTags', { clipId, tags: [{ name: 'idle', from: 0, to: 1 }] }, 'ui');
+    expect(bus.getProject().clips[0].tags).toEqual([{ name: 'idle', from: 0, to: 1 }]);
+
+    // Undo restores previous tags
+    bus.undo();
+    expect(bus.getProject().clips[0].tags).toEqual([]);
+
+    // Redo restores tags
+    bus.redo();
+    expect(bus.getProject().clips[0].tags).toEqual([{ name: 'idle', from: 0, to: 1 }]);
+  });
+
   test('canvas.resize keeps linked cels linked with identical buffers', () => {
     const { bus, project } = makeBus();
     const clipId = project.clips[0].id;

@@ -39,6 +39,8 @@ import {
   ArrowDown,
   Lock,
   LockOpen,
+  Link2,
+  Unlink2,
   GripVertical,
 } from 'lucide-react'
 
@@ -179,6 +181,7 @@ export function LayersPanel() {
   const moveLayer = useEditor((s) => s.moveLayer)
   const reorderLayer = useEditor((s) => s.reorderLayer)
   const setLayerProp = useEditor((s) => s.setLayerProp)
+  const setLayerLinked = useEditor((s) => s.setLayerLinked)
   const dragFrame = useEditor((s) => s.dragFrame)
   const { toast } = useToast()
   const [renaming, setRenaming] = useState<string | null>(null)
@@ -318,16 +321,47 @@ export function LayersPanel() {
                   />
                 ) : (
                   <span
-                    className="min-w-0 flex-1 truncate font-mono text-xs text-zinc-300"
+                    className="flex min-w-0 flex-1 items-center gap-1 truncate font-mono text-xs text-zinc-300"
                     onDoubleClick={(e) => {
                       e.stopPropagation()
                       setRenaming(layer.id)
                     }}
                     title={`${layer.name} — double-click to rename`}
                   >
-                    {layer.name}
+                    <span className="truncate">{layer.name}</span>
+                    {layer.linked && (
+                      <span
+                        className="shrink-0 rounded bg-teal-500/20 px-1 py-0.5 font-mono text-[9px] uppercase tracking-wider text-teal-300"
+                        title="Linked cel: shared across all frames"
+                      >
+                        link
+                      </span>
+                    )}
                   </span>
                 )}
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      className={`shrink-0 ${
+                        layer.linked
+                          ? 'text-teal-400'
+                          : 'text-zinc-600 opacity-0 transition-opacity hover:text-zinc-300 group-hover:opacity-100'
+                      }`}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setLayerLinked(layer.id, !layer.linked)
+                      }}
+                      aria-label={layer.linked ? `Unlink ${layer.name} (separate cel per frame)` : `Link ${layer.name} (cel shared across all frames)`}
+                      aria-pressed={!!layer.linked}
+                    >
+                      {layer.linked ? <Link2 className="h-3.5 w-3.5" /> : <Unlink2 className="h-3.5 w-3.5" />}
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">
+                    {layer.linked ? 'Linked — cel shared across all frames (click to unlink)' : 'Link cel across all frames'}
+                  </TooltipContent>
+                </Tooltip>
                 <button
                   type="button"
                   className={`shrink-0 ${layer.locked ? 'text-amber-400/90' : 'text-zinc-600 opacity-0 transition-opacity hover:text-zinc-300 group-hover:opacity-100'}`}
@@ -422,6 +456,20 @@ export function LayersPanel() {
               </Tooltip>
               <Tooltip>
                 <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className={`h-7 w-7 ${active.linked ? 'text-teal-400 hover:text-teal-300' : 'text-zinc-400'}`}
+                    onClick={() => setLayerLinked(active.id, !active.linked)}
+                    aria-label={active.linked ? 'Unlink layer (separate cel per frame)' : 'Link layer (share cel across all frames)'}
+                  >
+                    {active.linked ? <Link2 className="h-3.5 w-3.5" /> : <Unlink2 className="h-3.5 w-3.5" />}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{active.linked ? 'Unlink cel (separate per frame)' : 'Link cel (shared across all frames)'}</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
                   <Button variant="ghost" size="icon" className="h-7 w-7 text-zinc-400" onClick={() => duplicateLayer(active.id)} aria-label="Duplicate layer">
                     <Copy className="h-3.5 w-3.5" />
                   </Button>
@@ -430,11 +478,20 @@ export function LayersPanel() {
               </Tooltip>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-7 w-7 text-zinc-400" onClick={() => mergeDown(active.id)} aria-label="Merge down">
-                    <Merge className="h-3.5 w-3.5" />
-                  </Button>
+                  <span>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-zinc-400"
+                      onClick={() => mergeDown(active.id)}
+                      disabled={active.linked}
+                      aria-label="Merge down"
+                    >
+                      <Merge className="h-3.5 w-3.5" />
+                    </Button>
+                  </span>
                 </TooltipTrigger>
-                <TooltipContent>Merge down</TooltipContent>
+                <TooltipContent>{active.linked ? 'Unlink layer before merging down' : 'Merge down'}</TooltipContent>
               </Tooltip>
               <Tooltip>
                 <TooltipTrigger asChild>

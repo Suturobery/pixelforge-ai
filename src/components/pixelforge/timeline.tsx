@@ -54,6 +54,7 @@ import {
   ArrowLeftRight,
   Images,
   ClipboardPaste,
+  Tag,
 } from 'lucide-react'
 import { composeFrameRgba } from '@pixelforge/core'
 import type { Clip, Frame } from '@/lib/pixelforge/types'
@@ -336,6 +337,150 @@ function Scrubber({ clip, activeIndex }: { clip: Clip; activeIndex: number }) {
         <span>{formatMs(clip.frames.reduce((s, _, i) => s + frameMs(clip, i), 0))} cycle</span>
       </div>
     </div>
+  )
+}
+
+// ------------------------------------------------------------- Tag Manager
+
+function TagManagerPopover({ clip }: { clip: Clip }) {
+  const setClipTags = useEditor((s) => s.setClipTags)
+  const selectFrame = useEditor((s) => s.selectFrame)
+  const [open, setOpen] = useState(false)
+  const [tagName, setTagName] = useState('')
+  const [fromFrame, setFromFrame] = useState(1)
+  const [toFrame, setToFrame] = useState(1)
+  const maxFrames = Math.max(1, clip.frames.length)
+
+  const tags = clip.tags ?? []
+
+  const handleAddTag = () => {
+    const trimmed = tagName.trim()
+    if (!trimmed) return
+    const from = Math.min(Math.max(1, fromFrame), maxFrames) - 1
+    const to = Math.min(Math.max(from + 1, toFrame), maxFrames) - 1
+    const newTags = [...tags, { name: trimmed, from, to }]
+    setClipTags(newTags)
+    setTagName('')
+    setFromFrame(1)
+    setToFrame(maxFrames)
+  }
+
+  const handleDeleteTag = (index: number) => {
+    const newTags = tags.filter((_, i) => i !== index)
+    setClipTags(newTags)
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-6 gap-1 px-1.5 font-mono text-[10px] text-zinc-400 hover:text-zinc-200"
+          aria-label="Manage frame tags"
+        >
+          <Tag className="h-3 w-3 text-teal-400" />
+          <span>Tags{tags.length > 0 ? ` (${tags.length})` : ''}</span>
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent side="top" align="start" className="w-72 p-3">
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="font-mono text-xs font-semibold uppercase tracking-wider text-zinc-300">
+              Animation Tags
+            </span>
+            <span className="font-mono text-[10px] text-zinc-500">
+              {tags.length} tag{tags.length === 1 ? '' : 's'}
+            </span>
+          </div>
+
+          {/* List of existing tags */}
+          {tags.length > 0 ? (
+            <div className="max-h-36 space-y-1.5 overflow-y-auto pr-1">
+              {tags.map((t, idx) => (
+                <div
+                  key={`${t.name}-${idx}`}
+                  className="flex items-center justify-between rounded border border-zinc-800 bg-zinc-900/80 px-2 py-1 text-xs"
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      selectFrame(t.from)
+                      setOpen(false)
+                    }}
+                    className="flex items-center gap-1.5 truncate font-mono text-zinc-300 hover:text-teal-300"
+                    title={`Jump to frame ${t.from + 1}`}
+                  >
+                    <span className="font-semibold text-teal-400">{t.name}</span>
+                    <span className="text-[10px] text-zinc-500">
+                      frames {t.from + 1}–{t.to + 1}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteTag(idx)}
+                    className="text-zinc-500 hover:text-red-400"
+                    aria-label={`Delete tag ${t.name}`}
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="font-mono text-[11px] text-zinc-500">
+              No tags yet. Tag frame ranges (e.g. idle, walk, attack) to organize animations and export Godot/game-ready sub-clips.
+            </p>
+          )}
+
+          {/* Add tag form */}
+          <div className="border-t border-zinc-800 pt-2 space-y-2">
+            <span className="font-mono text-[10px] uppercase tracking-wider text-zinc-400">
+              Add Tag
+            </span>
+            <Input
+              value={tagName}
+              onChange={(e) => setTagName(e.target.value)}
+              placeholder="Tag name (e.g. walk)"
+              className="h-7 border-zinc-700 bg-zinc-900 font-mono text-xs"
+            />
+            <div className="flex items-center gap-2">
+              <div className="flex flex-1 items-center gap-1">
+                <span className="font-mono text-[10px] text-zinc-500">From</span>
+                <Input
+                  type="number"
+                  min={1}
+                  max={maxFrames}
+                  value={fromFrame}
+                  onChange={(e) => setFromFrame(Math.min(maxFrames, Math.max(1, Number(e.target.value) || 1)))}
+                  className="h-7 border-zinc-700 bg-zinc-900 font-mono text-xs"
+                />
+              </div>
+              <div className="flex flex-1 items-center gap-1">
+                <span className="font-mono text-[10px] text-zinc-500">To</span>
+                <Input
+                  type="number"
+                  min={fromFrame}
+                  max={maxFrames}
+                  value={toFrame}
+                  onChange={(e) => setToFrame(Math.min(maxFrames, Math.max(fromFrame, Number(e.target.value) || 1)))}
+                  className="h-7 border-zinc-700 bg-zinc-900 font-mono text-xs"
+                />
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                onClick={handleAddTag}
+                disabled={!tagName.trim()}
+                className="h-7 px-2.5 font-mono text-xs bg-teal-600 hover:bg-teal-500 text-white"
+              >
+                Add
+              </Button>
+            </div>
+          </div>
+        </div>
+      </PopoverContent>
+    </Popover>
   )
 }
 
@@ -999,6 +1144,7 @@ export function Timeline() {
                 </TooltipTrigger>
                 <TooltipContent>Delete frame</TooltipContent>
               </Tooltip>
+              <TagManagerPopover clip={clip} />
               <span className="ml-2 flex min-w-0 items-center gap-2 truncate font-mono text-[10px] text-zinc-400">
                 <span>
                   frame {frameIndex + 1}/{clip.frames.length} · {clip.name} · {clip.fps}fps ·{' '}
@@ -1013,6 +1159,24 @@ export function Timeline() {
                 )}
               </span>
             </div>
+            {clip.tags && clip.tags.length > 0 && (
+              <div className="flex items-center gap-1.5 overflow-x-auto border-t border-zinc-800/60 px-3 py-1">
+                <span className="font-mono text-[9px] uppercase tracking-wider text-zinc-500">Tags:</span>
+                {clip.tags.map((t, idx) => (
+                  <button
+                    key={`${t.name}-${idx}`}
+                    type="button"
+                    onClick={() => selectFrame(t.from)}
+                    className="inline-flex shrink-0 items-center gap-1 rounded border border-teal-500/30 bg-teal-500/10 px-1.5 py-0.5 font-mono text-[9px] text-teal-300 transition-colors hover:border-teal-400 hover:bg-teal-500/20"
+                    title={`Tag "${t.name}" (frames ${t.from + 1}–${t.to + 1}) — click to jump`}
+                  >
+                    <Tag className="h-2.5 w-2.5 text-teal-400" />
+                    <span className="font-semibold">{t.name}</span>
+                    <span className="text-teal-400/60">[{t.from + 1}–{t.to + 1}]</span>
+                  </button>
+                ))}
+              </div>
+            )}
             <div ref={stripRef} className="pixelforge-scroll flex items-center gap-2 overflow-x-auto px-2 py-2">
               {clip.frames.map((f, i) => (
                 <div key={f.id} data-frame-index={i} className="shrink-0">

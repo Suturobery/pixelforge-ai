@@ -108,6 +108,7 @@ export function ExportDialog({
   const [padding, setPadding] = useState(0)
   const [spacing, setSpacing] = useState(0)
   const [includeJson, setIncludeJson] = useState(true)
+  const [includeGodotTres, setIncludeGodotTres] = useState(false)
   const [zeroPad, setZeroPad] = useState('2')
   const [baseName, setBaseName] = useState('')
   const [overwrite, setOverwrite] = useState(false)
@@ -150,14 +151,36 @@ export function ExportDialog({
     if (format === 'gif')
       return {
         ok: true as const,
-        plan: { files: [{ filename: `${effectiveBase}-${slugify(activeClip.name)}.gif` }], destination: 'browser downloads', artifacts: [] },
+        plan: {
+          artifacts: [
+            {
+              filename: `${effectiveBase}-${slugify(activeClip.name)}.gif`,
+              kind: 'png' as const,
+              label: 'Animated GIF',
+              build: async () => new Uint8Array(),
+            },
+          ],
+        },
       }
     try {
-      return { ok: true as const, plan: planExport(project, exportRequest) }
+      const p = planExport(project, exportRequest)
+      const artifacts = [...p.artifacts]
+      if (format === 'sheet' && includeGodotTres) {
+        const clips = scope === 'all-clips' ? project.clips : [activeClip]
+        for (const c of clips) {
+          artifacts.push({
+            filename: `${effectiveBase}_${slugify(c.name)}.tres`,
+            kind: 'json' as const,
+            label: `Godot 4 SpriteFrames (${c.name})`,
+            build: async () => new Uint8Array(),
+          })
+        }
+      }
+      return { ok: true as const, plan: { ...p, artifacts } }
     } catch (err) {
       return { ok: false as const, message: friendlyError(err) }
     }
-  }, [project, exportRequest, format, effectiveBase, activeClip.name])
+  }, [project, exportRequest, format, effectiveBase, activeClip, scope, includeGodotTres])
 
   // Live preview: compose through the CORE export service (pixel-identical to
   // the artifacts). Sheet preview shows the active clip; all-clips previews
@@ -245,7 +268,7 @@ export function ExportDialog({
         toast({ title: 'Export complete', description: `1 file → browser downloads (GIF, ${clip.frames.length} frames, ${gifScale}×)` })
         return
       }
-      const outcome = await runExport(st.project, { ...exportRequest, overwrite, scale: exportScale })
+      const outcome = await runExport(st.project, { ...exportRequest, overwrite, scale: exportScale, includeTres: includeGodotTres })
       describeOutcome(outcome)
     } catch (err) {
       toast({
@@ -410,6 +433,17 @@ export function ExportDialog({
                   JSON metadata (per sheet)
                 </Label>
                 <Switch id="exp-json" checked={includeJson} onCheckedChange={setIncludeJson} />
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <div className="space-y-0.5">
+                  <Label htmlFor="exp-tres" className="font-mono text-xs text-zinc-300">
+                    Godot 4 SpriteFrames (.tres)
+                  </Label>
+                  <p className="text-[10px] text-zinc-500">
+                    Resource with sheet frames &amp; animation tags for AnimatedSprite2D
+                  </p>
+                </div>
+                <Switch id="exp-tres" checked={includeGodotTres} onCheckedChange={setIncludeGodotTres} />
               </div>
             </div>
           )}
