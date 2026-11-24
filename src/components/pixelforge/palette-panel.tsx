@@ -10,7 +10,7 @@
 
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useEditor } from '@/lib/pixelforge/store'
 import { useAppSettings } from '@/lib/pixelforge/settings'
 import { harvestPalette } from '@pixelforge/core'
@@ -22,16 +22,16 @@ import { ColorPickerContent } from '@/components/pixelforge/color-picker'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command'
 import { Input } from '@/components/ui/input'
 import { loadLibrary, type PalettePreset } from '@/lib/pixelforge/palettes'
-import { ArrowLeftRight, BookOpen, EyeOff, Minus, Palette, Plus, Share2 } from 'lucide-react'
+import { ArrowLeftRight, Check, ChevronDown, EyeOff, Minus, Palette, Plus, Share2 } from 'lucide-react'
 import { copyText } from '@/lib/pixelforge/desktop-bridge'
 import { encodePaletteCode, decodePaletteCode } from '@/lib/pixelforge/palette-share'
 import { PALETTES } from '@/lib/pixelforge/palettes'
@@ -92,15 +92,56 @@ export function PalettePanel() {
   // share codes: paste-a-code popover (encode lives behind "Share…" copy)
   const [shareOpen, setShareOpen] = useState(false)
   const [pasteValue, setPasteValue] = useState('')
-  // palette library browser: lazily loaded on first open (~2k named palettes)
-  const [libOpen, setLibOpen] = useState(false)
+  // unified palette selector / browser popover: lazily loaded library (~2k named palettes)
+  const [browserOpen, setBrowserOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [filterSize, setFilterSize] = useState<'all' | '8' | '16' | '32'>('all')
   const [library, setLibrary] = useState<PalettePreset[] | null>(null)
   const [libError, setLibError] = useState(false)
-  // the select is an "apply preset" control, but it DISPLAYS the palette the
-  // document currently matches ("Forge 16" by default) — matches the original
-  // studio reference; shows "custom" after manual add/remove edits
+
+  // match current document palette against built-in presets or loaded library
   const currentPreset = PALETTES.find((p) => sameColors(p.colors, palette))
-  const currentPaletteName = currentPreset?.name ?? 'custom'
+  const currentLibPreset = library?.find((p) => sameColors(p.colors, palette))
+  const matchedPreset = currentPreset ?? currentLibPreset
+  const currentPaletteName = matchedPreset ? matchedPreset.name : `Custom (${palette.length})`
+
+  const filteredPresets = useMemo(() => {
+    if (filterSize === '8') return PALETTES.filter((p) => p.colors.length <= 8)
+    if (filterSize === '16') return PALETTES.filter((p) => p.colors.length > 8 && p.colors.length <= 16)
+    if (filterSize === '32') return PALETTES.filter((p) => p.colors.length > 16)
+    return PALETTES
+  }, [filterSize])
+
+  const filteredLibrary = useMemo(() => {
+    if (!library) return []
+    if (filterSize === '8') return library.filter((p) => p.colors.length <= 8)
+    if (filterSize === '16') return library.filter((p) => p.colors.length > 8 && p.colors.length <= 16)
+    if (filterSize === '32') return library.filter((p) => p.colors.length > 16)
+    return library
+  }, [library, filterSize])
+
+  const searchedPresets = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase()
+    if (!q) return filteredPresets
+    return filteredPresets.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        p.id.toLowerCase().includes(q) ||
+        (p.notes && p.notes.toLowerCase().includes(q))
+    )
+  }, [filteredPresets, searchQuery])
+
+  const searchedLibrary = useMemo(() => {
+    if (!filteredLibrary.length) return []
+    const q = searchQuery.trim().toLowerCase()
+    if (!q) return filteredLibrary
+    return filteredLibrary.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        p.id.toLowerCase().includes(q) ||
+        (p.notes && p.notes.toLowerCase().includes(q))
+    )
+  }, [filteredLibrary, searchQuery])
   const rootRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null)
   const hydratedRef = useRef(false)
@@ -156,7 +197,7 @@ export function PalettePanel() {
 
   // library loads once, on first browser open (lazy chunk)
   useEffect(() => {
-    if (!libOpen || library || libError) return
+    if (!browserOpen || library || libError) return
     let alive = true
     loadLibrary()
       .then((presets) => {
@@ -168,7 +209,7 @@ export function PalettePanel() {
     return () => {
       alive = false
     }
-  }, [libOpen, library, libError])
+  }, [browserOpen, library, libError])
 
   const clamp = useCallback((x: number, y: number): PxPos => {
     const el = rootRef.current
@@ -339,255 +380,340 @@ export function PalettePanel() {
         </div>
       </div>
 
-      {/* footer: add/remove row, then the palette preset select below it
-          (matches the original reference: "Forge 16" dropdown full-width) */}
+      {/* footer: action row (add/remove/code) + unified visual palette selector */}
       <div className="border-t border-zinc-800 px-3 py-1.5">
-        <div className="flex items-center gap-1">
-          <Popover>
+        <div className="mb-1.5 flex items-center justify-between">
+          <div className="flex items-center gap-1">
+            <Popover>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <PopoverTrigger asChild>
+                    <button
+                      type="button"
+                      className="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+                      aria-label="Add color to palette"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                    </button>
+                  </PopoverTrigger>
+                </TooltipTrigger>
+                <TooltipContent side="top">Add color to palette</TooltipContent>
+              </Tooltip>
+              <PopoverContent side="top" align="start" className="w-56 p-3" onOpenAutoFocus={(e) => e.preventDefault()}>
+                <ColorPickerContent
+                  color={addColor}
+                  onChange={setAddColor}
+                  alreadyInPalette={palette.includes(addColor.toLowerCase())}
+                  onAddToPalette={() => addPaletteColor(addColor)}
+                />
+                {/* ramp generator: 4 shading steps around the picked color */}
+                <button
+                  type="button"
+                  disabled={!/^#[0-9a-fA-F]{6}$/.test(addColor)}
+                  onClick={() => {
+                    const h = addColor.replace('#', '')
+                    const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16)
+                    const hexAt = (m: number) => {
+                      const c = [r, g, b].map((v) => Math.max(0, Math.min(255, Math.round(v * m))))
+                      return `#${c.map((v) => v.toString(16).padStart(2, '0')).join('')}`
+                    }
+                    for (const hexv of [hexAt(1.2), hexAt(0.78), hexAt(0.58), hexAt(0.4)]) addPaletteColor(hexv)
+                  }}
+                  className="mt-2 w-full rounded border border-zinc-700 py-1 font-mono text-[10px] text-zinc-300 hover:border-frost-500/60 hover:text-frost-300 disabled:opacity-40"
+                  title="Add a 4-step light/shade ramp around this color"
+                >
+                  Generate ramp (+4 shades)
+                </button>
+                {/* palette harvest: steal the 16 best colors from any image */}
+                <input
+                  ref={harvestRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  className="hidden"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0]
+                    e.target.value = ''
+                    if (!file) return
+                    try {
+                      const dataUrl = await new Promise<string>((resolve, reject) => {
+                        const fr = new FileReader()
+                        fr.onload = () => resolve(fr.result as string)
+                        fr.onerror = () => reject(new Error('Could not read file'))
+                        fr.readAsDataURL(file)
+                      })
+                      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+                        const im = new Image()
+                        im.onload = () => resolve(im)
+                        im.onerror = () => reject(new Error('Could not decode image'))
+                        im.src = dataUrl
+                      })
+                      const cvs = document.createElement('canvas')
+                      cvs.width = img.naturalWidth
+                      cvs.height = img.naturalHeight
+                      cvs.getContext('2d')?.drawImage(img, 0, 0)
+                      const rgba = cvs.getContext('2d')?.getImageData(0, 0, cvs.width, cvs.height)
+                      if (!rgba) throw new Error('Could not read image pixels')
+                      // harvest locally — core median cut handles any format the
+                      // browser decoded (PNG/JPEG/WebP), no MCP roundtrip
+                      const colors = harvestPalette(rgba.data, 16)
+                      if (colors.length === 0) throw new Error('Image has no visible pixels')
+                      for (const hexv of colors) addPaletteColor(hexv)
+                    } catch (err) {
+                      toast({
+                        title: 'Palette harvest failed',
+                        description: err instanceof Error ? err.message : 'Unknown error',
+                        variant: 'destructive',
+                      })
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => harvestRef.current?.click()}
+                  className="mt-1 w-full rounded border border-zinc-700 py-1 font-mono text-[10px] text-zinc-300 hover:border-frost-500/60 hover:text-frost-300"
+                  title="Extract the 16 best colors from any image (median cut)"
+                >
+                  Harvest from image…
+                </button>
+              </PopoverContent>
+            </Popover>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  className="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-red-300"
+                  onClick={() => removePaletteColor(primary)}
+                  disabled={palette.length <= 1}
+                  aria-label="Remove primary color from palette"
+                >
+                  <Minus className="h-3.5 w-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="top">Remove the primary color from the palette</TooltipContent>
+            </Tooltip>
+          </div>
+
+          {/* compact share/paste code button */}
+          <Popover open={shareOpen} onOpenChange={setShareOpen}>
             <Tooltip>
               <TooltipTrigger asChild>
                 <PopoverTrigger asChild>
                   <button
                     type="button"
-                    className="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
-                    aria-label="Add color to palette"
+                    className="flex h-6 items-center gap-1 rounded border border-zinc-800 bg-zinc-950 px-1.5 font-mono text-[10px] text-zinc-400 hover:border-frost-500/60 hover:text-frost-300"
+                    aria-label="Share or paste a palette code"
                   >
-                    <Plus className="h-3.5 w-3.5" />
+                    <Share2 className="h-3 w-3" aria-hidden />
+                    <span>Code</span>
                   </button>
                 </PopoverTrigger>
               </TooltipTrigger>
-              <TooltipContent side="top">Add color to palette</TooltipContent>
+              <TooltipContent side="top">Share or paste palette code (PF1-…)</TooltipContent>
             </Tooltip>
-            <PopoverContent side="top" align="start" className="w-56 p-3" onOpenAutoFocus={(e) => e.preventDefault()}>
-              <ColorPickerContent
-                color={addColor}
-                onChange={setAddColor}
-                alreadyInPalette={palette.includes(addColor.toLowerCase())}
-                onAddToPalette={() => addPaletteColor(addColor)}
-              />
-              {/* ramp generator: 4 shading steps around the picked color */}
-              <button
-                type="button"
-                disabled={!/^#[0-9a-fA-F]{6}$/.test(addColor)}
-                onClick={() => {
-                  const h = addColor.replace('#', '')
-                  const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16)
-                  const hexAt = (m: number) => {
-                    const c = [r, g, b].map((v) => Math.max(0, Math.min(255, Math.round(v * m))))
-                    return `#${c.map((v) => v.toString(16).padStart(2, '0')).join('')}`
-                  }
-                  for (const hexv of [hexAt(1.2), hexAt(0.78), hexAt(0.58), hexAt(0.4)]) addPaletteColor(hexv)
-                }}
-                className="mt-2 w-full rounded border border-zinc-700 py-1 font-mono text-[10px] text-zinc-300 hover:border-frost-500/60 hover:text-frost-300 disabled:opacity-40"
-                title="Add a 4-step light/shade ramp around this color"
-              >
-                Generate ramp (+4 shades)
-              </button>
-              {/* palette harvest: steal the 16 best colors from any image */}
-              <input
-                ref={harvestRef}
-                type="file"
-                accept="image/png,image/jpeg,image/webp"
-                className="hidden"
-                onChange={async (e) => {
-                  const file = e.target.files?.[0]
-                  e.target.value = ''
-                  if (!file) return
+            <PopoverContent side="top" align="end" className="w-64 space-y-2 p-2.5">
+              <p className="font-mono text-[10px] uppercase tracking-wider text-zinc-400">Palette share code</p>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 w-full border-zinc-800 font-mono text-[10px] text-zinc-200"
+                onClick={async () => {
                   try {
-                    const dataUrl = await new Promise<string>((resolve, reject) => {
-                      const fr = new FileReader()
-                      fr.onload = () => resolve(fr.result as string)
-                      fr.onerror = () => reject(new Error('Could not read file'))
-                      fr.readAsDataURL(file)
-                    })
-                    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-                      const im = new Image()
-                      im.onload = () => resolve(im)
-                      im.onerror = () => reject(new Error('Could not decode image'))
-                      im.src = dataUrl
-                    })
-                    const cvs = document.createElement('canvas')
-                    cvs.width = img.naturalWidth
-                    cvs.height = img.naturalHeight
-                    cvs.getContext('2d')?.drawImage(img, 0, 0)
-                    const rgba = cvs.getContext('2d')?.getImageData(0, 0, cvs.width, cvs.height)
-                    if (!rgba) throw new Error('Could not read image pixels')
-                    // harvest locally — core median cut handles any format the
-                    // browser decoded (PNG/JPEG/WebP), no MCP roundtrip
-                    const colors = harvestPalette(rgba.data, 16)
-                    if (colors.length === 0) throw new Error('Image has no visible pixels')
-                    for (const hexv of colors) addPaletteColor(hexv)
+                    const code = encodePaletteCode(palette)
+                    await copyText(code)
+                    toast({ title: 'Code copied', description: 'Anyone can paste it here to get this palette.' })
                   } catch (err) {
-                    toast({
-                      title: 'Palette harvest failed',
-                      description: err instanceof Error ? err.message : 'Unknown error',
-                      variant: 'destructive',
-                    })
+                    toast({ title: 'Share failed', description: String(err instanceof Error ? err.message : err), variant: 'destructive' })
                   }
                 }}
-              />
-              <button
-                type="button"
-                onClick={() => harvestRef.current?.click()}
-                className="mt-1 w-full rounded border border-zinc-700 py-1 font-mono text-[10px] text-zinc-300 hover:border-frost-500/60 hover:text-frost-300"
-                title="Extract the 16 best colors from any image (median cut)"
               >
-                Harvest from image…
-              </button>
+                Copy code for current palette
+              </Button>
+              <div className="flex items-center gap-1.5">
+                <Input
+                  value={pasteValue}
+                  onChange={(e) => setPasteValue(e.target.value)}
+                  placeholder="PF1-…"
+                  aria-label="Paste a palette code"
+                  className="h-6 flex-1 border-zinc-800 bg-zinc-950 px-1.5 font-mono text-[10px] text-zinc-200"
+                  spellCheck={false}
+                />
+                <Button
+                  size="sm"
+                  className="h-6 shrink-0 bg-teal-600 px-2 font-mono text-[10px] text-white hover:bg-teal-500"
+                  disabled={!pasteValue.trim()}
+                  onClick={() => {
+                    try {
+                      const colors = decodePaletteCode(pasteValue)
+                      setPalette(colors, 'Palette: shared code')
+                      setPasteValue('')
+                      setShareOpen(false)
+                      toast({ title: 'Palette applied', description: `${colors.length} colors from the shared code.` })
+                    } catch (err) {
+                      toast({ title: 'Invalid code', description: String(err instanceof Error ? err.message : err), variant: 'destructive' })
+                    }
+                  }}
+                >
+                  Apply
+                </Button>
+              </div>
+              <p className="font-mono text-[9px] leading-tight text-zinc-500">
+                Codes travel through chat/email — no account, no server.
+              </p>
             </PopoverContent>
           </Popover>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                className="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-red-300"
-                onClick={() => removePaletteColor(primary)}
-                disabled={palette.length <= 1}
-                aria-label="Remove primary color from palette"
-              >
-                <Minus className="h-3.5 w-3.5" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="top">Remove the primary color from the palette</TooltipContent>
-          </Tooltip>
         </div>
-        <Select
-          value=""
-          onValueChange={(id) => {
-            const preset = PALETTES.find((p) => p.id === id)
-            if (preset) setPalette(preset.colors, `Palette: ${preset.name}`)
-          }}
-        >
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <SelectTrigger
-                className="mt-1 h-6 w-full border-zinc-800 bg-zinc-950 px-1.5 font-mono text-[10px] text-zinc-300"
-                aria-label="Apply a palette preset"
-              >
-                <SelectValue placeholder={currentPaletteName} />
-              </SelectTrigger>
-            </TooltipTrigger>
-            <TooltipContent side="top">Apply a palette preset</TooltipContent>
-          </Tooltip>
-          <SelectContent>
-            {PALETTES.map((p) => (
-              <SelectItem key={p.id} value={p.id} className="font-mono text-[11px]">
-                {p.name} ({p.colors.length})
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        {/* share codes: copy the current palette as PF1-… or paste one in */}
-        <Popover open={shareOpen} onOpenChange={setShareOpen}>
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              className="mt-1 flex h-6 w-full items-center justify-center gap-1 rounded border border-zinc-800 bg-zinc-950 px-1.5 font-mono text-[10px] text-zinc-300 hover:border-frost-500/60 hover:text-frost-300"
-              aria-label="Share or paste a palette code"
-            >
-              <Share2 className="h-3 w-3" aria-hidden /> Share / Paste code…
-            </button>
-          </PopoverTrigger>
-          <PopoverContent side="top" align="end" className="w-64 space-y-2 p-2.5">
-            <p className="font-mono text-[10px] uppercase tracking-wider text-zinc-400">Palette share code</p>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-7 w-full border-zinc-800 font-mono text-[10px] text-zinc-200"
-              onClick={async () => {
-                try {
-                  const code = encodePaletteCode(palette)
-                  await copyText(code)
-                  toast({ title: 'Code copied', description: 'Anyone can paste it here to get this palette.' })
-                } catch (err) {
-                  toast({ title: 'Share failed', description: String(err instanceof Error ? err.message : err), variant: 'destructive' })
-                }
-              }}
-            >
-              Copy code for current palette
-            </Button>
-            <div className="flex items-center gap-1.5">
-              <Input
-                value={pasteValue}
-                onChange={(e) => setPasteValue(e.target.value)}
-                placeholder="PF1-…"
-                aria-label="Paste a palette code"
-                className="h-6 flex-1 border-zinc-800 bg-zinc-950 px-1.5 font-mono text-[10px] text-zinc-200"
-                spellCheck={false}
-              />
-              <Button
-                size="sm"
-                className="h-6 shrink-0 bg-teal-600 px-2 font-mono text-[10px] text-white hover:bg-teal-500"
-                disabled={!pasteValue.trim()}
-                onClick={() => {
-                  try {
-                    const colors = decodePaletteCode(pasteValue)
-                    setPalette(colors, 'Palette: shared code')
-                    setPasteValue('')
-                    setShareOpen(false)
-                    toast({ title: 'Palette applied', description: `${colors.length} colors from the shared code.` })
-                  } catch (err) {
-                    toast({ title: 'Invalid code', description: String(err instanceof Error ? err.message : err), variant: 'destructive' })
-                  }
-                }}
-              >
-                Apply
-              </Button>
-            </div>
-            <p className="font-mono text-[9px] leading-tight text-zinc-500">
-              Codes travel through chat/email — no account, no server.
-            </p>
-          </PopoverContent>
-        </Popover>
 
-        {/* palette library browser: search + apply across the ~2k named palettes */}
-        <Popover open={libOpen} onOpenChange={setLibOpen}>
+        {/* unified palette selector: presets + 2k library in a single searchable popover */}
+        <Popover open={browserOpen} onOpenChange={setBrowserOpen}>
           <Tooltip>
             <TooltipTrigger asChild>
               <PopoverTrigger asChild>
                 <button
                   type="button"
-                  className="mt-1 flex h-6 w-full items-center justify-center gap-1 rounded border border-zinc-800 bg-zinc-950 px-1.5 font-mono text-[10px] text-zinc-300 hover:border-frost-500/60 hover:text-frost-300"
-                  aria-label="Browse the palette library"
+                  className="flex h-7 w-full items-center justify-between gap-1.5 rounded border border-zinc-800 bg-zinc-950 px-2 font-mono text-[11px] text-zinc-300 hover:border-frost-500/60 hover:text-zinc-100 transition-colors"
+                  aria-label="Select or browse palettes"
                 >
-                  <BookOpen className="h-3 w-3" aria-hidden /> Library…
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <Palette className="h-3 w-3 shrink-0 text-teal-400" />
+                    <span className="truncate font-medium">{currentPaletteName}</span>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <div className="flex h-2.5 w-10 overflow-hidden rounded-[2px] border border-zinc-800">
+                      {palette.slice(0, 10).map((c, i) => (
+                        <span key={i} className="h-full flex-1" style={{ backgroundColor: c }} />
+                      ))}
+                    </div>
+                    <ChevronDown className="h-3 w-3 text-zinc-500" />
+                  </div>
                 </button>
               </PopoverTrigger>
             </TooltipTrigger>
-            <TooltipContent side="top">Search 2,000+ named palettes</TooltipContent>
+            <TooltipContent side="top">Choose preset or browse 2,000+ palettes</TooltipContent>
           </Tooltip>
-          <PopoverContent side="top" align="end" className="w-72 p-0">
-            <Command>
-              <CommandInput placeholder="Search palettes (name or style)…" />
-              <CommandList>
-                <CommandEmpty>
-                  {library === null ? (libError ? 'Library failed to load.' : 'Loading library…') : 'No matching palette.'}
-                </CommandEmpty>
-                {(library ?? []).slice(0, 60).map((p) => (
-                  <CommandItem
-                    key={p.id}
-                    value={`${p.id} ${p.name} ${p.notes ?? ''}`}
-                    onSelect={() => {
-                      setPalette(p.colors, `Palette: ${p.name}`)
-                      setLibOpen(false)
-                    }}
+          <PopoverContent side="top" align="center" className="w-80 p-0 shadow-2xl border-zinc-800 bg-zinc-950">
+            <Command shouldFilter={false} className="border-0 bg-transparent">
+              <CommandInput
+                placeholder="Search palettes (name or style)…"
+                value={searchQuery}
+                onValueChange={setSearchQuery}
+                className="h-8 text-xs font-mono"
+              />
+              {/* quick size filter chips */}
+              <div className="flex items-center gap-1 border-b border-zinc-800/80 bg-zinc-900/60 px-2 py-1">
+                <span className="font-mono text-[9px] uppercase tracking-wider text-zinc-500 mr-0.5">Size:</span>
+                {(
+                  [
+                    { id: 'all', label: 'All' },
+                    { id: '8', label: '≤8c' },
+                    { id: '16', label: '16c' },
+                    { id: '32', label: '32c+' },
+                  ] as const
+                ).map((chip) => (
+                  <button
+                    key={chip.id}
+                    type="button"
+                    onClick={() => setFilterSize(chip.id)}
+                    className={`rounded px-1.5 py-0.5 font-mono text-[10px] transition-colors ${
+                      filterSize === chip.id
+                        ? 'border border-teal-500/40 bg-teal-500/20 font-semibold text-teal-300'
+                        : 'border border-transparent text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
+                    }`}
                   >
-                    <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                      <span className="truncate font-mono text-[11px] text-zinc-200">
-                        {p.name} ({p.colors.length})
-                      </span>
-                      <div className="flex overflow-hidden rounded-sm">
-                        {p.colors.slice(0, 12).map((c, i) => (
-                          <span key={i} className="h-2 flex-1" style={{ background: c }} />
-                        ))}
-                      </div>
-                    </div>
-                  </CommandItem>
+                    {chip.label}
+                  </button>
                 ))}
-                {library !== null && library.length > 60 && (
-                  <div className="px-3 py-1.5 text-center text-[10px] text-zinc-500">
-                    Type to narrow — showing first 60 of {library.length}
-                  </div>
+                <span className="ml-auto font-mono text-[9px] text-zinc-500">
+                  {searchedPresets.length + searchedLibrary.length} found
+                </span>
+              </div>
+              <CommandList className="max-h-72 overflow-y-auto">
+                <CommandEmpty>
+                  {library === null
+                    ? libError
+                      ? 'Library failed to load.'
+                      : 'Loading 2,000+ palettes…'
+                    : 'No matching palette found.'}
+                </CommandEmpty>
+
+                {searchedPresets.length > 0 && (
+                  <CommandGroup heading={`Presets (${searchedPresets.length})`}>
+                    {searchedPresets.map((p) => {
+                      const isCurrent = sameColors(p.colors, palette)
+                      return (
+                        <CommandItem
+                          key={p.id}
+                          value={p.id}
+                          onSelect={() => {
+                            setPalette(p.colors, `Palette: ${p.name}`)
+                            setBrowserOpen(false)
+                          }}
+                          className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 hover:bg-zinc-800/80"
+                        >
+                          <div className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+                            {isCurrent && <Check className="h-3.5 w-3.5 text-teal-400" />}
+                          </div>
+                          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                            <div className="flex items-center justify-between">
+                              <span className="truncate font-mono text-[11px] text-zinc-200">
+                                {p.name}
+                              </span>
+                              <span className="ml-1 shrink-0 font-mono text-[9px] text-zinc-400">
+                                {p.colors.length}c
+                              </span>
+                            </div>
+                            <div className="flex h-2 w-full overflow-hidden rounded-[2px]">
+                              {p.colors.map((c, i) => (
+                                <span key={i} className="h-full flex-1" style={{ backgroundColor: c }} />
+                              ))}
+                            </div>
+                          </div>
+                        </CommandItem>
+                      )
+                    })}
+                  </CommandGroup>
+                )}
+
+                {searchedLibrary.length > 0 && (
+                  <CommandGroup heading={`Library (${searchedLibrary.length})`}>
+                    {searchedLibrary.slice(0, 80).map((p) => {
+                      const isCurrent = sameColors(p.colors, palette)
+                      return (
+                        <CommandItem
+                          key={p.id}
+                          value={p.id}
+                          onSelect={() => {
+                            setPalette(p.colors, `Palette: ${p.name}`)
+                            setBrowserOpen(false)
+                          }}
+                          className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 hover:bg-zinc-800/80"
+                        >
+                          <div className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+                            {isCurrent && <Check className="h-3.5 w-3.5 text-teal-400" />}
+                          </div>
+                          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                            <div className="flex items-center justify-between">
+                              <span className="truncate font-mono text-[11px] text-zinc-200">
+                                {p.name}
+                              </span>
+                              <span className="ml-1 shrink-0 font-mono text-[9px] text-zinc-400">
+                                {p.colors.length}c
+                              </span>
+                            </div>
+                            <div className="flex h-2 w-full overflow-hidden rounded-[2px]">
+                              {p.colors.slice(0, 24).map((c, i) => (
+                                <span key={i} className="h-full flex-1" style={{ backgroundColor: c }} />
+                              ))}
+                            </div>
+                          </div>
+                        </CommandItem>
+                      )
+                    })}
+                    {searchedLibrary.length > 80 && (
+                      <div className="p-2 text-center font-mono text-[9px] text-zinc-500">
+                        Type to narrow — showing first 80 of {searchedLibrary.length} palettes
+                      </div>
+                    )}
+                  </CommandGroup>
                 )}
               </CommandList>
             </Command>
