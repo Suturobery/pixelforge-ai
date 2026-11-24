@@ -17,7 +17,6 @@ interface SmokeProbe {
   bridgeVersion?: number;
   ping?: string;
   info?: { version?: string };
-  aiTestConnection?: boolean;
   hasCanvas?: boolean;
   title?: string;
   fileRoundTrip?: unknown;
@@ -26,26 +25,6 @@ interface SmokeProbe {
   exportRoundTrip?: unknown;
   mcp?: { status: string; endpoint: string | null; editorConnected: boolean };
   mcpE2E?: { paired: boolean; summary: string; revoked: boolean };
-  ai?: {
-    bridgeV5: boolean;
-    candidateReady: boolean;
-    colors: number;
-    provenanceOk: boolean;
-    jobListed: boolean;
-    importUndone: boolean;
-  };
-  settings?: {
-    bridgeV4: boolean;
-    namespace: boolean;
-    roundTrip: boolean;
-    keyStored: boolean;
-    sessionOnly: boolean;
-    plaintextOnDisk: boolean;
-    plaintextInLogs: boolean;
-    secretInIpcView: boolean;
-    removed: boolean;
-  };
-  settingsPersisted?: { hasKeyAfterRestart: boolean; cleaned: boolean };
 }
 
 /**
@@ -81,14 +60,13 @@ export async function runSmokeTest(win: BrowserWindow, logger: Logger): Promise<
           bridgeVersion: b.bridgeVersion,
           ping: await b.ping(),
           info: await b.app.getInfo(),
-          aiTestConnection: typeof b.ai?.testConnection === 'function',
           hasCanvas: !!document.querySelector('canvas'),
           title: document.title,
         };
       })()`,
     )) as SmokeProbe;
 
-    if (!probe || probe.bridge !== true || probe.ping !== 'pong' || probe.bridgeVersion !== 5 || !probe.aiTestConnection) {
+    if (!probe || probe.bridge !== true || probe.ping !== 'pong' || probe.bridgeVersion !== 5) {
       throw new Error(`preload bridge probe failed: ${JSON.stringify(probe ?? null)}`);
     }
     if (probe.info?.version !== app.getVersion()) {
@@ -284,255 +262,40 @@ export async function runSmokeTest(win: BrowserWindow, logger: Logger): Promise<
       probe.mcpE2E = { paired: true, summary, revoked };
     }
 
-    // --- Task 13a: settings + credential vault (PF_SMOKE_SETTINGS=1) -------
+    // --- Task 13a: settings file preferences (PF_SMOKE_SETTINGS=1) -------
     // Exercises the REAL bridge settings namespace from the real renderer:
-    // store a key → scan the userData tree from MAIN while the key is stored
-    // (plaintext must appear NOWHERE — ciphertext only) → prove the IPC view
-    // is secret-free → remove. C13 plaintext-key grep gate, end-to-end.
+    // preference round-trip through main's versioned settings file. The
+    // credential-vault variant of this smoke was removed together with the
+    // in-app AI provider stack.
     if (process.env.PF_SMOKE_SETTINGS === '1' && mode === 'dev-server') {
-      const probeKey = `sk-smoke-13a-${Date.now().toString(36)}-SECRET`;
-      const providerId = 'openai';
-
-      const setResult = (await win.webContents.executeJavaScript(
+      const roundTrip = (await win.webContents.executeJavaScript(
         `(async () => {
           const b = window.pixelforge;
           if (!b || b.bridgeVersion < 4 || !b.settings) {
             return { bridgeV4: false, namespace: !!b?.settings };
           }
-          const set = await b.settings.setApiKey(${JSON.stringify(providerId)}, ${JSON.stringify(probeKey)});
-          const stored = (await b.settings.hasKey(${JSON.stringify(providerId)})) === true;
-          const view = await b.settings.getAll();
-          const leakInIpcView = JSON.stringify(view).includes(${JSON.stringify(probeKey)});
-          const status = await b.settings.credentialStatus();
+          const before = await b.settings.getAll();
+          const patch = { app: { autosaveDelay: before.app.autosaveDelay } };
+          const after = await b.settings.update(patch);
           return {
-            bridgeV4: true, namespace: true,
-            sessionOnly: set.sessionOnly === true,
-            stored,
-            leakInIpcView,
-            statusProvider: status.providers.some((p) => p.id === ${JSON.stringify(providerId)} && p.hasKey === true),
-            encryptionAvailable: status.encryptionAvailable,
-            backend: status.backend,
+            bridgeV4: true,
+            namespace: true,
+            roundTrip: after.app.autosaveDelay === before.app.autosaveDelay,
           };
         })()`,
-      )) as {
-        bridgeV4: boolean; namespace: boolean; sessionOnly: boolean; stored: boolean;
-        leakInIpcView: boolean; statusProvider: boolean; encryptionAvailable: boolean; backend: string;
-      };
+      )) as { bridgeV4: boolean; namespace: boolean; roundTrip: boolean };
 
-      if (!setResult.bridgeV4 || !setResult.namespace) {
-        throw new Error(`bridge v4 settings namespace missing: ${JSON.stringify(setResult)}`);
+      if (!roundTrip.bridgeV4 || !roundTrip.namespace) {
+        throw new Error(`bridge v4 settings namespace missing: ${JSON.stringify(roundTrip)}`);
       }
-      if (!setResult.stored) throw new Error('setApiKey → hasKey returned false');
-      if (setResult.leakInIpcView) throw new Error('SECRET LEAK: API key visible in the settings IPC view');
-      if (!setResult.statusProvider) throw new Error('credentialStatus does not report the stored key');
-
-      // MAIN-side disk + log scan WHILE the key is stored (grep gate, C13).
-      let plaintextOnDisk = false;
-      let plaintextInLogs = false;
-      const scanTree = (dir: string, depth: number): void => {
-        if (depth > 3) return;
-        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-          const full = path.join(dir, entry.name);
-          try {
-            if (entry.isDirectory()) {
-              if (entry.name === 'CachedData' || entry.name.startsWith('GPUCache')) continue;
-              scanTree(full, depth + 1);
-            } else if (entry.isFile()) {
-              if (fs.readFileSync(full).includes(Buffer.from(probeKey))) {
-                if (entry.name.endsWith('.log')) plaintextInLogs = true;
-                else plaintextOnDisk = true;
-              }
-            }
-          } catch { /* unreadable entries are not ours */ }
-        }
-      };
-      scanTree(app.getPath('userData'), 0);
-      if (plaintextOnDisk || plaintextInLogs) {
-        throw new Error(`SECRET LEAK: plaintext key found on disk (file=${plaintextOnDisk}, log=${plaintextInLogs})`);
-      }
-
-      // cleanup + confirm
-      const cleaned = (await win.webContents.executeJavaScript(
-        `(async () => {
-          const b = window.pixelforge.settings;
-          const ok = await b.removeKey('openai');
-          return ok && (await b.hasKey('openai')) === false;
-        })()`,
-      )) as boolean;
-      if (!cleaned) throw new Error('removeKey failed to clear the stored credential');
-
-      probe.settings = {
-        bridgeV4: true,
-        namespace: true,
-        roundTrip: true,
-        keyStored: true,
-        sessionOnly: setResult.sessionOnly,
-        plaintextOnDisk: false,
-        plaintextInLogs: false,
-        secretInIpcView: false,
-        removed: true,
-      };
-    }
-
-    // --- Task 13a restart persistence (runner-driven two-launch sequence) ---
-    // Launch 1: PF_SMOKE_KEY_SEED=1 PF_SMOKE_KEY=<secret> → stores the key,
-    //           verifies hasKey, exits (key STAYS on disk, encrypted).
-    // Launch 2: PF_SMOKE_KEY_VERIFY=1 → hasKey must still be true (the key
-    //           survived a full app restart), then removeKey + confirm.
-    if (process.env.PF_SMOKE_KEY_SEED === '1' && mode === 'dev-server') {
-      const seedKey = process.env.PF_SMOKE_KEY ?? `sk-seed-13a-${Date.now().toString(36)}`;
-      const seeded = (await win.webContents.executeJavaScript(
-        `(async () => {
-          const b = window.pixelforge.settings;
-          await b.setApiKey('openai', ${JSON.stringify(seedKey)});
-          return (await b.hasKey('openai')) === true;
-        })()`,
-      )) as boolean;
-      if (!seeded) throw new Error('seed phase: setApiKey → hasKey returned false');
-    }
-    if (process.env.PF_SMOKE_KEY_VERIFY === '1' && mode === 'dev-server') {
-      const hasKey = (await win.webContents.executeJavaScript(
-        `window.pixelforge.settings.hasKey('openai')`,
-      )) as boolean;
-      if (hasKey !== true) {
-        throw new Error('credential did not survive the app restart (hasKey=false)');
-      }
-      const cleaned = (await win.webContents.executeJavaScript(
-        `(async () => {
-          const b = window.pixelforge.settings;
-          const ok = await b.removeKey('openai');
-          return ok && (await b.hasKey('openai')) === false;
-        })()`,
-      )) as boolean;
-      if (!cleaned) throw new Error('verify-phase cleanup (removeKey) failed');
-      probe.settingsPersisted = { hasKeyAfterRestart: true, cleaned: true };
-    }
-
-    // --- Task 9: AI generation pipeline (PF_SMOKE_AI=1, dev server) ---------
-    // Runs with PF_AI_MOCK=1 (offline deterministic mock adapter — NO network,
-    // NO cost): renderer → bridge v5 ai.submit → MAIN job manager → mock
-    // adapter → job events → candidate store (normalize v2) → CommandBus
-    // import as layer → undo. Also proves NO key material ever reaches the
-    // renderer job view.
-    if (process.env.PF_SMOKE_AI === '1' && (mode === 'dev-server' || app.isPackaged)) {
-      if (app.isPackaged) {
-        const packagedAi = (await win.webContents.executeJavaScript(
-          `(async () => {
-            const b = window.pixelforge;
-            if (!b?.ai || b.bridgeVersion < 5) return { ok: false, error: 'AI bridge v5 missing' };
-            const submitted = await b.ai.submit({
-              prompt: 'packaged smoke pixel sprite', providerId: 'mock',
-              providerLabel: 'Mock (offline)', model: 'mock-pattern', width: 32, height: 32, count: 1,
-            });
-            const deadline = Date.now() + 30000;
-            while (Date.now() < deadline) {
-              const job = await b.ai.status(submitted.jobId);
-              if (!job) {
-                await new Promise((r) => setTimeout(r, 150));
-                continue;
-              }
-              if (job.status === 'done') return { ok: Array.isArray(job.images) && job.images.length > 0, status: job.status, images: job.images?.length ?? 0 };
-              // AiJobStatus is 'error' (not 'failed') — 'failed' never occurs
-              if (job.status === 'error' || job.status === 'cancelled') return { ok: false, status: job.status, error: job.error ?? null };
-              await new Promise((r) => setTimeout(r, 150));
-            }
-            return { ok: false, error: 'AI job timed out' };
-          })()`,
-        )) as { ok: boolean; status?: string; images?: number; error?: string | null };
-        if (!packagedAi.ok) {
-          throw new Error(`packaged AI mock job failed: ${JSON.stringify(packagedAi)}`);
-        }
-        probe.ai = {
-          bridgeV5: true,
-          candidateReady: true,
-          colors: 0,
-          provenanceOk: true,
-          jobListed: packagedAi.images === 1,
-          importUndone: true,
-        };
-      } else {
-      const aiProbe = (await win.webContents.executeJavaScript(
-        `(async () => {
-          try {
-          const b = window.pixelforge;
-          if (!b || b.bridgeVersion < 5 || !b.ai) return { bridgeV5: false };
-          const ai = window.__pfAi;
-          if (!ai) return { bridgeV5: true, probe: false };
-          const fullPrompt = 'smoke sprite, pixel art sprite, retro 16-bit game asset style';
-          await ai.submit({
-            prompt: fullPrompt, recipeId: 'item', width: 32, height: 32, count: 1,
-            providerId: 'mock', providerLabel: 'Mock (offline)', model: 'mock-pattern',
-            normalize: { targetW: 32, targetH: 32, removeBg: true, bgTolerance: 48, paletteMode: 'auto', palette: [], maxColors: 16, outlineCleanup: true },
-          });
-          // wait for the candidate pipeline to settle (worker normalize)
-          const deadline = Date.now() + 30000;
-          let candidate = null;
-          while (Date.now() < deadline) {
-            const c = ai.store.getState().candidates.find((x) => x.prompt === fullPrompt && x.status === 'review' && x.normalized);
-            if (c) { candidate = c; break; }
-            await new Promise((r) => setTimeout(r, 100));
-          }
-          if (!candidate) {
-            const anyC = ai.store.getState().candidates.find((x) => x.prompt === fullPrompt);
-            return { bridgeV5: true, probe: true, candidateReady: false, status: anyC?.status ?? 'none', error: anyC?.error ?? null };
-          }
-          const jobView = await b.ai.list();
-          const viewJson = JSON.stringify(jobView);
-          const leak = /sk-[A-Za-z0-9_-]{8,}/.test(viewJson);
-          const layersBefore = ai.snapshot().layers;
-          ai.importAsLayer(new Uint8ClampedArray(candidate.normalized.buffer), 'AI: smoke');
-          const afterImport = ai.snapshot();
-          ai.undo();
-          const afterUndo = ai.snapshot();
-          return {
-            bridgeV5: true, probe: true,
-            candidateReady: true,
-            colors: candidate.normalized.colors,
-            provenance: {
-              provider: candidate.providerLabel,
-              model: candidate.model,
-              duration: typeof candidate.jobDurationMs === 'number',
-              estimateField: 'costEstimateUsd' in candidate,
-            },
-            jobListed: jobView.length > 0,
-            keyLeakInView: leak,
-            importWorked: afterImport.layers === layersBefore + 1 && afterImport.topLayerName === 'AI: smoke',
-            undoRestored: afterUndo.layers === layersBefore,
-          };
-          } catch (err) {
-            return {
-              bridgeV5: true,
-              probe: false,
-              error: err instanceof Error ? err.name + ': ' + err.message : String(err),
-            };
-          }
-        })()`,
-      )) as {
-        bridgeV5: boolean; probe: boolean; candidateReady?: boolean; colors?: number;
-        provenance?: { provider: string; model: string; duration: boolean; estimateField: boolean };
-        jobListed?: boolean; keyLeakInView?: boolean; importWorked?: boolean; undoRestored?: boolean;
-        status?: string; error?: string | null;
-      };
-
-      if (!aiProbe.bridgeV5 || !aiProbe.probe) {
-        throw new Error(`AI bridge/probe missing: ${JSON.stringify(aiProbe)}`);
-      }
-      if (!aiProbe.candidateReady) {
-        throw new Error(`AI candidate never reached review (status=${aiProbe.status}, error=${aiProbe.error})`);
-      }
-      if (aiProbe.keyLeakInView) throw new Error('SECURITY: API-key-shaped material found in the renderer job view');
-      if (!aiProbe.importWorked) throw new Error('AI import-as-layer failed (CommandBus transaction)');
-      if (!aiProbe.undoRestored) throw new Error('AI import was not undone exactly');
-      probe.ai = {
-        bridgeV5: true,
-        candidateReady: true,
-        colors: aiProbe.colors ?? 0,
-        provenanceOk: aiProbe.provenance?.duration === true && aiProbe.provenance?.estimateField === true,
-        jobListed: aiProbe.jobListed === true,
-        importUndone: aiProbe.importWorked && aiProbe.undoRestored,
-      };
+      if (!roundTrip.roundTrip) {
+        throw new Error('settings preference round-trip failed');
       }
     }
+
+    // --- Task 9: AI generation pipeline smoke was removed with the feature --
+    // (PF_SMOKE_AI=1 / PF_AI_MOCK=1 no longer exist: in-app generation was
+    // removed; agents draw through MCP tools instead.)
 
     let screenshot: string | null = null;
     try {

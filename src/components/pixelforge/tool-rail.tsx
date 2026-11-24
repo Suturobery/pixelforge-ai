@@ -33,7 +33,6 @@ import {
   Grid2x2,
   ArrowLeftRight,
   HelpCircle,
-  UserRound,
 } from 'lucide-react'
 import { FeedbackDialog } from '@/components/pixelforge/feedback-dialog'
 
@@ -358,24 +357,6 @@ export function ToolRail() {
             </TooltipTrigger>
             <TooltipContent side="right" className="font-mono text-xs">
               Help &amp; feedback — report a bug or idea
-            </TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                disabled
-                className="relative h-9 w-9 text-zinc-600"
-                aria-label="Accounts — coming soon"
-                aria-disabled="true"
-              >
-                <UserRound className="h-4 w-4" />
-                <span className="absolute right-1.5 top-1.5 block h-1.5 w-1.5 rounded-full bg-amber-400" aria-hidden />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="right" className="font-mono text-xs">
-              Accounts — coming soon
             </TooltipContent>
           </Tooltip>
         </div>

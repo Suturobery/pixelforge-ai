@@ -19,6 +19,7 @@ export type PixelOp = ({
 } & PixelPoint & {
     size?: number;
     mirrorX?: boolean;
+    color?: RGBA;
 }) | {
     op: 'line';
     from: PixelPoint;
@@ -90,7 +91,7 @@ export interface ApplyPixelOpsPayload {
     clipId: string;
     frameId: string;
     layerId: string;
-    /** Required for stamp/line/rect/fill; ignored otherwise. */
+    /** Default stamp color. Required for line, rect, ellipse and fill. */
     color?: RGBA;
     ops: PixelOp[];
 }

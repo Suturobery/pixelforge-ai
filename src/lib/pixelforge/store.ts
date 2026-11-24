@@ -36,8 +36,6 @@ import {
   type QAIssue,
   type StyleProfile,
   type StrokeHandle as CoreStrokeHandle,
-  insertCharacter,
-  type KitSelection,
 } from '@pixelforge/core'
 import { DEFAULT_PALETTE } from './palettes'
 import { useAppSettings } from './settings'
@@ -49,11 +47,8 @@ import {
   extractClipboard,
   shiftRectClamped,
 } from './selection-ops'
-import type { PlaybackMode } from './playback'
-import type { PresetVersion } from './presets'
 import type {
   ClipboardContent,
-  PresetId,
   SelectionRect,
   ToolId,
   TransformKind,
@@ -64,7 +59,7 @@ export type { SelectionRect, ClipboardContent, TransformKind }
 export const MIN_ZOOM = 0.25 // 25% — lets big canvases fit small screens
 export const MAX_ZOOM = 64 // 6400% — 1 canvas px = 64 screen px
 
-export type RightTab = 'layers' | 'create' | 'reference' | 'brain' | 'motion' | 'agent'
+export type RightTab = 'layers' | 'reference' | 'brain' | 'motion' | 'agent'
 
 /** Draft motion part (Motion Composer panel → part.set command). */
 export interface MotionPartDraft {
@@ -281,13 +276,6 @@ export interface EditorState {
   hover: { x: number; y: number } | null
   // playback
   playing: boolean
-  /** Shared-playhead mirror for the prototype mini-player UI (frames strip). */
-  currentStep: number
-  /** Mini-player direction mode (prototype preview UI state). */
-  playbackMode: PlaybackMode
-  /** Prototype preset readouts (motion preset identity shown by the mini player). */
-  presetId: PresetId
-  presetVersion: PresetVersion
   // history / persistence (mirrored from the bus)
   canUndo: boolean
   canRedo: boolean
@@ -373,25 +361,16 @@ export interface EditorState {
   /** Run a motion preset through the composer; returns the created/target clip id. */
   applyMotionPreset: (payload: MotionApplyPayload) => string | null
 
-  // --- Create from Reference hand-off (Brain → Reference panel) ---
+  // --- Reference import hand-off (Brain → Reference panel) ---
   /** Brief text handed to the Reference panel (adopted once, then cleared). */
   referenceDraft: string | null
   setReferenceDraft: (brief: string | null) => void
-
-  // --- character creator (Create Character panel) ---
-  /** Draft part selection handed to the creator panel (Brain → Open in Create
-   *  Character); the panel adopts it when the reference changes. */
-  creatorDraft: KitSelection | null
-  setCreatorDraft: (selection: KitSelection | null) => void
   /** Mobile slide-over drawer for the panels dock (desktop uses rightOpen). */
   rightDrawerOpen: boolean
   setRightDrawerOpen: (v: boolean) => void
   /** Focus a right-dock tab from outside the dock (header, Brain, etc.).
    *  Event-handler context only — opens the dock/drawer with the tab. */
   requestRightTab: (tab: RightTab) => void
-  /** Insert a kit character as a new clip (one undoable transaction).
-   *  Returns the clip id, or null when insertion failed. */
-  addCharacterToCanvas: (selection: KitSelection) => string | null
 
   // --- selection & ui ---
   selectClip: (id: string) => void
@@ -451,8 +430,6 @@ export interface EditorState {
   setOnionSkin: (v: boolean) => void
   setHover: (h: { x: number; y: number } | null) => void
   setPlaying: (v: boolean) => void
-  setCurrentStep: (n: number) => void
-  setPlaybackMode: (m: PlaybackMode) => void
   setRightTab: (t: RightTab) => void
   setMotionPreviewIssues: (issues: QAIssue[]) => void
   setMotionDraftParts: (parts: MotionPartDraft[]) => void
@@ -557,10 +534,6 @@ export const useEditor = create<EditorState>()((set, get) => ({
   onionSkin: true,
   hover: null,
   playing: false,
-  currentStep: 0,
-  playbackMode: 'loop',
-  presetId: 'idle',
-  presetVersion: 'v2',
   canUndo: false,
   canRedo: false,
   historyUndoDepth: 0,
@@ -1362,38 +1335,13 @@ export const useEditor = create<EditorState>()((set, get) => ({
     return bus.getProject().clips.at(-1)?.id ?? null
   },
 
-  // --- Create from Reference hand-off ---
+  // --- Reference import hand-off ---
   referenceDraft: null,
-
-  // --- character creator ---
-  creatorDraft: null,
   rightDrawerOpen: false,
-
-  setCreatorDraft: (selection) => set({ creatorDraft: selection }),
 
   setReferenceDraft: (brief) => set({ referenceDraft: brief }),
 
   requestRightTab: (tab) => set({ rightTab: tab, rightOpen: true, rightDrawerOpen: true }),
-
-  addCharacterToCanvas: (selection) => {
-    let clipId: string | null = null
-    try {
-      const inserted = insertCharacter(bus, selection, { origin: ORIGIN })
-      clipId = inserted.clipId
-    } catch (err) {
-      toast({ title: 'Could not add character', description: friendlyError(err), variant: 'destructive' })
-      return null
-    }
-    const clip = bus.getProject().clips.find((c) => c.id === clipId)
-    set({
-      activeClipId: clipId,
-      activeFrameIndex: 0,
-      activeLayerId: clip?.layers.at(-1)?.id ?? '',
-      playing: false,
-    })
-    toast({ title: 'Character added', description: `"${clip?.name ?? 'Character'}" clip created with 4 editable layers — parts are pre-tagged for Motion.` })
-    return clipId
-  },
 
   // --- selection & ui ---
 
@@ -1457,8 +1405,6 @@ export const useEditor = create<EditorState>()((set, get) => ({
       return { hover: h }
     }),
   setPlaying: (v) => set({ playing: v }),
-  setCurrentStep: (n) => set({ currentStep: Math.max(0, Math.round(n)) }),
-  setPlaybackMode: (m) => set({ playbackMode: m }),
   setRightTab: (t) => set({ rightTab: t }),
   setMotionPreviewIssues: (issues) => set({ motionPreviewIssues: issues }),
   setMotionDraftParts: (parts) => set({ motionDraftParts: parts }),

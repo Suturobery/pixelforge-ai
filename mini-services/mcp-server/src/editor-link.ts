@@ -97,11 +97,7 @@ export class EditorLink {
       if (!fresh) {
         // holder went silent (page reload the server has not noticed) — take over
         const stale = this.socket
-        this.socket = null
-        if (this.helloTimer) {
-          clearTimeout(this.helloTimer)
-          this.helloTimer = null
-        }
+        this.detach(stale)
         console.error(`[pf-mcp] editor REPLACED at ${new Date().toISOString()} — previous editor went quiet (${Date.now() - this.lastAliveAt}ms)`)
         try {
           stale.close(4005, 'replaced by a newer editor')
@@ -170,6 +166,9 @@ export class EditorLink {
     this.bridgeVersion = null;
     this.origin = null;
     this.connectedAt = null;
+    this.currentProjectKey = null;
+    this.currentProjectName = null;
+    this.lastStateHash = null;
     // fail every in-flight call so clients get structured errors, not hangs
     for (const [id, call] of this.pending) {
       clearTimeout(call.timer);
@@ -218,6 +217,7 @@ export class EditorLink {
           if (msg.takeover === true) {
             // lock-holding fresh page claims the slot from a stale holder
             const stale = this.socket;
+            if (stale) this.detach(stale);
             try {
               stale?.close(4005, 'replaced by editor takeover');
             } catch {
@@ -275,8 +275,8 @@ export class EditorLink {
         if (!msg.event) return;
         if (msg.event.type === 'projectChanged') {
           if (msg.event.stateHash !== undefined) this.lastStateHash = msg.event.stateHash;
-          if (typeof msg.event.projectKey === 'string') this.currentProjectKey = msg.event.projectKey;
-          if (typeof msg.event.projectName === 'string') this.currentProjectName = msg.event.projectName;
+          this.currentProjectKey = msg.event.projectKey ?? null;
+          this.currentProjectName = msg.event.projectName ?? null;
           if (msg.event.name !== undefined) this.lastProjectName = msg.event.name;
           if (msg.event.dirty !== undefined) this.lastDirty = msg.event.dirty;
         }
@@ -320,6 +320,7 @@ export class EditorLink {
     clientId: string;
     clientName: string;
     tier: import('./types').Tier;
+    expectedProjectKey?: string;
   }): Promise<ToolEnvelope> {
     if (!this.socket) {
       return Promise.resolve({
@@ -345,7 +346,7 @@ export class EditorLink {
         });
       }, TOOL_TIMEOUT_MS);
       this.pending.set(id, { resolve, timer });
-      this.send({ type: 'tool-request', id, tool: req.tool, args: req.args, clientId: req.clientId, clientName: req.clientName, tier: req.tier });
+      this.send({ type: 'tool-request', id, ...req });
     });
   }
 

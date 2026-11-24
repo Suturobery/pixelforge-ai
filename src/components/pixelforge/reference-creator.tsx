@@ -1,16 +1,12 @@
-// PixelForge AI — Create from Reference panel.
+// PixelForge AI — Reference & Offline PNG Import panel.
 //
-// Static pixel-art assets that belong with an approved reference sprite:
-//   pick/import the reference (saved with the project via Style Lock) → type
-//   a brief → generate candidates from an online provider (Gemini, optional;
-//   fetch runs main-side, disclosed before sending) OR import a local PNG
-//   (fully offline) → review original vs cleaned beside the reference → add
-//   the cleaned candidate to the canvas as one editable layer (one undoable
-//   op) → Create Another in This Style reuses the same reference + rules.
-//
-// The candidate pipeline reuses core normalize-v2 (resize, palette mapping,
-// transparency cleanup). Technical checks are shown SEPARATELY from the
-// artist's visual approval. Supports 16×16 and 32×32 targets.
+// Cleans external PNGs (e.g. sprites produced by external AI IDEs or models)
+// so they match an approved reference sprite and project style rules:
+//   pick/import the reference (saved with the project via Style Lock) → import
+//   a local PNG (fully offline) → grid-snap + palette-map + background cleanup
+//   via core normalize-v2 → review original vs cleaned beside the reference →
+//   add the cleaned candidate to the canvas as one editable layer (one undoable
+//   op). Supports 16×16 and 32×32 targets.
 
 'use client'
 
@@ -22,26 +18,18 @@ import {
   defaultStyleProfile,
   encodePng,
   buildReferenceCandidate,
-  buildReferencePrompt,
   STYLE_CAMERA_ANGLES,
   type ReferenceCandidate,
   type StyleCameraAngle,
   type StyleCheck,
   type StyleProfile,
 } from '@pixelforge/core'
-import { useEditor } from '@/lib/pixelforge/store'
+import { getActiveClip, getActiveFrame, useEditor } from '@/lib/pixelforge/store'
+import { buildSketchPack } from '@/lib/pixelforge/sketch-pack'
+import { downloadData } from '@/lib/pixelforge/export'
 import { createProject, slugify } from '@/lib/pixelforge/factory'
-import {
-  REFERENCE_PROVIDER_DOCS,
-  REFERENCE_PROVIDER_LABEL,
-  generateReferenceCandidate,
-  referenceProviderKeyStatus,
-  removeReferenceProviderKey,
-  storeReferenceProviderKey,
-} from '@/lib/pixelforge/reference-provider'
 import { drawSpritePreview } from './sprite-preview'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -57,15 +45,13 @@ interface ResolvedReference {
   height: number
   /** Composed RGBA preview pixels. */
   buffer: Uint8ClampedArray
-  /** PNG bytes sent to the provider. */
+  /** PNG bytes of the stored reference. */
   png: Uint8Array
 }
 
 /** Decode the saved reference (embedded PNG or project frame) into pixels. */
 function useResolvedReference(profile: StyleProfile, project: ReturnType<typeof useEditor.getState>['project']) {
   const ref = profile.references[0] ?? null
-  // identity of the current reference — resets the value during render when it
-  // changes (render-time adjustment; async decode lands in callbacks only)
   const key = ref ? (ref.pngBase64 ? `png:${ref.width}:${ref.label}` : `frame:${ref.clipId}:${ref.frameId}`) : 'none'
   const [state, setState] = useState<{ key: string; value: ResolvedReference | null }>({ key: '', value: null })
   if (state.key !== key) {
@@ -131,39 +117,56 @@ function CheckRow({ check }: { check: StyleCheck }) {
   )
 }
 
-/** Sprite preview pair at actual size + integer zoom (checkerboard backdrop). */
-function SpritePair({ rgba, size, caption }: { rgba: Uint8ClampedArray | null; size: number; caption: string }) {
-  const ref1x = useRef<HTMLCanvasElement | null>(null)
-  const zoom = Math.max(1, Math.floor(96 / size))
-  const refZoom = useRef<HTMLCanvasElement | null>(null)
+/** Fit large sources in the panel and show an integer zoom for small sprites. */
+function SpritePair({ rgba, width, height, caption }: {
+  rgba: Uint8ClampedArray | null
+  width: number
+  height: number
+  caption: string
+}) {
+  const primary = useRef<HTMLCanvasElement | null>(null)
+  const enlarged = useRef<HTMLCanvasElement | null>(null)
+  const longestSide = Math.max(width, height)
+  const scale = Math.min(1, 96 / longestSide)
+  const zoom = Math.floor(96 / longestSide)
   useEffect(() => {
-    drawSpritePreview(ref1x.current, rgba, size)
-    drawSpritePreview(refZoom.current, rgba, size)
-  }, [rgba, size])
+    drawSpritePreview(primary.current, rgba, width, height)
+    drawSpritePreview(enlarged.current, rgba, width, height)
+  }, [rgba, width, height])
   return (
-    <figure className="shrink-0 text-center">
-      <div className="flex items-end gap-1.5">
+    <figure className="min-w-0 max-w-full text-center">
+      <div className="flex flex-wrap items-end justify-center gap-1.5">
         <canvas
-          ref={ref1x}
-          className="rounded border border-zinc-800"
-          style={{ imageRendering: 'pixelated', width: size, height: size }}
-          aria-label={`${caption} at actual pixel size`}
+          ref={primary}
+          className="h-auto max-w-full rounded border border-zinc-800"
+          style={{ imageRendering: 'pixelated', width: width * scale }}
+          aria-label={`${caption} preview`}
         />
-        <canvas
-          ref={refZoom}
-          className="rounded border border-zinc-700"
-          style={{ imageRendering: 'pixelated', width: size * zoom, height: size * zoom }}
-          aria-label={`${caption} at ${zoom}× zoom`}
-        />
+        {zoom > 1 && (
+          <canvas
+            ref={enlarged}
+            className="h-auto max-w-full rounded border border-zinc-700"
+            style={{ imageRendering: 'pixelated', width: width * zoom }}
+            aria-label={`${caption} at ${zoom}× zoom`}
+          />
+        )}
       </div>
       <figcaption className="mt-0.5 text-[10px] text-zinc-500">
-        {caption} · 1× · {zoom}×
+        {caption} · {width}×{height}{zoom > 1 && ` · ${zoom}× zoom`}
       </figcaption>
     </figure>
   )
 }
 
 export function ReferenceCreator() {
+  const projectKey = useEditor((s) => `${s.loadEpoch}-${s.project.width}x${s.project.height}`)
+  return <ReferencePanel key={projectKey} />
+}
+
+type Sketch = ReferenceCandidate['original']
+type ReviewedCandidate = ReferenceCandidate & { sketch: Sketch | null }
+
+function ReferencePanel() {
   const project = useEditor((s) => s.project)
   const docVersion = useEditor((s) => s.docVersion)
   const setStyleProfile = useEditor((s) => s.setStyleProfile)
@@ -175,48 +178,34 @@ export function ReferenceCreator() {
   const resolvedRef = useResolvedReference(profile, project)
 
   const [brief, setBrief] = useState('')
-  const [provider, setProvider] = useState<'import' | 'gemini'>('import')
-  const [candidates, setCandidates] = useState<ReferenceCandidate[]>([])
+  const [candidates, setCandidates] = useState<ReviewedCandidate[]>([])
+  const [sketch, setSketch] = useState<Sketch | null>(null)
   const [selectedIdx, setSelectedIdx] = useState(0)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [keyStatus, setKeyStatus] = useState<{ desktop: boolean; hasKey: boolean }>({ desktop: false, hasKey: false })
-  const [keyInput, setKeyInput] = useState('')
-  const [keyBusy, setKeyBusy] = useState(false)
   const [importedName, setImportedName] = useState<string | null>(null)
-  const disclosedRef = useRef(false)
 
   const briefRef = useRef<HTMLTextAreaElement | null>(null)
   const candidateFileRef = useRef<HTMLInputElement | null>(null)
   const referenceFileRef = useRef<HTMLInputElement | null>(null)
 
-  // provider key state (vault booleans only — the key itself never returns)
-  useEffect(() => {
-    void referenceProviderKeyStatus().then(setKeyStatus)
-  }, [])
-
-  // Adopt a brief handed over from the Brain panel (Open in Reference), once
-  // per draft — render-time adjustment on LOCAL state only (no store writes
-  // during render: React 19 warns about cross-component updates mid-render)
   const [adoptedRefDraft, setAdoptedRefDraft] = useState<string | null>(null)
   if (referenceDraft && adoptedRefDraft !== referenceDraft) {
     setAdoptedRefDraft(referenceDraft)
     setBrief(referenceDraft)
   }
 
-  // one-time guidance when a handed-over brief arrives without a reference
   const guidedNoRefRef = useRef(false)
   useEffect(() => {
     if (adoptedRefDraft && !profile.references[0] && !guidedNoRefRef.current) {
       guidedNoRefRef.current = true
       toast({
         title: 'No approved reference yet',
-        description: 'Import a 16×16/32×32 PNG or pick a clip frame in section 2 — the brief stays prefilled.',
+        description: 'Import a 16×16/32×32 PNG or pick a clip frame in section 2 — the label stays prefilled.',
       })
     }
   }, [adoptedRefDraft, profile.references])
 
-  // target size: this release supports 16×16 and 32×32 square canvases
   const targetSize = useMemo(
     () => (project.width === project.height && (project.width === 16 || project.width === 32) ? project.width : null),
     [project.width, project.height, docVersion],
@@ -264,8 +253,30 @@ export function ReferenceCreator() {
     toast({ title: 'Reference cleared' })
   }
 
-  // --- candidate generation ---------------------------------------------------
-  const pushCandidate = (candidate: ReferenceCandidate) => {
+  // --- offline PNG import & cleanup ------------------------------------------
+  const exportSketch = async () => {
+    if (!targetSize || busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      const editor = useEditor.getState()
+      const clip = getActiveClip(editor)
+      const frame = getActiveFrame(editor)
+      const buffer = composeFrameRgba(editor.project, clip, frame)
+      const zip = await buildSketchPack({
+        buffer, targetSize, brief, profile, palette: project.palette, referencePng: resolvedRef?.png,
+      })
+      downloadData(new Blob([new Uint8Array(zip)], { type: 'application/zip' }), `${slugify(brief || clip.name) || 'sprite'}-sketch.zip`)
+      setSketch({ buffer, width: targetSize, height: targetSize })
+      toast({ title: 'Sketch pack ready', description: 'Unzip it and give the PNG files and prompt to your image tool.' })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not export the active frame.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const pushCandidate = (candidate: ReviewedCandidate) => {
     setCandidates((list) => [candidate, ...list].slice(0, MAX_CANDIDATES))
     setSelectedIdx(0)
     setError(null)
@@ -289,58 +300,13 @@ export function ReferenceCreator() {
         profile,
         targetSize,
       })
-      pushCandidate(candidate)
-      toast({ title: 'Candidate ready', description: 'Cleaned, palette-mapped, and checked — review it below.' })
+      pushCandidate({ ...candidate, sketch })
+      toast({ title: 'Sprite cleaned', description: 'Grid-snapped, palette-mapped, and checked — review it below.' })
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
       setBusy(false)
     }
-  }
-
-  const runGeminiCandidate = async () => {
-    if (!targetSize) return
-    if (!resolvedRef) {
-      toast({ title: 'No reference yet', description: 'Import or pick an approved reference sprite first.', variant: 'destructive' })
-      return
-    }
-    // disclosure before the first online send of this session
-    if (!disclosedRef.current) {
-      const ok = await confirmDialog({
-        title: `Send to ${REFERENCE_PROVIDER_LABEL}?`,
-        message: `Your brief and the approved reference image will be sent to Google Gemini (${REFERENCE_PROVIDER_DOCS}) over the internet. The API key stays in the desktop vault. Continue?`,
-        confirmLabel: 'Send to Gemini',
-      })
-      if (!ok) return
-      disclosedRef.current = true
-    }
-    setBusy(true)
-    setError(null)
-    try {
-      const prompt = buildReferencePrompt(brief, profile, targetSize)
-      const gen = await generateReferenceCandidate({ prompt, referencePng: resolvedRef.png })
-      const candidate = await buildReferenceCandidate({
-        brief: brief.trim() || 'reference asset',
-        providerId: 'gemini',
-        model: gen.model,
-        providerPng: gen.png,
-        reference: { buffer: resolvedRef.buffer, width: resolvedRef.width, height: resolvedRef.height },
-        palette: [...project.palette],
-        profile,
-        targetSize,
-      })
-      pushCandidate(candidate)
-      toast({ title: 'Candidate ready', description: 'Generated, cleaned, and checked — review it below.' })
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const generate = () => {
-    if (provider === 'gemini') void runGeminiCandidate()
-    else candidateFileRef.current?.click()
   }
 
   // --- commit -----------------------------------------------------------------
@@ -348,41 +314,18 @@ export function ReferenceCreator() {
 
   const addToCanvas = () => {
     if (!selected) return
-    const name = slugify(selected.brief || 'reference-asset')
+    const name = slugify(selected.brief || 'imported-asset')
     const result = importCandidateAsLayer(selected.cleaned.buffer, name)
     if (result) {
       toast({ title: 'Added to canvas', description: `"${name}" is a new editable layer in the current clip (one undo step).` })
     }
   }
 
-  const createAnother = () => {
+  const importAnother = () => {
     setBrief('')
     setSelectedIdx(0)
     briefRef.current?.focus()
-    toast({ title: 'Same style, new brief', description: 'The reference and project rules stay applied — type the next brief.' })
-  }
-
-  // --- key management ----------------------------------------------------------
-  const saveKey = async () => {
-    if (!keyInput.trim() || keyBusy) return
-    setKeyBusy(true)
-    const res = await storeReferenceProviderKey(keyInput.trim())
-    setKeyBusy(false)
-    setKeyInput('')
-    if (res.ok) {
-      const st = await referenceProviderKeyStatus()
-      setKeyStatus(st)
-      toast({ title: 'API key stored', description: res.sessionOnly ? 'Held for this session only (keyring unavailable).' : 'Encrypted in the desktop credential vault.' })
-    } else {
-      toast({ title: 'Could not store the key', description: res.error, variant: 'destructive' })
-    }
-  }
-
-  const removeKey = async () => {
-    await removeReferenceProviderKey()
-    const st = await referenceProviderKeyStatus()
-    setKeyStatus(st)
-    toast({ title: 'API key removed' })
+    toast({ title: 'Ready for next PNG', description: 'The reference and project style rules stay applied.' })
   }
 
   const startNewProject = async (size: 16 | 32) => {
@@ -399,7 +342,7 @@ export function ReferenceCreator() {
     useEditor.getState().newProject(
       createProject({ name: useEditor.getState().project.name, width: size, height: size, palette: [...project.palette] }),
     )
-    toast({ title: `New ${size}×${size} project`, description: 'Reference and style stay applied — import your reference again.' })
+    toast({ title: `New ${size}×${size} project`, description: 'Palette kept — import your reference again if needed.' })
   }
 
   return (
@@ -483,7 +426,7 @@ export function ReferenceCreator() {
         </header>
         {targetSize === null && (
           <p className="mb-2 rounded-md bg-amber-500/10 px-2 py-1.5 text-[11px] leading-snug text-amber-300">
-            This release supports 16×16 and 32×32 canvases — this project is {project.width}×{project.height}. Start a
+            Offline reference cleanup supports 16×16 and 32×32 canvases — this project is {project.width}×{project.height}. Start a
             matching project (unsaved changes are confirmed first; your palette is kept):
             <span className="mt-1.5 flex gap-1.5">
               <Button size="sm" variant="outline" className="h-6 px-2 text-[10px]" onClick={() => void startNewProject(16)}>
@@ -497,7 +440,7 @@ export function ReferenceCreator() {
         )}
         {resolvedRef ? (
           <div className="mb-2 flex flex-wrap items-start gap-3">
-            <SpritePair rgba={resolvedRef.buffer} size={resolvedRef.width} caption="reference" />
+            <SpritePair rgba={resolvedRef.buffer} width={resolvedRef.width} height={resolvedRef.height} caption="reference" />
             <div className="min-w-0 min-w-[160px] flex-1">
               <p className="truncate text-xs font-medium text-zinc-200">{resolvedRef.label}</p>
               <p className="text-[10px] text-zinc-500">
@@ -516,8 +459,8 @@ export function ReferenceCreator() {
         ) : (
           <div className="mb-2 space-y-2">
             <p className="text-[11px] leading-snug text-zinc-500">
-              Import the approved sprite (16×16 or 32×32 PNG) or pick a frame from the project — it is saved with the
-              project style and anchors every candidate.
+              Optionally import an approved sprite (16×16 or 32×32 PNG) or pick a frame from the project to compare
+              imported PNGs side-by-side.
             </p>
             <div className="flex flex-wrap gap-1.5">
               <Button size="sm" className="h-7 gap-1 rounded-md bg-teal-600 px-2.5 text-xs font-medium hover:bg-teal-500" onClick={() => referenceFileRef.current?.click()}>
@@ -554,92 +497,49 @@ export function ReferenceCreator() {
         />
       </section>
 
-      {/* ---------------------------- brief & generate ---------------------------- */}
-      <section aria-label="Brief and generate" className="rounded-xl border border-zinc-800/80 bg-zinc-900/60 p-3">
+      {/* ---------------------------- offline PNG import ---------------------------- */}
+      <section aria-label="Import and clean PNG" className="rounded-xl border border-zinc-800/80 bg-zinc-900/60 p-3">
         <header className="mb-2.5 flex items-center gap-2">
           <span className="flex h-5 w-5 items-center justify-center rounded-full bg-teal-500/15 text-[10px] font-semibold text-teal-300">3</span>
-          <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-300">Brief &amp; generate</span>
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-300">Import &amp; clean PNG</span>
         </header>
         <textarea
           ref={briefRef}
           value={brief}
           onChange={(e) => setBrief(e.target.value)}
-          placeholder='Describe the asset — e.g. "a brass key"'
-          aria-label="Asset brief"
-          className="min-h-[56px] w-full resize-none rounded-md border border-zinc-700 bg-zinc-950 px-2.5 py-2 font-mono text-xs text-zinc-100 placeholder:text-zinc-600"
+          placeholder='Layer name or brief (optional) — e.g. "forest-mage"'
+          aria-label="Asset label"
+          className="min-h-[48px] w-full resize-none rounded-md border border-zinc-700 bg-zinc-950 px-2.5 py-2 font-mono text-xs text-zinc-100 placeholder:text-zinc-600"
           spellCheck={false}
         />
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          <div className="flex min-w-0 flex-1 gap-1 rounded-lg bg-zinc-800/60 p-0.5" role="radiogroup" aria-label="Candidate source">
-            <button
-              type="button"
-              role="radio"
-              aria-checked={provider === 'import'}
-              onClick={() => setProvider('import')}
-              className={`min-w-0 flex-1 truncate rounded-md px-2 py-1 text-[11px] font-medium ${provider === 'import' ? 'bg-teal-600 text-white' : 'text-zinc-400 hover:text-zinc-200'}`}
-              title="Import PNG · offline"
-            >
-              Import PNG · offline
-            </button>
-            <button
-              type="button"
-              role="radio"
-              aria-checked={provider === 'gemini'}
-              onClick={() => setProvider('gemini')}
-              className={`min-w-0 flex-1 truncate rounded-md px-2 py-1 text-[11px] font-medium ${provider === 'gemini' ? 'bg-teal-600 text-white' : 'text-zinc-400 hover:text-zinc-200'}`}
-              title="Gemini · online"
-            >
-              Gemini · online
-            </button>
-          </div>
+        <div className="mt-2 space-y-2">
+          <Button size="sm" variant="outline" className="w-full text-xs"
+            disabled={busy || !targetSize}
+            onClick={() => void exportSketch()}>
+            Export active frame as sketch pack
+          </Button>
+          <p className="text-[10px] leading-snug text-zinc-500">
+            Give your image tool the sketch, silhouette and shading study, and prompt from the ZIP. Import the result below.
+          </p>
+          {sketch && (
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <SpritePair width={sketch.width} height={sketch.height} rgba={sketch.buffer} caption="Sketch for next import" />
+              <Button size="sm" variant="ghost" onClick={() => setSketch(null)}>Clear sketch</Button>
+            </div>
+          )}
           <Button
-            className="h-8 flex-1 min-w-0 gap-1.5 whitespace-normal rounded-md bg-teal-600 text-xs font-medium text-white hover:bg-teal-500"
-            onClick={generate}
-            disabled={busy || !targetSize || (provider === 'gemini' && !keyStatus.hasKey)}
-            aria-label="Generate candidate"
+            className="h-8 w-full gap-1.5 rounded-md bg-teal-600 text-xs font-medium text-white hover:bg-teal-500"
+            onClick={() => candidateFileRef.current?.click()}
+            disabled={busy || !targetSize}
+            aria-label="Import PNG to clean"
           >
-            <Wand2 className="h-3.5 w-3.5 shrink-0" /> {busy ? 'Working…' : 'Generate candidate'}
+            <Upload className="h-3.5 w-3.5 shrink-0" /> Import PNG (offline · grid-snap)
           </Button>
         </div>
-        {provider === 'import' && (
-          <p className="mt-1.5 text-[10px] leading-snug text-zinc-500">
-            Fully offline: pick any PNG, PixelForge cleans and palette-maps it locally.
-          </p>
-        )}
-        {provider === 'gemini' && (
-          <div className="mt-2 space-y-1.5 rounded-lg border border-zinc-800/80 bg-zinc-950/60 p-2.5">
-            <p className="text-[10px] leading-snug text-zinc-500">
-              Sends your brief + reference image to Google Gemini over the internet (disclosed before the first send).
-              The key lives in the desktop credential vault — it is used inside the app and never displayed.
-            </p>
-            {keyStatus.desktop ? (
-              keyStatus.hasKey ? (
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-[11px] text-emerald-300">API key stored (vault)</span>
-                  <Button size="sm" variant="ghost" className="h-6 px-2 text-[10px] text-zinc-400" onClick={() => void removeKey()}>
-                    Remove
-                  </Button>
-                </div>
-              ) : (
-                <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-                  <Input
-                    type="password"
-                    value={keyInput}
-                    onChange={(e) => setKeyInput(e.target.value)}
-                    placeholder="Paste Gemini API key…"
-                    aria-label="Gemini API key"
-                    className="h-7 min-w-0 flex-1 border-zinc-800 bg-zinc-900 font-mono text-[11px]"
-                  />
-                  <Button size="sm" className="h-7 px-2 text-[10px]" onClick={() => void saveKey()} disabled={!keyInput.trim() || keyBusy}>
-                    Save to vault
-                  </Button>
-                </div>
-              )
-            ) : (
-              <p className="text-[10px] text-amber-300/90">Online generation needs the desktop app (credential vault).</p>
-            )}
-          </div>
-        )}
+        <p className="mt-1.5 text-[10px] leading-snug text-zinc-500">
+          Fully offline: pick any PNG from an external AI tool or IDE — PixelForge detects its pixel grid, removes the
+          background, maps to your project palette, and checks sizing locally.
+        </p>
         <input
           ref={candidateFileRef}
           type="file"
@@ -660,7 +560,7 @@ export function ReferenceCreator() {
             {error}
           </p>
         )}
-        {importedName && provider === 'import' && (
+        {importedName && (
           <p className="mt-1.5 truncate text-[10px] text-zinc-500">Last imported: {importedName}</p>
         )}
       </section>
@@ -671,10 +571,10 @@ export function ReferenceCreator() {
           <header className="mb-2.5 flex items-center justify-between gap-2">
             <span className="flex items-center gap-2">
               <span className="flex h-5 w-5 items-center justify-center rounded-full bg-teal-500/15 text-[10px] font-semibold text-teal-300">4</span>
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-300">Candidates</span>
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-300">Cleaned imports</span>
             </span>
             <span className="font-mono text-[10px] text-zinc-500">
-              {candidates.length} kept · {selected.providerId}
+              {candidates.length} kept · offline
             </span>
           </header>
           <div className="mb-2.5 flex flex-wrap gap-1">
@@ -689,16 +589,17 @@ export function ReferenceCreator() {
                 }`}
                 title={c.brief}
               >
-                {c.brief || c.providerId} · {c.cleaned.width}×{c.cleaned.height}
+                {c.brief || 'import'} · {c.cleaned.width}×{c.cleaned.height}
               </button>
             ))}
           </div>
           {selected && (
             <div className="space-y-2.5">
               <div className="flex flex-wrap items-start gap-3 rounded-lg border border-zinc-800/80 bg-zinc-950/60 p-2.5">
-                {resolvedRef && <SpritePair rgba={resolvedRef.buffer} size={resolvedRef.width} caption="reference" />}
-                <SpritePair rgba={selected.original.buffer} size={selected.original.width} caption="original" />
-                <SpritePair rgba={selected.cleaned.buffer} size={selected.cleaned.width} caption="cleaned" />
+                {selected.sketch && <SpritePair width={selected.sketch.width} height={selected.sketch.height} rgba={selected.sketch.buffer} caption="sketch" />}
+                {resolvedRef && <SpritePair rgba={resolvedRef.buffer} width={resolvedRef.width} height={resolvedRef.height} caption="reference" />}
+                <SpritePair rgba={selected.original.buffer} width={selected.original.width} height={selected.original.height} caption="original" />
+                <SpritePair rgba={selected.cleaned.buffer} width={selected.cleaned.width} height={selected.cleaned.height} caption="cleaned" />
                 <p className="w-full self-center text-[11px] leading-snug text-zinc-500">
                   Original vs cleaned — catch lost detail before approving. Cleaned is palette-mapped
                   ({selected.stats.colorsOut} colors), background removed ({selected.stats.bgRemoved} px), fitted to{' '}
@@ -716,15 +617,15 @@ export function ReferenceCreator() {
                   onClick={addToCanvas}
                   aria-label="Add candidate to canvas"
                 >
-                  <ImagePlus className="h-3.5 w-3.5 shrink-0" /> Add &ldquo;{(selected.brief || 'candidate').slice(0, 24)}&rdquo; to Canvas
+                  <ImagePlus className="h-3.5 w-3.5 shrink-0" /> Add &ldquo;{(selected.brief || 'import').slice(0, 24)}&rdquo; to Canvas
                 </Button>
                 <Button
                   variant="outline"
                   className="h-8 min-w-0 flex-1 whitespace-normal gap-1.5 rounded-md border-zinc-700 text-xs"
-                  onClick={createAnother}
-                  aria-label="Create another in this style"
+                  onClick={importAnother}
+                  aria-label="Import another PNG"
                 >
-                  <Wand2 className="h-3.5 w-3.5 shrink-0" /> Create Another in This Style
+                  <Wand2 className="h-3.5 w-3.5 shrink-0" /> Import Another
                 </Button>
               </div>
               <p className="text-center text-[10px] leading-snug text-zinc-500">
@@ -734,7 +635,6 @@ export function ReferenceCreator() {
           )}
         </section>
       )}
-
     </div>
   )
 }

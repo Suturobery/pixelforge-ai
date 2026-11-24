@@ -108,7 +108,7 @@ export const TOOL_CATALOG: ToolDef[] = [
     name: 'get_frame_png',
     title: 'Get frame as PNG',
     description:
-      'Render one frame (all visible layers composited) and return it as a base64 PNG data URL. ' +
+      'Inspect one composited frame as a native MCP PNG image. The result envelope also includes its PNG data URL. ' +
       'scale 0.5/0.25 downsamples with nearest-neighbor (no smoothing).',
     tier: 'L0',
     relay: true,
@@ -186,7 +186,7 @@ export const TOOL_CATALOG: ToolDef[] = [
     name: 'preview_animation',
     title: 'Preview animation',
     description:
-      'Render every frame of a clip (composited PNGs) plus the exact playback schedule the editor uses ' +
+      'Inspect a clip as ordered MCP PNG images with the exact playback schedule the editor uses ' +
       '(loop mode, per-frame durations, cycle length). Frames are capped by maxFrames to bound the response.',
     tier: 'L0',
     relay: true,

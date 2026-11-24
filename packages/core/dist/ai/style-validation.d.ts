@@ -1,7 +1,8 @@
 import type { StyleProfile } from '../style-profile';
+import type { GridSnapStats } from './grid-detect';
 export type StyleCheckStatus = 'pass' | 'warning' | 'info';
 export interface StyleCheck {
-    id: 'size' | 'palette' | 'alpha' | 'background' | 'margin';
+    id: 'size' | 'palette' | 'alpha' | 'background' | 'margin' | 'grid';
     status: StyleCheckStatus;
     label: string;
     detail: string;
@@ -20,4 +21,5 @@ export declare function validateStyleCandidate(input: {
     palette: string[];
     profile?: StyleProfile;
     allowEdgeTouch?: boolean;
+    grid?: GridSnapStats;
 }): StyleCheck[];

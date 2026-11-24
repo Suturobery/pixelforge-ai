@@ -33,8 +33,14 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 .mcp-*.mjs
+
+# local runtime data (dev database, editor-link secret, task board, learned styles)
 db/mcp-clients.json
 db/mcp-ops.jsonl
+db/custom.db
+db/editor-auth.json
+db/brain-tasks.json
+db/knowledge-learned/
 
 # vercel
 .vercel

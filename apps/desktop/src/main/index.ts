@@ -6,7 +6,6 @@ import { app, BrowserWindow, dialog, ipcMain } from 'electron';
 
 import { registerBridgeHandlers } from '../bridge/handlers';
 import { registerSettingsHandlers } from '../bridge/settings-handlers';
-import { registerReferenceGenHandlers } from './reference-gen';
 import { SMOKE, RENDERER_PORT } from '../config';
 import { createLogger, type Logger } from '../logger';
 import { RenderServer } from '../render-server';
@@ -15,7 +14,6 @@ import { createServiceLauncher, resolveServiceDir } from '../mcp/launcher';
 import { installApplicationMenu } from './menu';
 import { runSmokeTest } from '../smoke';
 import { installSessionHardening } from '../security';
-import { createSafeStorageBox } from '../settings/secret-box';
 import { SettingsStore } from '../settings/store';
 import { UpdateService } from '../update/service';
 import { closeStartupSplash, showStartupSplash } from '../startup-splash';
@@ -41,13 +39,12 @@ app.enableSandbox();
 const logger: Logger = createLogger();
 
 /**
- * Settings file + C13 credential vault — one instance for the app lifetime.
+ * Settings file — one instance for the app lifetime.
  * app.getPath('userData') is valid before `ready` once app.setName ran.
  */
 const settingsStore: SettingsStore = new SettingsStore({
   file: path.join(app.getPath('userData'), 'settings.json'),
   fs: fs as unknown as import('../settings/store').SettingsFs,
-  box: createSafeStorageBox(),
 });
 const settingsLoad = settingsStore.load();
 if (settingsLoad.recovered) {
@@ -154,7 +151,6 @@ if (!gotLock) {
       return { ready, endpoint: ready ? `http://127.0.0.1:${mcpPort}/mcp` : null };
     });
     registerSettingsHandlers(settingsStore, logger);
-    registerReferenceGenHandlers(settingsStore, logger);
     updateService.register();
     updateService.scheduleStartupCheck();
     installApplicationMenu();

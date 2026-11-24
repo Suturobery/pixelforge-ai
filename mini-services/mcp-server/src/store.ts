@@ -372,8 +372,7 @@ export class McpStore {
     if (!t) return { task: null, blockedBy: null };
     if (
       t.targetProjectKey &&
-      currentProject?.key &&
-      currentProject.key !== t.targetProjectKey
+      currentProject?.key !== t.targetProjectKey
     ) {
       return { task: null, blockedBy: t };
     }
@@ -388,6 +387,16 @@ export class McpStore {
     t.verified = null;
     this.saveBrainTasks();
     return { task: t, blockedBy: null };
+  }
+
+  /** Active project targets for edits made by this task's authenticated client. */
+  brainClaimedTargets(clientId: string): Array<{ key: string; name: string }> {
+    return this.brainList().flatMap((task) =>
+      (task.status === 'claimed' || task.status === 'running') &&
+      task.claimedByClient === clientId && task.targetProjectKey
+        ? [{ key: task.targetProjectKey, name: task.targetProjectName ?? 'target project' }]
+        : [],
+    );
   }
 
   /** Artist confirmation for LEGACY tasks (queued before project targeting
@@ -416,7 +425,7 @@ export class McpStore {
       (x) => x.id === id && (x.status === 'claimed' || x.status === 'running') && x.claimedByClient === claimedByClient,
     );
     if (!t) return { task: null, blockedBy: null };
-    if (t.targetProjectKey && currentProject?.key && currentProject.key !== t.targetProjectKey) {
+    if (t.targetProjectKey && currentProject?.key !== t.targetProjectKey) {
       return { task: null, blockedBy: t };
     }
     t.status = 'running';
@@ -467,7 +476,7 @@ export class McpStore {
         x.id === id,
     );
     if (!t) return { task: null, blockedBy: null };
-    if (t.targetProjectKey && currentProject?.key && currentProject.key !== t.targetProjectKey) {
+    if (t.targetProjectKey && currentProject?.key !== t.targetProjectKey) {
       // continuation gate: the claim lease is RELEASED so the task returns to
       // the board for the correct project context to claim it again
       t.status = 'pending';

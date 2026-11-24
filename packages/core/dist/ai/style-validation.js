@@ -88,5 +88,25 @@ function validateStyleCandidate(input) {
             });
         }
     }
+    if (input.grid?.detected) {
+        const g = input.grid;
+        const stepAvg = Math.round(((g.stepX + g.stepY) / 2) * 10) / 10;
+        if (g.oversized) {
+            checks.push({
+                id: 'grid',
+                status: 'warning',
+                label: 'Sprite too detailed for canvas',
+                detail: `Detected ${g.trueW}×${g.trueH} art px (~${stepAvg}px blocks) — downscaled ${g.scaleFactor}× to fit ${input.targetWidth}×${input.targetHeight}`,
+            });
+        }
+        else {
+            checks.push({
+                id: 'grid',
+                status: 'pass',
+                label: 'Pixel grid snapped',
+                detail: `${g.trueW}×${g.trueH} art px (~${stepAvg}px blocks) · ${g.scaleMode === 'native-1x' ? '1:1' : `${g.scaleFactor}× integer scale`}`,
+            });
+        }
+    }
     return checks;
 }

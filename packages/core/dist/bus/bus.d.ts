@@ -67,6 +67,7 @@ export declare class CommandBus {
      * other sources fold into it as children — keep the async window short.
      */
     transaction<T>(label: string, origin: CommandOrigin, fn: () => T): T | Promise<T>;
+    private removeTx;
     private commitTx;
     private rollbackTx;
     /** True while inside transaction() — strokes are rejected in that window. */

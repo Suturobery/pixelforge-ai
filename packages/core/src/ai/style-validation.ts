@@ -1,9 +1,10 @@
 import type { StyleProfile } from '../style-profile';
+import type { GridSnapStats } from './grid-detect';
 
 export type StyleCheckStatus = 'pass' | 'warning' | 'info';
 
 export interface StyleCheck {
-  id: 'size' | 'palette' | 'alpha' | 'background' | 'margin';
+  id: 'size' | 'palette' | 'alpha' | 'background' | 'margin' | 'grid';
   status: StyleCheckStatus;
   label: string;
   detail: string;
@@ -35,6 +36,7 @@ export function validateStyleCandidate(input: {
   palette: string[];
   profile?: StyleProfile;
   allowEdgeTouch?: boolean;
+  grid?: GridSnapStats;
 }): StyleCheck[] {
   const checks: StyleCheck[] = [];
   const expectedBytes = input.width * input.height * 4;
@@ -102,6 +104,25 @@ export function validateStyleCandidate(input: {
         status: edgeOpaque === 0 ? 'pass' : 'warning',
         label: edgeOpaque === 0 ? 'Clear canvas margin' : 'Subject reaches canvas edge',
         detail: edgeOpaque === 0 ? 'Safe margin around the sprite' : `${edgeOpaque} opaque edge pixels`,
+      });
+    }
+  }
+  if (input.grid?.detected) {
+    const g = input.grid;
+    const stepAvg = Math.round(((g.stepX + g.stepY) / 2) * 10) / 10;
+    if (g.oversized) {
+      checks.push({
+        id: 'grid',
+        status: 'warning',
+        label: 'Sprite too detailed for canvas',
+        detail: `Detected ${g.trueW}×${g.trueH} art px (~${stepAvg}px blocks) — downscaled ${g.scaleFactor}× to fit ${input.targetWidth}×${input.targetHeight}`,
+      });
+    } else {
+      checks.push({
+        id: 'grid',
+        status: 'pass',
+        label: 'Pixel grid snapped',
+        detail: `${g.trueW}×${g.trueH} art px (~${stepAvg}px blocks) · ${g.scaleMode === 'native-1x' ? '1:1' : `${g.scaleFactor}× integer scale`}`,
       });
     }
   }

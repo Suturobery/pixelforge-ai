@@ -17,8 +17,6 @@ import {
   buildReferencePrompt,
 } from '../src/ai/reference-candidate';
 import { hashBrief, renderMockReferenceCandidate } from '../src/ai/reference-mock';
-import { insertCharacter } from '../src/character/insert';
-import { kitSelectionFromPreset } from '../src/character/kit';
 
 /** 8×8 solid-shape reference (a "potion"): opaque center, transparent ring. */
 function potionReference(): { buffer: Uint8ClampedArray; width: number; height: number } {
@@ -183,31 +181,41 @@ describe('reference candidate → canvas (undoable layer add)', () => {
   test('cleaned candidate lands as an editable layer; undo restores the document', async () => {
     const project: Project = createProject({ name: 'ref-flow', width: 32, height: 32, palette: DEFAULT_PALETTE });
     const bus = new CommandBus(project);
-    // a character clip as the "existing artwork" that must survive
-    const { clipId: knightClip } = insertCharacter(bus, kitSelectionFromPreset('mushroom-knight')!, {});
+    const baseClip = bus.getProject().clips[0] as Clip;
+    const baseLayerId = baseClip.layers[0].id;
+    const baseFrameId = baseClip.frames[0].id;
+    // Paint existing artwork on the base layer that must survive
+    const existing = new Uint8ClampedArray(32 * 32 * 4);
+    existing[0] = 255;
+    existing[3] = 255;
+    bus.execute(
+      'pixels.applyOp',
+      { clipId: baseClip.id, frameId: baseFrameId, layerId: baseLayerId, ops: [{ op: 'setBuffer', buffer: existing }] },
+      'ui',
+    );
     const png = await renderMockReferenceCandidate(potionReference(), DEFAULT_PALETTE, 'a brass key');
     const candidate = await buildReferenceCandidate(pipelineInput(png, 32));
     const undoDepthBefore = bus.historyStats().undoDepth;
     // same path the panel takes: one transaction (layer.add + setBuffer)
     bus.transaction('Add candidate: a brass key', 'ui', () => {
-      bus.execute('layer.add', { clipId: knightClip, name: 'brass-key' }, 'ui');
-      const layerId = bus.getProject().clips.find((c) => c.id === knightClip)!.layers.at(-1)!.id;
-      const frameId = bus.getProject().clips.find((c) => c.id === knightClip)!.frames[0].id;
+      bus.execute('layer.add', { clipId: baseClip.id, name: 'brass-key' }, 'ui');
+      const layerId = bus.getProject().clips.find((c) => c.id === baseClip.id)!.layers.at(-1)!.id;
+      const frameId = bus.getProject().clips.find((c) => c.id === baseClip.id)!.frames[0].id;
       bus.execute(
         'pixels.applyOp',
-        { clipId: knightClip, frameId, layerId, ops: [{ op: 'setBuffer', buffer: candidate.cleaned.buffer }] },
+        { clipId: baseClip.id, frameId, layerId, ops: [{ op: 'setBuffer', buffer: candidate.cleaned.buffer }] },
         'ui',
       );
     });
     expect(bus.historyStats().undoDepth).toBe(undoDepthBefore + 1);
-    const clip = bus.getProject().clips.find((c) => c.id === knightClip) as Clip;
-    expect(clip.layers.map((l) => l.name)).toEqual(['Body', 'Outfit', 'Head', 'Item', 'brass-key']);
-    // source artwork preserved: the knight clip's original layers still have pixels
-    expect(clip.frames[0].cels[clip.layers[0].id].buffer.some((v) => v !== 0)).toBe(true);
+    const clip = bus.getProject().clips.find((c) => c.id === baseClip.id) as Clip;
+    expect(clip.layers.map((l) => l.name)).toEqual(['Layer 1', 'brass-key']);
+    // source artwork preserved: the base layer still has pixels
+    expect(clip.frames[0].cels[baseLayerId].buffer.some((v) => v !== 0)).toBe(true);
     expect(bus.undo().ok).toBe(true);
-    expect(bus.getProject().clips.find((c) => c.id === knightClip)!.layers.length).toBe(4);
-    expect(bus.getProject().clips.find((c) => c.id === knightClip)!.layers.at(-1)!.name).toBe('Item');
+    expect(bus.getProject().clips.find((c) => c.id === baseClip.id)!.layers.length).toBe(1);
+    expect(bus.getProject().clips.find((c) => c.id === baseClip.id)!.layers.at(-1)!.name).toBe('Layer 1');
     expect(bus.redo().ok).toBe(true);
-    expect(bus.getProject().clips.find((c) => c.id === knightClip)!.layers.length).toBe(5);
+    expect(bus.getProject().clips.find((c) => c.id === baseClip.id)!.layers.length).toBe(2);
   });
 });

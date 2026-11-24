@@ -1,5 +1,11 @@
 # PixelForge AI — Export Metadata Schema (Task 7)
 
+> **Status (2026-11-25): current, with one stale note.** The schema below matches
+> `EXPORT_METADATA_VERSION = 2` in the code. The closing "Out of scope" section is outdated: GIF
+> export exists in the export dialog, the MCP tools `export_sheet` and `export_gif` return data
+> URLs rather than writing files, and a Godot `.tres` exporter is still absent. File formats are
+> summarised in [Project and file formats](project-format.md#exports).
+
 Stable contract for the JSON sidecar emitted with every sprite-sheet export
 (`{base}_{clip}.json`). Implemented by `@pixelforge/core`
 (`src/export/export.ts`, `EXPORT_METADATA_VERSION = 2`); verified byte-for-byte

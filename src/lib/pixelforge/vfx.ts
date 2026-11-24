@@ -132,7 +132,7 @@ async function renderVfxFrames(
   return cells
 }
 
-export async function generateVfx(opts: VfxRenderOptions): Promise<VfxRenderResult> {
+export async function generateVfx(opts: VfxRenderOptions, beforeCommit?: () => void): Promise<VfxRenderResult> {
   try {
     const bus = getBus()
     const project = bus.getProject()
@@ -178,6 +178,7 @@ export async function generateVfx(opts: VfxRenderOptions): Promise<VfxRenderResu
     const cells = await renderVfxFrames(opts, project.width, project.height, { id: resolvedId, palette })
     const name = (opts.name ?? `vfx-${resolvedId.split('/').pop()}`).trim().slice(0, 120) || 'vfx'
 
+    beforeCommit?.()
     const createdClipId = bus.transaction(`Generate VFX "${resolvedId}" (${cells.length} frames)`, 'mcp', () => {
       bus.execute('clip.add', { name, fps }, 'mcp') // clip.add creates exactly ONE frame
       let clip = bus.getProject().clips[bus.getProject().clips.length - 1]!

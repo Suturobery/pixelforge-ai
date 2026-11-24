@@ -97,6 +97,7 @@ export async function buildReferenceCandidate(input: ReferenceCandidateInput): P
     targetHeight: input.targetSize,
     palette: input.palette,
     profile: input.profile,
+    grid: cleaned.stats.grid,
   });
   return {
     brief: input.brief.trim().slice(0, 400),

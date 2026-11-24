@@ -1,5 +1,5 @@
 /** Version of the @pixelforge/core package. */
-export const CORE_VERSION = '0.2.0' as const;
+export const CORE_VERSION = '0.3.0' as const;
 
 /**
  * Serialized project schema version targeted by this build (v3.1 §6):

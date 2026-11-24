@@ -49,7 +49,7 @@
  * fresh Uint8ClampedArray copies (source buffers are never mutated).
  */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.DEFAULT_NORMALIZE2_OPTIONS = void 0;
+exports.snapToDetectedGrid = exports.scaleSpriteWholeNumber = exports.detectPixelGrid = exports.computeEdgeProfiles = exports.DEFAULT_NORMALIZE2_OPTIONS = void 0;
 exports.sampleBorderColorMedian = sampleBorderColorMedian;
 exports.trimContentBBox = trimContentBBox;
 exports.dominantColorDownscale = dominantColorDownscale;
@@ -69,6 +69,11 @@ exports.normalizeV2 = normalizeV2;
 exports.nearestNeighborContain = nearestNeighborContain;
 exports.fitBufferToCanvas = fitBufferToCanvas;
 const oklab_1 = require("./oklab");
+const grid_detect_1 = require("./grid-detect");
+Object.defineProperty(exports, "computeEdgeProfiles", { enumerable: true, get: function () { return grid_detect_1.computeEdgeProfiles; } });
+Object.defineProperty(exports, "detectPixelGrid", { enumerable: true, get: function () { return grid_detect_1.detectPixelGrid; } });
+Object.defineProperty(exports, "scaleSpriteWholeNumber", { enumerable: true, get: function () { return grid_detect_1.scaleSpriteWholeNumber; } });
+Object.defineProperty(exports, "snapToDetectedGrid", { enumerable: true, get: function () { return grid_detect_1.snapToDetectedGrid; } });
 exports.DEFAULT_NORMALIZE2_OPTIONS = {
     targetW: 32,
     targetH: 32,
@@ -83,6 +88,7 @@ exports.DEFAULT_NORMALIZE2_OPTIONS = {
     alphaThreshold: 128,
     strayCleanup: 'off',
     enclosedResidueCleanup: false,
+    gridSnap: 'auto',
 };
 // ------------------------------------------------------------------- step 1
 /**
@@ -782,8 +788,64 @@ function normalizeV2(src, srcW, srcH, opts) {
         const srcRow = ((bbox.y + y) * srcW + bbox.x) * 4;
         trimmed.set(work.subarray(srcRow, srcRow + bbox.w * 4), y * bbox.w * 4);
     }
-    // 4. dominant-color downscale into the exact target (contain: aspect-safe)
-    let out = downscaleIntoTarget(trimmed, bbox.w, bbox.h, opts.targetW, opts.targetH, fit, paddingPct);
+    // 4. pixel-grid detection & snapping (when enabled) → whole-number scale,
+    //    or legacy dominant-color downscale when no faux-pixel grid is present
+    const gridSnap = opts.gridSnap ?? 'auto';
+    const detectedGrid = gridSnap === 'auto' ? (0, grid_detect_1.detectPixelGrid)(trimmed, bbox.w, bbox.h) : null;
+    let out;
+    let gridStats;
+    if (detectedGrid && detectedGrid.detected) {
+        const snapped = (0, grid_detect_1.snapToDetectedGrid)(trimmed, bbox.w, bbox.h, detectedGrid);
+        if (fit === 'fill') {
+            out = dominantColorDownscale(snapped.buffer, snapped.width, snapped.height, opts.targetW, opts.targetH);
+            gridStats = {
+                detected: true,
+                stepX: detectedGrid.stepX,
+                stepY: detectedGrid.stepY,
+                offsetX: detectedGrid.offsetX,
+                offsetY: detectedGrid.offsetY,
+                trueW: snapped.width,
+                trueH: snapped.height,
+                confidence: detectedGrid.confidence,
+                oversized: snapped.width > opts.targetW || snapped.height > opts.targetH,
+                scaleMode: 'fill',
+                scaleFactor: 1,
+            };
+        }
+        else {
+            const scaled = (0, grid_detect_1.scaleSpriteWholeNumber)(snapped.buffer, snapped.width, snapped.height, opts.targetW, opts.targetH, paddingPct);
+            out = scaled.buffer;
+            gridStats = {
+                detected: true,
+                stepX: detectedGrid.stepX,
+                stepY: detectedGrid.stepY,
+                offsetX: detectedGrid.offsetX,
+                offsetY: detectedGrid.offsetY,
+                trueW: snapped.width,
+                trueH: snapped.height,
+                confidence: detectedGrid.confidence,
+                oversized: scaled.oversized,
+                scaleMode: scaled.scaleMode,
+                scaleFactor: scaled.scaleFactor,
+            };
+        }
+    }
+    else {
+        out = downscaleIntoTarget(trimmed, bbox.w, bbox.h, opts.targetW, opts.targetH, fit, paddingPct);
+        gridStats = {
+            detected: false,
+            stepX: 1,
+            stepY: 1,
+            offsetX: 0,
+            offsetY: 0,
+            trueW: bbox.w,
+            trueH: bbox.h,
+            confidence: detectedGrid?.confidence ?? 0,
+            oversized: false,
+            scaleMode: 'none',
+            scaleFactor: 1,
+        };
+    }
     // 5. binary alpha (configurable threshold) + despeckle
     applyAlphaThreshold(out, alphaThreshold);
     const speckles = despeckleIsolated(out, opts.targetW, opts.targetH);
@@ -834,6 +896,7 @@ function normalizeV2(src, srcW, srcH, opts) {
             sourceStraysRemoved: sourceStrays,
             residueRemoved,
             bgColor: `#${hex(Math.round(borderColor[0]))}${hex(Math.round(borderColor[1]))}${hex(Math.round(borderColor[2]))}`,
+            grid: gridStats,
         },
     };
 }

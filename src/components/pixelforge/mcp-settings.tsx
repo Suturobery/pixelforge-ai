@@ -100,9 +100,10 @@ export function McpConnections() {
   const [ops, setOps] = useState<OpRow[]>([])
   const [pairing, setPairing] = useState<{ token: string; tier: 'L0' | 'L1' | 'L2' | 'L3'; expiresAt: string } | null>(null)
   // The normal desktop workflow is to connect a trusted IDE assistant to the
-  // whole project surface. The user can still deliberately choose a smaller
-  // tier for an untrusted/read-only assistant.
-  const [pairTier, setPairTier] = useState<'L0' | 'L1' | 'L2' | 'L3'>('L3')
+  // whole project surface (L2 — the top tier new pairings can pick; no tools
+  // are registered at L3 anymore). The user can still deliberately choose a
+  // smaller tier for an untrusted/read-only assistant.
+  const [pairTier, setPairTier] = useState<'L0' | 'L1' | 'L2'>('L2')
   const [pairingBusy, setPairingBusy] = useState(false)
   const [copied, setCopied] = useState<'code' | 'endpoint' | 'guide' | null>(null)
 
@@ -295,7 +296,7 @@ export function McpConnections() {
         </p>
         {!pairing ? (
           <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2">
-            <Select value={pairTier} onValueChange={(v) => setPairTier(v as 'L0' | 'L1' | 'L2' | 'L3')}>
+            <Select value={pairTier} onValueChange={(v) => setPairTier(v as 'L0' | 'L1' | 'L2')}>
               <SelectTrigger
                 className="data-[size=default]:h-7 max-w-full w-[210px] gap-1 border-zinc-800 bg-zinc-900 px-2 font-mono text-[10px] text-zinc-300"
                 aria-label="Pairing permission tier"
@@ -310,10 +311,7 @@ export function McpConnections() {
                   L1 — read + undoable edits
                 </SelectItem>
                 <SelectItem value="L2" className="font-mono text-[11px] text-zinc-200">
-                  L2 — edits + destructive ops
-                </SelectItem>
-                <SelectItem value="L3" className="font-mono text-[11px] text-zinc-200">
-                  L3 — full project control (recommended)
+                  L2 — full project control (recommended)
                 </SelectItem>
               </SelectContent>
             </Select>

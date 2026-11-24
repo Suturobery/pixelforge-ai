@@ -30,12 +30,14 @@ import {
   crc32,
   createProject as coreCreateProject,
   defaultStyleProfile,
-  isGenerationTaskSkill,
   parseStyleProfile,
   styleProfilePromptTags,
   decodePng,
   encodePng,
   harvestPalette,
+  uid,
+  validateStyleCandidate,
+  type StyleCheck,
   type SheetLayout,
   sha256Hex,
   type Clip,
@@ -76,6 +78,51 @@ export interface ToolExecContext {
   clientId: string
   clientName: string
   tier: 'L0' | 'L1' | 'L2' | 'L3'
+  expectedProjectKey?: string
+  expectedLoadEpoch?: number
+  onReview?: (review: ToolReview) => void
+}
+
+interface ReviewFrame {
+  buffer: Uint8ClampedArray
+  width: number
+  height: number
+}
+
+export interface ToolReview {
+  loadEpoch: number
+  clipId: string
+  clipName: string
+  frameId: string
+  frameNumber: number
+  layerId?: string
+  layerName?: string
+  before: ReviewFrame
+  after: ReviewFrame
+  checks: StyleCheck[]
+}
+
+const editorSessionId = uid('editor')
+
+export function currentProjectIdentity(): { key: string; name: string } {
+  const { project, projectId, filePath, loadEpoch } = useEditor.getState()
+  const key = projectId ? `db:${projectId}` : filePath ? `file:${filePath}` : `unsaved:${editorSessionId}:${loadEpoch}`
+  return { key, name: project.name }
+}
+
+class TaskProjectMismatch extends Error {
+  constructor() {
+    super('The active project changed. Open the task’s target project before retrying.')
+  }
+}
+
+function assertTaskProject(ctx: ToolExecContext): void {
+  if (ctx.expectedProjectKey !== undefined && (
+    currentProjectIdentity().key !== ctx.expectedProjectKey ||
+    useEditor.getState().loadEpoch !== ctx.expectedLoadEpoch
+  )) {
+    throw new TaskProjectMismatch()
+  }
 }
 
 const HEX_RE = /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i
@@ -483,7 +530,7 @@ const handlers: Record<string, ToolHandler> = {
     )
   },
 
-  async generate_vfx(args) {
+  async generate_vfx(args, ctx) {
     const { generateVfx } = await import('./vfx')
     const res = await generateVfx({
       effect: asString(args.effect, 'effect', 80),
@@ -496,7 +543,7 @@ const handlers: Record<string, ToolHandler> = {
       y: typeof args.y === 'number' ? args.y : undefined,
       palette: args.palette === 'project' ? 'project' : Array.isArray(args.palette) ? (args.palette as string[]) : undefined,
       name: typeof args.name === 'string' ? args.name : undefined,
-    })
+    }, () => assertTaskProject(ctx))
     if (!res.ok) {
       return fail('vfx_failed', res.error?.message ?? 'VFX render failed.', res.error?.hint)
     }
@@ -621,7 +668,7 @@ const handlers: Record<string, ToolHandler> = {
     )
   },
 
-  async open_project(args) {
+  async open_project(args, ctx) {
     const bus = getBus()
     if (bus.isDirty()) {
       return fail(
@@ -637,6 +684,7 @@ const handlers: Record<string, ToolHandler> = {
       if (!json.ok || !json.project) return fail('not_found', describeApiErrorInline(json.error, `project "${projectId}" not found`))
       if (!isSerializedProject(json.project)) return fail('persistence_error', 'Stored project failed schema validation')
       const { project } = await importLegacyProjectJson(json.project, projectId)
+      assertTaskProject(ctx)
       useEditor.getState().loadProject(project, { projectId })
       rememberLastProject(projectId) // agent-opened projects survive refresh too
       return withStateHash(
@@ -644,6 +692,7 @@ const handlers: Record<string, ToolHandler> = {
         { summary: `Opened project "${project.name}"` }
       )
     } catch (err) {
+      if (err instanceof TaskProjectMismatch) throw err
       return fail('persistence_error', err instanceof Error ? err.message : 'Failed to open project')
     }
   },
@@ -832,7 +881,6 @@ const handlers: Record<string, ToolHandler> = {
     if (!Array.isArray(pixels) || pixels.length === 0) throw new CommandError('VALIDATION_FAILED', 'pixels must be a non-empty array (max 2000)')
     if (pixels.length > MAX_SET_PIXELS) throw new CommandError('VALIDATION_FAILED', `max ${MAX_SET_PIXELS} pixels per call`)
     const fallback = args.color !== undefined ? asHex(args.color, 'color') : null
-    let color: RGBA | null = null
     const ops = pixels.map((p, i) => {
       if (!isRecord(p)) throw new CommandError('VALIDATION_FAILED', `pixels[${i}] must be an object`)
       const x = asCoord(p.x, `pixels[${i}].x`, -100000, 100000)
@@ -842,10 +890,9 @@ const handlers: Record<string, ToolHandler> = {
       }
       const hex = p.color !== undefined ? asHex(p.color, `pixels[${i}].color`) : fallback
       if (!hex) throw new CommandError('VALIDATION_FAILED', `pixels[${i}] has no color and no top-level "color" was given`)
-      if (!color) color = asRgba(hex)
-      return { op: 'stamp' as const, x, y }
+      return { op: 'stamp' as const, x, y, color: asRgba(hex) }
     })
-    execCommand('pixels.applyOp', { clipId: clip.id, frameId: frame.id, layerId: layer.id, color, ops })
+    execCommand('pixels.applyOp', { clipId: clip.id, frameId: frame.id, layerId: layer.id, ops })
     return withStateHash(
       { applied: ops.length, clipId: clip.id, frameId: frame.id, layerId: layer.id },
       { undoable: true, summary: `Painted ${ops.length} pixel(s) on "${clip.name}" / "${layer.name}"` }
@@ -1085,7 +1132,7 @@ const handlers: Record<string, ToolHandler> = {
     )
   },
 
-  async import_image_as_layer(args) {
+  async import_image_as_layer(args, ctx) {
     const project = getBus().getProject()
     const clip = resolveClipRef(project, args)
     const { frame } = resolveFrameRef(clip, args)
@@ -1113,6 +1160,7 @@ const handlers: Record<string, ToolHandler> = {
         'import_image_as_layer never resizes: import the exact canvas size.'
       )
     }
+    assertTaskProject(ctx)
     execTransaction(`Import image layer${name ? ` "${name}"` : ''}`, () => {
       getBus().execute('layer.add', { clipId: clip.id, ...(name ? { name } : {}) }, 'mcp')
       const created = getBus().getProject().clips.find((c) => c.id === clip.id)!.layers.slice(-1)[0]!
@@ -1132,8 +1180,8 @@ const handlers: Record<string, ToolHandler> = {
 
   // ------------------------------------------------- AI candidates (Task 9)
 
-  async import_frame_strip(args) {
-    return importFrameStrip(args)
+  async import_frame_strip(args, ctx) {
+    return importFrameStrip(args, () => assertTaskProject(ctx))
   },
 
   async macro_save(args) {
@@ -1169,13 +1217,16 @@ const handlers: Record<string, ToolHandler> = {
     )
   },
 
-  async macro_run(args) {
+  async macro_run(args, ctx) {
     const { macroRun } = await import('./mcp-macros')
+    assertTaskProject(ctx)
     const name = asString(args.name, 'name', 60)
     const out = await macroRun(name, (tool, runArgs) => executeMcpTool(tool, runArgs, {
       clientId: 'macro',
       clientName: 'macro',
       tier: 'L1',
+      expectedProjectKey: ctx.expectedProjectKey,
+      expectedLoadEpoch: ctx.expectedLoadEpoch,
     }), args.stopOnError === false)
     const bad = out.results.find((r) => !r.ok)
     return withStateHash(
@@ -1190,8 +1241,9 @@ const handlers: Record<string, ToolHandler> = {
     )
   },
 
-  async batch(args) {
+  async batch(args, ctx) {
     const { runStepsInTransaction } = await import('./mcp-macros')
+    assertTaskProject(ctx)
     const raw = args.steps
     if (!Array.isArray(raw) || raw.length < 1 || raw.length > 50) {
       return fail('validation_failed', 'steps must be an array of 1–50 {tool, args} entries')
@@ -1207,6 +1259,8 @@ const handlers: Record<string, ToolHandler> = {
       clientId: 'macro',
       clientName: 'macro',
       tier: 'L1',
+      expectedProjectKey: ctx.expectedProjectKey,
+      expectedLoadEpoch: ctx.expectedLoadEpoch,
     }), args.stopOnError === false)
     const bad = out.results.find((r) => !r.ok)
     return withStateHash(
@@ -1306,8 +1360,9 @@ const handlers: Record<string, ToolHandler> = {
     )
   },
 
-  async set_parts(args) {
+  async set_parts(args, ctx) {
     const { rectsIntersect } = await import('@pixelforge/core')
+    assertTaskProject(ctx)
     const project = getBus().getProject()
     const clip = resolveClipRef(project, args)
     if (!Array.isArray(args.parts)) {
@@ -1378,8 +1433,9 @@ const handlers: Record<string, ToolHandler> = {
     )
   },
 
-  async apply_motion_preset(args) {
+  async apply_motion_preset(args, ctx) {
     const { analyzeMotionPlan, composeFrameRgba, getPreset, planMotion, PRESET_IDS } = await import('@pixelforge/core')
+    assertTaskProject(ctx)
     const project = getBus().getProject()
     const source = resolveClipRef(project, {
       clipId: typeof args.sourceClipId === 'string' ? args.sourceClipId : undefined,
@@ -1556,6 +1612,58 @@ async function runCelTransform(
 
 export const EXECUTOR_TOOL_NAMES = Object.keys(handlers).sort()
 
+// These handlers apply their edit synchronously before computing the result hash.
+const REVIEW_TOOLS = new Set(['set_pixels', 'fill_rect', 'replace_color', 'flip_frame', 'rotate_frame', 'shift_frame', 'beautify_layer', 'resize_canvas'])
+
+function reviewFrame(project: Project, clip: Clip, frame: Frame, layerId?: string): ReviewFrame {
+  const { width, height } = project
+  if (layerId === undefined) return { buffer: composeFrameRgba(project, clip, frame), width, height }
+  const pixels = frame.cels[layerId]?.buffer
+  const buffer = pixels ? new Uint8ClampedArray(pixels) : new Uint8ClampedArray(width * height * 4)
+  return { buffer, width, height }
+}
+
+function captureToolReview(tool: string, args: Record<string, unknown>) {
+  const project = getBus().getProject()
+  const { loadEpoch } = useEditor.getState()
+  const targetArgs = tool === 'resize_canvas' ? {} : args
+  const clip = resolveClipRef(project, targetArgs)
+  const { frame, index } = resolveFrameRef(clip, targetArgs)
+  const layer = tool === 'resize_canvas' ? undefined : resolveLayerRef(clip, targetArgs)
+  return {
+    loadEpoch,
+    clipId: clip.id,
+    clipName: clip.name,
+    frameId: frame.id,
+    frameNumber: index + 1,
+    layerId: layer?.id,
+    layerName: layer?.name,
+    before: reviewFrame(project, clip, frame, layer?.id),
+  }
+}
+
+function finishToolReview(before: ReturnType<typeof captureToolReview>): ToolReview | null {
+  const project = getBus().getProject()
+  if (before.loadEpoch !== useEditor.getState().loadEpoch) return null
+  const clip = project.clips.find((item) => item.id === before.clipId)
+  const frame = clip?.frames.find((item) => item.id === before.frameId)
+  if (!clip || !frame) return null
+  const after = reviewFrame(project, clip, frame, before.layerId)
+  return {
+    ...before,
+    after,
+    checks: validateStyleCandidate({
+      buffer: after.buffer,
+      width: project.width,
+      height: project.height,
+      targetWidth: project.width,
+      targetHeight: project.height,
+      palette: project.palette,
+      profile: project.settings.styleProfile,
+    }),
+  }
+}
+
 export async function executeMcpTool(tool: string, args: unknown, ctx: ToolExecContext): Promise<ToolExecResult> {
   const handler = handlers[tool]
   if (!handler) {
@@ -1564,6 +1672,9 @@ export async function executeMcpTool(tool: string, args: unknown, ctx: ToolExecC
   const bus = getBus()
   if (bus.activeStroke) {
     return fail('editor_busy', 'A manual stroke is in progress — retry in a moment.', 'The tool will run as soon as the pointer interaction ends.')
+  }
+  if (ctx.expectedProjectKey !== undefined && ctx.expectedLoadEpoch === undefined) {
+    ctx = { ...ctx, expectedLoadEpoch: useEditor.getState().loadEpoch }
   }
   const safeArgs = isRecord(args) ? args : {}
   // optimistic staleness guard on every L1 mutation
@@ -1575,12 +1686,21 @@ export async function executeMcpTool(tool: string, args: unknown, ctx: ToolExecC
     }
   }
   try {
-    const res = await handler(safeArgs, ctx)
+    assertTaskProject(ctx)
+    if (ctx.expectedProjectKey && (tool === 'create_project' || tool === 'open_project')) {
+      return fail('task_project_mismatch', 'Finish or cancel the claimed task before replacing its project.')
+    }
+    const before = ctx.onReview && REVIEW_TOOLS.has(tool) ? captureToolReview(tool, safeArgs) : null
+    const pending = handler(safeArgs, ctx)
+    const review = before ? finishToolReview(before) : null
+    const res = await pending
+    if (res.ok && review) ctx.onReview?.(review)
     if (res.ok && tool !== 'get_project_state' && tool !== 'get_clip' && tool !== 'get_palette' && tool !== 'get_frame_png') {
       recordAgentContextEvent(ctx.clientName || 'mcp-agent', tool, res.summary ?? `Executed ${tool}`)
     }
     return res
   } catch (err) {
+    if (err instanceof TaskProjectMismatch) return fail('task_project_mismatch', err.message)
     if (err instanceof CommandError) {
       return fail(err.code.toLowerCase(), err.message)
     }

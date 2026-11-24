@@ -49,6 +49,8 @@ export function buildIdeGuide({ tier, endpoint, token }: IdeGuideInput): string 
     '2. Call pair_client with a friendly name (for example "Codex" or "Claude Desktop").',
     '3. Replace the temporary Authorization value with the returned persistent token.',
     '4. Call get_project_state first, then use the returned ids/stateHash for tools.',
+    '5. Read get_knowledge for the task (methodology and grids for drawing, animation for motion, vfx for effects).',
+    '6. Review the PNG from get_frame_png or the sequence from preview_animation. Inspect readability and run validate_style.',
     '',
     TIER_PERMISSIONS[tier],
     'No image generation tool exists (generate_sprite is not registered) and none is planned.',

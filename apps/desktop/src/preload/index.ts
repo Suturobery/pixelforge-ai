@@ -57,15 +57,6 @@ const bridge: PixelForgeBridge = {
   settings: {
     getAll: () => ipcRenderer.invoke('pf:settings-get'),
     update: (patch) => ipcRenderer.invoke('pf:settings-update', patch ?? {}),
-    // WRITE-ONLY key submission: the plaintext is forwarded once and never
-    // comes back — hasKey/credentialStatus expose only booleans/metadata.
-    setApiKey: (providerId, plaintext) => ipcRenderer.invoke('pf:settings-set-api-key', providerId, plaintext),
-    hasKey: (providerId) => ipcRenderer.invoke('pf:settings-has-key', providerId),
-    removeKey: (providerId) => ipcRenderer.invoke('pf:settings-remove-key', providerId),
-    credentialStatus: () => ipcRenderer.invoke('pf:settings-credential-status'),
-  },
-  referenceGen: {
-    generate: (input) => ipcRenderer.invoke('pf:reference-generate', input),
   },
   updates: {
     status: () => ipcRenderer.invoke('pf:app-update-status'),

@@ -337,3 +337,23 @@ describe('pixels.applyOp behaviors', () => {
     expect(Buffer.from(cel0?.buffer ?? []).equals(Buffer.from(cel1?.buffer ?? []))).toBeTrue();
   });
 });
+
+test('a pending transaction cannot commit history or roll back after switching projects', async () => {
+  for (const reject of [true, false]) {
+    const { bus } = makeBus();
+    const replacement = createProject({ name: 'Replacement', width: 16, height: 16 });
+    let finish!: () => void;
+    const pending = bus.transaction('Old project edit', 'mcp', async () => {
+      bus.execute('clip.add', { name: 'Old clip' }, 'mcp');
+      await new Promise<void>((resolve) => { finish = resolve; });
+      if (reject) throw new Error('Project changed');
+    });
+    bus.setProject(replacement);
+    finish();
+    if (reject) await expect(pending).rejects.toThrow('Project changed');
+    else await pending;
+    expect(bus.getProject()).toBe(replacement);
+    expect(bus.canUndo()).toBeFalse();
+    expect(bus.inTransaction).toBeFalse();
+  }
+});

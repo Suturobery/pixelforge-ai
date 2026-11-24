@@ -9,12 +9,11 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { computeStateHash, executeMcpTool, type ToolExecResult } from '@/lib/pixelforge/mcp-tools'
+import { computeStateHash, executeMcpTool, type ToolExecResult, type ToolReview } from '@/lib/pixelforge/mcp-tools'
 import { MCP_TOOLS } from '@/lib/pixelforge/mcp-tool-catalog'
 import { useEditor } from '@/lib/pixelforge/store'
 import { useAppSettings } from '@/lib/pixelforge/settings'
 import { copyText } from '@/lib/pixelforge/desktop-bridge'
-import { composeFrameRgba, validateStyleCandidate, type StyleCheck } from '@pixelforge/core'
 import { getRecentRemoteEdits, subscribeBridge } from '@/lib/pixelforge/mcp-bridge'
 import { drawSpritePreview } from './sprite-preview'
 import { Button } from '@/components/ui/button'
@@ -124,26 +123,14 @@ export function AgentPanel() {
   const [interpreted, setInterpreted] = useState<{ plain: string; target: string } | null>(null)
   // clarify choices for ambiguous commands ("add 4 frames" — empty or copies?)
   const [clarify, setClarify] = useState<{ plain: string; options: Array<{ label: string; tool: string; args: Record<string, unknown> }> } | null>(null)
-  // Review Result state: the affected target + before/after RGBA + checks
-  const [review, setReview] = useState<{
-    tool: string
-    clipId: string
-    clipName: string
-    frameId: string
-    frameNumber: number
-    layerId: string
-    layerName: string
-    before: Uint8ClampedArray | null
-    after: Uint8ClampedArray
-    checks: StyleCheck[]
-  } | null>(null)
-  const lastRunnerRef = useRef<'local' | 'mcp'>('local')
+  const [latestReview, setReview] = useState<(ToolReview & { tool: string; clientName?: string }) | null>(null)
+  const loadEpoch = useEditor((s) => s.loadEpoch)
+  const review = latestReview?.loadEpoch === loadEpoch ? latestReview : null
   const remoteEdits = useRef(getRecentRemoteEdits())
   // AI agent approval gate: resolves the pending Promise from the UI buttons
   const pendingResolveRef = useRef<((v: 'run' | 'skip') => void) | null>(null)
   const [mcpStatus, setMcpStatus] = useState<{ reachable: boolean; authRequired: boolean; serverName?: string } | null>(null)
   const reviewOpenRef = useRef<HTMLDivElement | null>(null)
-  const project = useEditor((s) => s.project)
 
   /** Rule-based natural-language → tool mapping. Fills the form for review;
    *  nothing runs until the user presses Run. */
@@ -296,37 +283,8 @@ export function AgentPanel() {
       return
     }
 
-    // pixel-affecting runs capture the target frame before/after so Review
-    // Result can show exactly what changed and where
-    const PIXEL_TOOLS = new Set(['set_pixels', 'fill_rect', 'replace_color', 'flip_frame', 'rotate_frame', 'shift_frame', 'resize_canvas'])
-    let reviewCapture: {
-      clipId: string
-      clipName: string
-      frameId: string
-      frameNumber: number
-      layerId: string
-      layerName: string
-      before: Uint8ClampedArray | null
-    } | null = null
-    if (PIXEL_TOOLS.has(toolName)) {
-      const st = useEditor.getState()
-      const clip = st.project.clips.find((c) => c.id === st.activeClipId) ?? st.project.clips[0]
-      const frame = clip?.frames[st.activeFrameIndex] ?? clip?.frames[0]
-      if (clip && frame) {
-        const layer = clip.layers.find((l) => l.id === st.activeLayerId) ?? clip.layers[clip.layers.length - 1] ?? clip.layers[0]
-        reviewCapture = {
-          clipId: clip.id,
-          clipName: clip.name,
-          frameId: frame.id,
-          frameNumber: st.activeFrameIndex + 1,
-          layerId: layer?.id ?? '',
-          layerName: layer?.name ?? '',
-          before: composeFrameRgba(st.project, clip, frame),
-        }
-      }
-    }
-
     setRunning(true)
+    setReview(null)
     try {
       // strip example placeholders ("<projectId>") — the executor resolves
       // active clip/frame/layer automatically when refs are omitted
@@ -341,43 +299,10 @@ export function AgentPanel() {
         clientId: 'agent-console',
         clientName: 'agent-console',
         tier: selectedTool?.tier ?? 'L0',
+        onReview: (snapshot) => setReview({ ...snapshot, tool: toolName }),
       })
       setResult(JSON.stringify(res, null, 2))
       setResultOk(res.ok)
-      // refresh the Review Result block for pixel edits; stale reviews for
-      // other tool runs are cleared so the block always matches the last edit
-      lastRunnerRef.current = 'local'
-      if (reviewCapture && res.ok) {
-        const st = useEditor.getState()
-        const clip = st.project.clips.find((c) => c.id === reviewCapture.clipId)
-        const frame = clip?.frames.find((f) => f.id === reviewCapture.frameId)
-        if (clip && frame) {
-          const after = composeFrameRgba(st.project, clip, frame)
-          setReview({
-            tool: toolName,
-            clipId: clip.id,
-            clipName: clip.name,
-            frameId: frame.id,
-            frameNumber: reviewCapture.frameNumber,
-            layerId: reviewCapture.layerId,
-            layerName: reviewCapture.layerName,
-            before: reviewCapture.before,
-            after,
-            checks: validateStyleCandidate({
-              buffer: after,
-              width: st.project.width,
-              height: st.project.height,
-              targetWidth: st.project.width,
-              targetHeight: st.project.height,
-              palette: st.project.palette ?? [],
-            }),
-          })
-        } else {
-          setReview(null)
-        }
-      } else if (!reviewCapture) {
-        setReview(null)
-      }
       setOps((prev) =>
         [
           {
@@ -418,30 +343,11 @@ export function AgentPanel() {
   // (e.g. ZCode) just changed pixels, flip Review Result to that edit
   useEffect(() => {
     const unsubscribe = subscribeBridge(() => {
+      const previous = remoteEdits.current[0]
       remoteEdits.current = getRecentRemoteEdits()
-      const newest = remoteEdits.current.find((r) => r.review)
-      if (newest?.ok && newest.review) {
-        lastRunnerRef.current = 'mcp'
-        const st = useEditor.getState()
-        setReview({
-          tool: newest.tool,
-          clipId: newest.review.clipId,
-          clipName: newest.review.clipName,
-          frameId: newest.review.frameId,
-          frameNumber: newest.review.frameNumber,
-          layerId: newest.review.layerId,
-          layerName: newest.review.layerName,
-          before: newest.review.before,
-          after: newest.review.after,
-          checks: validateStyleCandidate({
-            buffer: newest.review.after,
-            width: newest.review.width,
-            height: newest.review.height,
-            targetWidth: newest.review.width,
-            targetHeight: newest.review.height,
-            palette: st.project.palette ?? [],
-          }),
-        })
+      const newest = remoteEdits.current[0]
+      if (newest !== previous && newest?.review) {
+        setReview({ ...newest.review, tool: newest.tool, clientName: newest.clientName })
       }
     })
     return unsubscribe
@@ -786,41 +692,36 @@ export function AgentPanel() {
           <div className="mb-2 flex items-center justify-between gap-2">
             <span className="font-mono text-[10px] font-semibold uppercase tracking-wider text-teal-300">Review Result</span>
             <span className="font-mono text-[9px] text-zinc-500">
-              {review.tool} · {review.clipName} · frame {review.frameNumber} · layer "{review.layerName}"
+              {review.tool} · {review.clipName} · frame {review.frameNumber}
+              {review.layerName ? ` · layer "${review.layerName}"` : ' · whole canvas'}
             </span>
           </div>
           <p className="mb-2 font-mono text-[9px] text-zinc-500">
             performed by:{' '}
-            {lastRunnerRef.current === 'mcp' ? (
-              <span className="text-frost-300">connected agent (ZCode via MCP)</span>
+            {review.clientName ? (
+              <span className="text-frost-300">connected agent ({review.clientName} via MCP)</span>
             ) : (
               <span className="text-zinc-300">this Agent panel (local runner)</span>
             )}{' '}
             · undo via <button type="button" className="inline-flex items-center gap-0.5 rounded border border-zinc-700 px-1 text-[9px] text-zinc-300 hover:text-zinc-100" onClick={async () => { const r = await executeMcpTool('undo', {}, { clientId: 'agent-console', clientName: 'agent-console', tier: 'L1' }); toast({ title: r.ok ? 'Undone' : 'Undo failed', description: r.summary ?? r.error?.message }); }}><Undo2 className="inline h-2.5 w-2.5" /> undo</button>
           </p>
           <div className="mb-2.5 flex flex-wrap items-start gap-3 rounded-lg border border-zinc-800/80 bg-zinc-950/60 p-2.5">
-            {review.before && (
-              <figure className="shrink-0 text-center">
+            {([['before', review.before], ['after', review.after]] as const).map(([label, frame]) => (
+              <figure key={label} className="shrink-0 text-center">
                 <div className="flex items-end gap-1.5">
-                  <canvas className="rounded border border-zinc-800" style={{ imageRendering: 'pixelated', width: project.width, height: project.height }} aria-label="before at actual size" ref={(c) => drawSpritePreview(c, review.before, project.width)} />
-                  <canvas className="rounded border border-zinc-700" style={{ imageRendering: 'pixelated', width: project.width * 3, height: project.height * 3 }} aria-label="before at zoom" ref={(c) => drawSpritePreview(c, review.before, project.width)} />
+                  {([1, 3] as const).map((zoom) => (
+                    <canvas
+                      key={zoom}
+                      className="rounded border border-zinc-800"
+                      style={{ imageRendering: 'pixelated', width: frame.width * zoom, height: frame.height * zoom }}
+                      aria-label={`${label} at ${zoom === 1 ? 'actual size' : 'zoom'}`}
+                      ref={(canvas) => drawSpritePreview(canvas, frame.buffer, frame.width, frame.height)}
+                    />
+                  ))}
                 </div>
-                <figcaption className="mt-0.5 text-[10px] text-zinc-500">before · 1× · 3×</figcaption>
+                <figcaption className="mt-0.5 text-[10px] text-zinc-500">{label} · 1× · 3×</figcaption>
               </figure>
-            )}
-            <figure className="shrink-0 text-center">
-              <div className="flex items-end gap-1.5">
-                <canvas className="rounded border border-zinc-800" style={{ imageRendering: 'pixelated', width: project.width, height: project.height }} aria-label="after at actual size" ref={(c) => drawSpritePreview(c, review.after, project.width)} />
-                <canvas className="rounded border border-zinc-700" style={{ imageRendering: 'pixelated', width: project.width * 3, height: project.height * 3 }} aria-label="after at zoom" ref={(c) => drawSpritePreview(c, review.after, project.width)} />
-              </div>
-              <figcaption className="mt-0.5 text-[10px] text-zinc-500">after · 1× · 3×</figcaption>
-            </figure>
-            {!review.before && (
-              <p className="min-w-0 flex-1 self-center text-[11px] leading-snug text-zinc-500">
-                No before image for this run — the frame was empty or the tool did not change pixels. The after view and
-                checks below still reflect the exact edit.
-              </p>
-            )}
+            ))}
           </div>
           <ul className="space-y-1" aria-label="Review technical checks">
             {review.checks.map((c) => (

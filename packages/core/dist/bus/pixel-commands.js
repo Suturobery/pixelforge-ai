@@ -37,6 +37,10 @@ function validateOp(op, hasColor, ctx, i) {
     switch (op.op) {
         case 'stamp':
         case 'fill':
+            if (op.op === 'stamp' && op.color !== undefined) {
+                (0, validate_1.getRgba)({ color: op.color }, 'color', what);
+                hasColor = true;
+            }
             (0, validate_1.getInt)(op, 'x', what);
             (0, validate_1.getInt)(op, 'y', what);
             (0, validate_1.getOptionalInt)(op, 'size', what, 1, 8);
@@ -149,7 +153,7 @@ exports.applyPixelOpsCommand = {
             const c = payload.color;
             switch (op.op) {
                 case 'stamp':
-                    (0, ops_1.stampBrush)(base, width, height, op.x, op.y, op.size ?? 1, c, op.mirrorX ?? false);
+                    (0, ops_1.stampBrush)(base, width, height, op.x, op.y, op.size ?? 1, op.color ?? c, op.mirrorX ?? false);
                     break;
                 case 'line':
                     (0, ops_1.drawLinePixels)(base, width, height, op.from.x, op.from.y, op.to.x, op.to.y, op.size ?? 1, c, op.mirrorX ?? false);

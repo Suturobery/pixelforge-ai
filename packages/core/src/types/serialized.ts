@@ -5,7 +5,7 @@
  * the contract + structural validation only (pure, DOM-free).
  */
 
-import type { DocumentSettings, LoopMode, PartRect } from './document';
+import type { BlendMode, DocumentSettings, LoopMode, PartRect } from './document';
 import { CANVAS_MAX, CANVAS_MIN } from './document';
 
 export interface SerializedCelV2 {
@@ -30,6 +30,10 @@ export interface SerializedLayerV2 {
   visible: boolean;
   opacity: number;
   linked: boolean;
+  /** Paint-locked: pixel tools refuse to mutate this layer. Omitted = false. */
+  locked?: boolean;
+  /** Compositing mode against the layers below; omitted = normal. */
+  blend?: BlendMode;
 }
 
 export interface SerializedPartV2 {

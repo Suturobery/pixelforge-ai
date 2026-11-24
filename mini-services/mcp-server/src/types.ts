@@ -76,7 +76,7 @@ export interface ToolEnvelope {
 export type EditorOutbound =
   | { type: 'hello-ok'; server: EditorServerStatus }
   | { type: 'pong' }
-  | { type: 'tool-request'; id: string; tool: string; args: unknown; clientId: string; clientName: string; tier: Tier }
+  | { type: 'tool-request'; id: string; tool: string; args: unknown; clientId: string; clientName: string; tier: Tier; expectedProjectKey?: string }
   | { type: 'ctrl-result'; id: string; ok: boolean; data?: unknown; error?: { code: string; message: string } }
   | { type: 'status'; server: EditorServerStatus };
 

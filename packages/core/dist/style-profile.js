@@ -7,7 +7,7 @@
  * bounded data and become descriptive prompt tags only at the AI boundary.
  */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.DEFAULT_STYLE_PROFILE = exports.STYLE_PALETTE_MODES = exports.STYLE_OUTLINES = exports.STYLE_LIGHTING = exports.STYLE_FEEDBACK_CUE_MAX = exports.STYLE_FEEDBACK_MAX_CUES = exports.STYLE_REFERENCE_MAX_LABEL = exports.STYLE_PROFILE_MAX_REFERENCES = exports.STYLE_PROFILE_MAX_NOTES = exports.STYLE_PROFILE_MAX_DIRECTION = exports.STYLE_PROFILE_MAX_NAME = void 0;
+exports.DEFAULT_STYLE_PROFILE = exports.STYLE_CAMERA_ANGLES = exports.STYLE_PALETTE_MODES = exports.STYLE_OUTLINES = exports.STYLE_LIGHTING = exports.STYLE_FEEDBACK_CUE_MAX = exports.STYLE_FEEDBACK_MAX_CUES = exports.STYLE_REFERENCE_SIZES = exports.STYLE_REFERENCE_MAX_PNG_BASE64 = exports.STYLE_REFERENCE_MAX_LABEL = exports.STYLE_PROFILE_MAX_REFERENCES = exports.STYLE_PROFILE_MAX_NOTES = exports.STYLE_PROFILE_MAX_DIRECTION = exports.STYLE_PROFILE_MAX_NAME = void 0;
 exports.defaultStyleProfile = defaultStyleProfile;
 exports.parseStyleProfile = parseStyleProfile;
 exports.cloneStyleProfile = cloneStyleProfile;
@@ -17,11 +17,16 @@ exports.STYLE_PROFILE_MAX_DIRECTION = 180;
 exports.STYLE_PROFILE_MAX_NOTES = 480;
 exports.STYLE_PROFILE_MAX_REFERENCES = 6;
 exports.STYLE_REFERENCE_MAX_LABEL = 80;
+/** Base64 cap for an embedded reference sprite (≈12 KB decoded PNG). */
+exports.STYLE_REFERENCE_MAX_PNG_BASE64 = 16384;
+/** Supported reference sprite sizes for the Create-from-Reference workflow. */
+exports.STYLE_REFERENCE_SIZES = [16, 32];
 exports.STYLE_FEEDBACK_MAX_CUES = 4;
 exports.STYLE_FEEDBACK_CUE_MAX = 72;
 exports.STYLE_LIGHTING = ['top-left', 'top', 'front', 'flat'];
 exports.STYLE_OUTLINES = ['dark-1px', 'light-1px', 'none'];
 exports.STYLE_PALETTE_MODES = ['enforce', 'prefer', 'none'];
+exports.STYLE_CAMERA_ANGLES = ['side view', 'front', '3/4 view', 'top-down', 'isometric'];
 exports.DEFAULT_STYLE_PROFILE = Object.freeze({
     enabled: true,
     name: 'Project style',
@@ -30,6 +35,7 @@ exports.DEFAULT_STYLE_PROFILE = Object.freeze({
     outline: 'dark-1px',
     paletteMode: 'enforce',
     transparentBackground: true,
+    cameraAngle: 'side view',
     notes: '',
     references: [],
     feedback: { prefer: [], avoid: [] },
@@ -58,12 +64,38 @@ function parseStyleReferences(value) {
     const seen = new Set();
     const refs = [];
     for (const raw of value) {
-        if (!isRecord(raw) || !isSafeId(raw.clipId) || !isSafeId(raw.frameId) || !validString(raw.label, exports.STYLE_REFERENCE_MAX_LABEL)) {
+        if (!isRecord(raw) || !validString(raw.label, exports.STYLE_REFERENCE_MAX_LABEL)) {
             return null;
         }
         const label = raw.label.trim();
         if (!label)
             return null;
+        // Embedded imported reference: PNG payload + native size, ids empty.
+        if (raw.pngBase64 !== undefined) {
+            const w = raw.width;
+            const h = raw.height;
+            if (typeof raw.pngBase64 !== 'string' ||
+                raw.pngBase64.length === 0 ||
+                raw.pngBase64.length > exports.STYLE_REFERENCE_MAX_PNG_BASE64 ||
+                !/^[A-Za-z0-9+/=]+$/.test(raw.pngBase64) ||
+                typeof w !== 'number' ||
+                typeof h !== 'number' ||
+                w !== h ||
+                (w !== 16 && w !== 32) ||
+                raw.clipId !== '' ||
+                raw.frameId !== '') {
+                return null;
+            }
+            const key = `png\u0000${label.toLowerCase()}`;
+            if (seen.has(key))
+                return null;
+            seen.add(key);
+            refs.push({ clipId: '', frameId: '', label, pngBase64: raw.pngBase64, width: w, height: h });
+            continue;
+        }
+        if (!isSafeId(raw.clipId) || !isSafeId(raw.frameId)) {
+            return null;
+        }
         const key = `${raw.clipId}\u0000${raw.frameId}`;
         if (seen.has(key))
             return null;
@@ -105,7 +137,13 @@ function parseStyleProfile(value) {
         return null;
     const references = parseStyleReferences(value.references);
     const feedback = parseStyleFeedback(value.feedback);
-    if (typeof value.enabled !== 'boolean' ||
+    const cameraAngle = value.cameraAngle === undefined
+        ? undefined
+        : exports.STYLE_CAMERA_ANGLES.includes(value.cameraAngle)
+            ? value.cameraAngle
+            : null;
+    if (cameraAngle === null ||
+        typeof value.enabled !== 'boolean' ||
         !validString(value.name, exports.STYLE_PROFILE_MAX_NAME) ||
         !validString(value.artDirection, exports.STYLE_PROFILE_MAX_DIRECTION) ||
         !exports.STYLE_LIGHTING.includes(value.lighting) ||
@@ -129,6 +167,7 @@ function parseStyleProfile(value) {
         outline: value.outline,
         paletteMode: value.paletteMode,
         transparentBackground: value.transparentBackground,
+        ...(cameraAngle !== undefined ? { cameraAngle } : {}),
         notes: value.notes.trim(),
         references,
         feedback,
@@ -163,6 +202,7 @@ function styleProfilePromptTags(profile) {
         `project art direction: ${profile.artDirection}`,
         lighting[profile.lighting],
         outline[profile.outline],
+        profile.cameraAngle ? `camera angle: ${profile.cameraAngle}` : null,
         profile.paletteMode === 'enforce' ? 'use only the supplied project palette' : null,
         profile.paletteMode === 'prefer' ? 'prefer the supplied project palette' : null,
         profile.transparentBackground ? 'isolated subject intended for a transparent background' : null,

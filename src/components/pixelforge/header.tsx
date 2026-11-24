@@ -33,7 +33,6 @@ import {
   Loader2,
   Settings,
   Clock,
-  UserPlus,
 } from 'lucide-react'
 import { NewProjectDialog, OpenProjectDialog, ResizeCanvasDialog } from './project-dialogs'
 import { ExportDialog } from './export-dialog'
@@ -209,16 +208,6 @@ export function Header() {
 
         <Button variant="ghost" size="sm" aria-label="New project" className="h-7 shrink-0 px-2 text-xs text-zinc-300 sm:px-3" onClick={() => setNewOpen(true)}>
           <FilePlus2 className="h-3.5 w-3.5 sm:mr-1.5" /><span className="hidden sm:inline">New</span>
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          aria-label="Create character"
-          title="Create a character from the bundled 32×32 kit"
-          className="h-7 shrink-0 px-2 text-xs text-teal-300 sm:px-3 hover:text-teal-200"
-          onClick={() => useEditor.getState().requestRightTab('create')}
-        >
-          <UserPlus className="h-3.5 w-3.5 sm:mr-1.5" /><span className="hidden sm:inline">Create Character</span>
         </Button>
         <Button variant="ghost" size="sm" aria-label="Open project" className="h-7 shrink-0 px-2 text-xs text-zinc-300 sm:px-3" onClick={() => setOpenOpen(true)}>
           <FolderOpen className="h-3.5 w-3.5 sm:mr-1.5" /><span className="hidden sm:inline">Open</span>

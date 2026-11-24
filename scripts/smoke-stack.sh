@@ -8,7 +8,7 @@
 #   dev server (temp SQLite DB) → seed "Sample: Farmer"
 #     → MCP server (temp data dir, loopback :3030)
 #       → xvfb Electron smokes: shell · dev canvas · file round-trip ·
-#         export round-trip · MCP bridge + full MCP E2E · settings/credential
+#         export round-trip · MCP bridge + full MCP E2E · settings file
 #
 # Isolation rules (v3.1 Task 15a §8):
 #   • CI mode (default) uses a throwaway SQLite DB + throwaway MCP data dir;
@@ -151,8 +151,7 @@ electron_smoke file    PF_SMOKE_FILE=1
 electron_smoke export  PF_SMOKE_EXPORT=1
 electron_smoke mcp     PF_SMOKE_MCP=1 PF_SMOKE_MCP_E2E=1
 electron_smoke settings PF_SMOKE_SETTINGS=1
-electron_smoke ai      PF_SMOKE_AI=1 PF_AI_MOCK=1
 
 # --------------------------------------------------------------- [6] summary
 echo "== [6/6] smoke stack summary =="
-echo "SMOKE-STACK-OK: shell · dev · file · export · mcp(+E2E) · settings · ai(mock) all passed"
+echo "SMOKE-STACK-OK: shell · dev · file · export · mcp(+E2E) · settings all passed"

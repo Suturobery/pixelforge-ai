@@ -137,6 +137,52 @@ describe('pixelforgeproj format', () => {
     expect(tr3.clip.frames.length).toBe(2);
   });
 
+  test('layer paint lock and blend mode survive the round-trip', async () => {
+    const project = createProject({ name: 'locks', width: 16, height: 16 });
+    const clip = project.clips[0];
+    clip.layers[0].locked = true;
+    clip.layers[0].blend = 'multiply';
+    const glow = createLayer('glow');
+    glow.blend = 'screen';
+    clip.layers.push(glow);
+    for (const frame of clip.frames) frame.cels[glow.id] = createCel(16, 16);
+    project.trash.push({
+      id: 'tr-locked',
+      label: 'Delete locked layer',
+      deletedAt: 1_700_000_003_000,
+      item: {
+        kind: 'layer',
+        clipId: clip.id,
+        layerIndex: 0,
+        layer: { id: 'ly-lock', name: 'locked-old', visible: true, opacity: 1, linked: false, locked: true, blend: 'overlay' },
+        celsByFrameId: { [clip.frames[0].id]: { buffer: new Uint8ClampedArray(16 * 16 * 4), linked: false } },
+      },
+    });
+
+    const { projectJson, celPngs } = await serializeProjectV2(project);
+    const serializedLayer = projectJson.clips[0].layers.find((l) => l.name === 'Layer 1')!;
+    expect(serializedLayer.locked).toBe(true);
+    expect(serializedLayer.blend).toBe('multiply');
+    expect(validateSerializedProjectV2(projectJson)).toEqual([]);
+
+    const restored = await projectFromSerialized(projectJson, (src) => celPngs.get(src));
+    const restoredClip = restored.clips[0];
+    const lockedLayer = restoredClip.layers.find((l) => l.name === 'Layer 1')!;
+    expect(lockedLayer.locked).toBe(true);
+    expect(lockedLayer.blend).toBe('multiply');
+    const glowRestored = restoredClip.layers.find((l) => l.name === 'glow')!;
+    expect(glowRestored.locked).toBeUndefined();
+    expect(glowRestored.blend).toBe('screen');
+    const trashLayer = (restored.trash[0].item as { kind: 'layer'; layer: { locked?: boolean; blend?: string } }).layer;
+    expect(trashLayer.locked).toBe(true);
+    expect(trashLayer.blend).toBe('overlay');
+
+    // Unknown blend values are rejected by schema validation.
+    const broken = structuredClone(projectJson) as typeof projectJson;
+    (broken.clips[0].layers[0].blend as string) = 'luminosity';
+    expect(validateSerializedProjectV2(broken).some((i) => i.path.includes('blend'))).toBe(true);
+  });
+
   test('serialize emits shared path for linked layers and per-frame paths otherwise', async () => {
     const project = buildRichProject();
     const { projectJson } = await serializeProjectV2(project);

@@ -71,6 +71,8 @@ async function serializeProjectV2(project) {
         visible: l.visible,
         opacity: l.opacity,
         linked: l.linked,
+        ...(l.locked !== undefined ? { locked: l.locked } : {}),
+        ...(l.blend !== undefined ? { blend: l.blend } : {}),
     });
     const serializeClip = async (clip, pathFor) => ({
         id: clip.id,

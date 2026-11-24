@@ -53,6 +53,19 @@ function freshStore(claimTimeoutMs = 600_000): McpStore {
   return new McpStore({ dataDir: dir, claimTimeoutMs, auditFile: join(dir, 'ops.jsonl') });
 }
 
+test('a targeted task waits for a known matching project before claim, progress and finish', () => {
+  const store = freshStore();
+  const project = { key: 'file:A', name: 'A' };
+  const [task] = store.brainPush([{ title: 'Draw a key', detail: 'Use the palette', targetProject: project }]);
+  expect(store.brainClaim(task!.id, 'agent', 'client', null, null).blockedBy?.id).toBe(task!.id);
+  expect(store.brainClaim(task!.id, 'agent', 'client', null, project).task?.id).toBe(task!.id);
+  expect(store.brainProgress(task!.id, 'client', 'Drawing', null).blockedBy?.id).toBe(task!.id);
+  expect(store.brainFinish(task!.id, 'client', true, 'Done', null, null).blockedBy?.id).toBe(task!.id);
+  expect(store.brainList()[0]?.status).toBe('pending');
+  expect(store.brainClaim(task!.id, 'agent', 'client', null, project).task?.id).toBe(task!.id);
+  expect(store.brainFinish(task!.id, 'client', true, 'Done', null, project).task?.status).toBe('done');
+});
+
 describe('task board reliability (P0-3)', () => {
   test('push → list → claim (exclusive) → complete', () => {
     const store = freshStore();

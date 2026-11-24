@@ -337,5 +337,18 @@ function analyzeSpriteQuality(input) {
             message: `Stray cleanup removed ${stats.sourceStraysRemoved} source px in small isolated groups — check no small intentional details were lost.`,
         });
     }
+    // 11. detected true sprite is too detailed for the target canvas
+    if (stats.grid?.detected && stats.grid.oversized) {
+        const g = stats.grid;
+        const stepAvg = Math.round(((g.stepX + g.stepY) / 2) * 10) / 10;
+        const maxTrue = Math.max(g.trueW, g.trueH);
+        const suggested = maxTrue <= 32 ? 32 : maxTrue <= 48 ? 48 : 64;
+        findings.push({
+            code: 'grid-oversized',
+            severity: 'warning',
+            message: `Detected sprite is ${g.trueW}×${g.trueH} art pixels (~${stepAvg}px blocks), which is too detailed for a ${w}×${h} canvas${g.scaleMode === 'integer-down' ? ` (downscaled ${g.scaleFactor}×)` : ''}.`,
+            hint: `Use a ${suggested}×${suggested} canvas to keep every pixel intact, or regenerate with simpler, chunkier detail.`,
+        });
+    }
     return findings;
 }

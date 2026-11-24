@@ -59,11 +59,6 @@ import {
   buildAssetBrief,
   type AssetBriefFields,
 } from '@/lib/pixelforge/asset-brief'
-import {
-  describeKit,
-  kitSelectionFromPreset,
-  matchKitCharacter,
-} from '@pixelforge/core'
 
 const QUICK_PROMPT_EXAMPLES = [
   'make knigth wlak no bg',
@@ -86,7 +81,6 @@ export function SecondBrain() {
   const activeClipId = useEditor((s) => s.activeClipId)
   const activeLayerId = useEditor((s) => s.activeLayerId)
   const activeFrameIndex = useEditor((s) => s.activeFrameIndex)
-  const setCreatorDraft = useEditor((s) => s.setCreatorDraft)
   const setReferenceDraft = useEditor((s) => s.setReferenceDraft)
   const { toast } = useToast()
   const requestRightTab = useEditor((s) => s.requestRightTab)
@@ -213,7 +207,7 @@ export function SecondBrain() {
     try {
       const res = await mcpCtrl<{ tasks: unknown[] }>({
         kind: 'brain-push',
-        tasks: [{ title: `Asset brief: ${brief.assetType || 'asset'}`, detail: briefText }],
+        tasks: [{ title: `Asset brief: ${brief.assetType || 'asset'}`, detail: briefText, targetProject: currentProjectIdentity() }],
       })
       if (res.ok) {
         setBriefStatus('sent')
@@ -312,17 +306,6 @@ export function SecondBrain() {
   const effectiveEnhanced = localInterpretation?.enhancedPrompt ?? ''
   const effectiveCorrections = localInterpretation?.corrections ?? []
   const effectiveGuidance = localInterpretation?.pixelArtGuidance ?? []
-
-  // local character kit — a prompt that names a bundled character can open the
-  // deterministic creator directly (no paired agent, no network)
-  const kitMatch = useMemo(() => matchKitCharacter(rawPrompt), [rawPrompt])
-  const openInCreator = (presetId?: string) => {
-    if (presetId) {
-      const sel = kitSelectionFromPreset(presetId)
-      if (sel) setCreatorDraft(sel)
-    }
-    requestRightTab('create')
-  }
 
   /** Hand a custom sprite brief to the Reference panel: prefill the brief and
    *  guide to the approved reference when the project has none. */
@@ -471,37 +454,19 @@ export function SecondBrain() {
                 style); anything queued for an IDE agent stays separate. */}
             {localInterpretation.detectedIntent === 'sprite-generation' && (
               <div className="rounded border border-teal-800/60 bg-teal-950/30 p-1.5">
-                {kitMatch.kind === 'match' ? (
-                  <>
-                    <p className="text-[9px] leading-tight text-teal-200">
-                      <strong className="text-teal-300">{kitMatch.label}</strong> is in the bundled character kit — build it locally
-                      (no paired agent, fully offline).
-                    </p>
-                    <Button
-                      size="sm"
-                      className="mt-1 h-6 w-full font-mono text-[10px]"
-                      onClick={() => openInCreator(kitMatch.presetId)}
-                      title="Open the Create Character panel with this character pre-selected"
-                    >
-                      <WandSparkles className="mr-1 h-3 w-3" /> Open in Create Character
-                    </Button>
-                  </>
-                ) : (
-                  <>
-                    <p className="text-[9px] leading-tight text-teal-200">
-                      Custom sprite brief — open the <strong className="text-teal-300">Reference panel</strong> to work from the
-                      project's approved reference and style (offline import or, later, a provider).
-                    </p>
-                    <Button
-                      size="sm"
-                      className="mt-1 h-6 w-full font-mono text-[10px]"
-                      onClick={() => openInReference(rawPrompt)}
-                      title="Open the Reference panel with this brief prefilled; uses the project's approved reference and style"
-                    >
-                      <WandSparkles className="mr-1 h-3 w-3" /> Open in Reference
-                    </Button>
-                  </>
-                )}
+                <p className="text-[9px] leading-tight text-teal-200">
+                  Sprite brief ready — queue it for your external IDE agent below, or open the{' '}
+                  <strong className="text-teal-300">Reference panel</strong> to import and clean an external PNG against the
+                  project's approved style.
+                </p>
+                <Button
+                  size="sm"
+                  className="mt-1 h-6 w-full font-mono text-[10px]"
+                  onClick={() => openInReference(rawPrompt)}
+                  title="Open the Reference panel with this brief prefilled to import and grid-snap an external PNG"
+                >
+                  <WandSparkles className="mr-1 h-3 w-3" /> Open in Reference Import
+                </Button>
               </div>
             )}
 

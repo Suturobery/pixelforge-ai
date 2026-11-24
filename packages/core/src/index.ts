@@ -328,7 +328,9 @@ export {
   applyAlphaThreshold,
   cleanupOutlineFringe,
   cleanupOutlineFringeWithColor,
+  computeEdgeProfiles,
   despeckleIsolated,
+  detectPixelGrid,
   dominantColorDownscale,
   fitBufferToCanvas,
   floodRemoveBackground,
@@ -342,44 +344,27 @@ export {
   removeStrayComponents,
   sampleBorderColor,
   sampleBorderColorMedian,
+  scaleSpriteWholeNumber,
+  snapToDetectedGrid,
   trimContentBBox,
   DEFAULT_NORMALIZE2_OPTIONS,
 } from './ai/normalize-v2';
-export type { Normalize2Options, Normalize2Result, Normalize2Stats, PaletteMode } from './ai/normalize-v2';
+export type {
+  DetectedGrid,
+  GridScaleMode,
+  GridSnapStats,
+  Normalize2Options,
+  Normalize2Result,
+  Normalize2Stats,
+  PaletteMode,
+  SnappedSprite,
+  WholeNumberScaleResult,
+} from './ai/normalize-v2';
 export {
   // output quality report (Task 9 quality follow-up) — non-destructive checks
   analyzeSpriteQuality,
 } from './ai/quality';
 export type { QualityFinding } from './ai/quality';
-export {
-  // generation contract
-  buildFullPrompt,
-  cacheKeyFor,
-  CapabilityError,
-  capabilitiesFor,
-  estimateCostUsd,
-  generationTaskStyleTags,
-  GENERATION_TASK_SKILLS,
-  isGenerationTaskSkill,
-  parseOpenAiImagesResponse,
-  planOpenAiImagesRequest,
-  PRICE_TABLE,
-  priceBasisFor,
-  PROVIDER_CAPABILITIES,
-  RECIPE_PRESETS,
-  requestSizeFor,
-  SIZE_PRESETS,
-  ZAI_SUPPORTED_SIZES,
-} from './ai/gen-contract';
-export type {
-  GenRecipe,
-  GenerationTaskSkillId,
-  OpenAiImagesPlan,
-  PriceEntry,
-  ProviderCapabilities,
-  ProviderKind as AIProviderKind,
-  RecipePreset,
-} from './ai/gen-contract';
 
 // ---------------------------------------------------------------------------
 // motion presets (Task 10, v3.1 §4.1/§4.1.1): deterministic composer, QA,
@@ -414,29 +399,6 @@ export {
   resolveParams,
 } from './motion/presets';
 export { planMotion, roleKey, type PlanMotionOptions } from './motion/composer';
-export {
-  CHARACTER_KIT_VERSION,
-  KIT_ATTACHMENTS,
-  KIT_CANVAS,
-  KIT_DEFAULT_SELECTION,
-  KIT_FOOT_BASELINE_Y,
-  KIT_HEADS,
-  KIT_ITEMS,
-  KIT_LAYERS,
-  KIT_OUTFITS,
-  KIT_PRESETS,
-  KIT_ROLE_HEX,
-  composeKitBuffers,
-  composeKitPreviewRgba,
-  describeKit,
-  kitSelectionFromPreset,
-  kitSelectionLabel,
-  matchKitCharacter,
-  snapToPalette,
-  validateKitSelection,
-} from './character/kit';
-export { insertCharacter, type CharacterInsertOptions, type CharacterInsertResult, type KitLayerSlot } from './character/insert';
-export type { KitBriefMatch, KitBuffers, KitPartDef, KitPreset, KitSelection } from './character/kit';
 export {
   analyzeClipMotion,
   analyzeMotionPlan,

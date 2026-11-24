@@ -55,6 +55,17 @@ import {
   rgbToOklab,
   type Oklab,
 } from './oklab';
+import {
+  computeEdgeProfiles,
+  detectPixelGrid,
+  scaleSpriteWholeNumber,
+  snapToDetectedGrid,
+  type DetectedGrid,
+  type GridScaleMode,
+  type GridSnapStats,
+  type SnappedSprite,
+  type WholeNumberScaleResult,
+} from './grid-detect';
 
 // ------------------------------------------------------------------ options
 
@@ -98,6 +109,13 @@ export interface Normalize2Options {
    * instead of silently erasing it.
    */
   enclosedResidueCleanup?: boolean;
+  /**
+   * Pixel-grid detection and snapping (default 'auto'): detects the AI's real
+   * fake-pixel block size + phase offset on the trimmed sprite, extracts one
+   * denoised color per block, and scales to the target canvas by whole numbers
+   * only. Set 'off' to use legacy dominant-color downscaling directly.
+   */
+  gridSnap?: 'auto' | 'off';
 }
 
 export const DEFAULT_NORMALIZE2_OPTIONS: Normalize2Options = {
@@ -114,6 +132,7 @@ export const DEFAULT_NORMALIZE2_OPTIONS: Normalize2Options = {
   alphaThreshold: 128,
   strayCleanup: 'off',
   enclosedResidueCleanup: false,
+  gridSnap: 'auto',
 };
 
 export interface Normalize2Stats {
@@ -138,6 +157,8 @@ export interface Normalize2Stats {
   residueRemoved: number;
   /** the background color the pipeline matched against, as #rrggbb */
   bgColor: string;
+  /** pixel-grid detection & whole-number scaling summary */
+  grid: GridSnapStats;
 }
 
 export interface Normalize2Result {
@@ -913,8 +934,70 @@ export function normalizeV2(
     trimmed.set(work.subarray(srcRow, srcRow + bbox.w * 4), y * bbox.w * 4);
   }
 
-  // 4. dominant-color downscale into the exact target (contain: aspect-safe)
-  let out = downscaleIntoTarget(trimmed, bbox.w, bbox.h, opts.targetW, opts.targetH, fit, paddingPct);
+  // 4. pixel-grid detection & snapping (when enabled) → whole-number scale,
+  //    or legacy dominant-color downscale when no faux-pixel grid is present
+  const gridSnap = opts.gridSnap ?? 'auto';
+  const detectedGrid = gridSnap === 'auto' ? detectPixelGrid(trimmed, bbox.w, bbox.h) : null;
+  let out: Uint8ClampedArray;
+  let gridStats: GridSnapStats;
+
+  if (detectedGrid && detectedGrid.detected) {
+    const snapped = snapToDetectedGrid(trimmed, bbox.w, bbox.h, detectedGrid);
+    if (fit === 'fill') {
+      out = dominantColorDownscale(snapped.buffer, snapped.width, snapped.height, opts.targetW, opts.targetH);
+      gridStats = {
+        detected: true,
+        stepX: detectedGrid.stepX,
+        stepY: detectedGrid.stepY,
+        offsetX: detectedGrid.offsetX,
+        offsetY: detectedGrid.offsetY,
+        trueW: snapped.width,
+        trueH: snapped.height,
+        confidence: detectedGrid.confidence,
+        oversized: snapped.width > opts.targetW || snapped.height > opts.targetH,
+        scaleMode: 'fill',
+        scaleFactor: 1,
+      };
+    } else {
+      const scaled = scaleSpriteWholeNumber(
+        snapped.buffer,
+        snapped.width,
+        snapped.height,
+        opts.targetW,
+        opts.targetH,
+        paddingPct,
+      );
+      out = scaled.buffer;
+      gridStats = {
+        detected: true,
+        stepX: detectedGrid.stepX,
+        stepY: detectedGrid.stepY,
+        offsetX: detectedGrid.offsetX,
+        offsetY: detectedGrid.offsetY,
+        trueW: snapped.width,
+        trueH: snapped.height,
+        confidence: detectedGrid.confidence,
+        oversized: scaled.oversized,
+        scaleMode: scaled.scaleMode,
+        scaleFactor: scaled.scaleFactor,
+      };
+    }
+  } else {
+    out = downscaleIntoTarget(trimmed, bbox.w, bbox.h, opts.targetW, opts.targetH, fit, paddingPct);
+    gridStats = {
+      detected: false,
+      stepX: 1,
+      stepY: 1,
+      offsetX: 0,
+      offsetY: 0,
+      trueW: bbox.w,
+      trueH: bbox.h,
+      confidence: detectedGrid?.confidence ?? 0,
+      oversized: false,
+      scaleMode: 'none',
+      scaleFactor: 1,
+    };
+  }
 
   // 5. binary alpha (configurable threshold) + despeckle
   applyAlphaThreshold(out, alphaThreshold);
@@ -970,6 +1053,7 @@ export function normalizeV2(
       sourceStraysRemoved: sourceStrays,
       residueRemoved,
       bgColor: `#${hex(Math.round(borderColor[0]))}${hex(Math.round(borderColor[1]))}${hex(Math.round(borderColor[2]))}`,
+      grid: gridStats,
     },
   };
 }
@@ -1007,8 +1091,21 @@ export function nearestNeighborContain(
   return out;
 }
 
-/** OKLab helper re-export for tests. */
+/** OKLab and pixel-grid helper re-exports. */
 export type { Oklab };
+export {
+  computeEdgeProfiles,
+  detectPixelGrid,
+  scaleSpriteWholeNumber,
+  snapToDetectedGrid,
+};
+export type {
+  DetectedGrid,
+  GridScaleMode,
+  GridSnapStats,
+  SnappedSprite,
+  WholeNumberScaleResult,
+};
 
 // ------------------------------------------------------------- import fit
 

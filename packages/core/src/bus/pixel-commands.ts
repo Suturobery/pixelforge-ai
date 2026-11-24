@@ -41,7 +41,7 @@ export interface PixelPoint {
 }
 
 export type PixelOp =
-  | ({ op: 'stamp' } & PixelPoint & { size?: number; mirrorX?: boolean })
+  | ({ op: 'stamp' } & PixelPoint & { size?: number; mirrorX?: boolean; color?: RGBA })
   | { op: 'line'; from: PixelPoint; to: PixelPoint; size?: number; mirrorX?: boolean }
   | {
       op: 'rect';
@@ -83,7 +83,7 @@ export interface ApplyPixelOpsPayload {
   clipId: string;
   frameId: string;
   layerId: string;
-  /** Required for stamp/line/rect/fill; ignored otherwise. */
+  /** Default stamp color. Required for line, rect, ellipse and fill. */
   color?: RGBA;
   ops: PixelOp[];
 }
@@ -106,6 +106,10 @@ function validateOp(op: PixelOp, hasColor: boolean, ctx: CommandContext, i: numb
   switch (op.op) {
     case 'stamp':
     case 'fill':
+      if (op.op === 'stamp' && op.color !== undefined) {
+        getRgba({ color: op.color }, 'color', what);
+        hasColor = true;
+      }
       getInt(op as unknown as Record<string, unknown>, 'x', what);
       getInt(op as unknown as Record<string, unknown>, 'y', what);
       getOptionalInt(op as unknown as Record<string, unknown>, 'size', what, 1, 8);
@@ -213,7 +217,7 @@ export const applyPixelOpsCommand: CommandDefinition<ApplyPixelOpsPayload> = {
       const c = payload.color as RGBA;
       switch (op.op) {
         case 'stamp':
-          stampBrush(base, width, height, op.x, op.y, op.size ?? 1, c, op.mirrorX ?? false);
+          stampBrush(base, width, height, op.x, op.y, op.size ?? 1, op.color ?? c, op.mirrorX ?? false);
           break;
         case 'line':
           drawLinePixels(base, width, height, op.from.x, op.from.y, op.to.x, op.to.y, op.size ?? 1, c, op.mirrorX ?? false);

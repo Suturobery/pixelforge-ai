@@ -131,6 +131,7 @@ export class CommandBus {
    */
   setProject(project: Project, opts: { dirty?: boolean } = {}): void {
     this.stroke = null; // abort silently — the old document is gone
+    this.txStack.length = 0; // pending transactions belong to the old document
     this.project = project;
     this.engine.clear();
     this.dirty = opts.dirty ?? false;
@@ -232,25 +233,28 @@ export class CommandBus {
     try {
       result = fn();
     } catch (err) {
-      this.txStack.pop();
-      this.rollbackTx(tx, label, origin);
+      if (this.removeTx(tx)) this.rollbackTx(tx, label, origin);
       throw err;
     }
     if (isThenable(result)) {
       return (result as unknown as Promise<T>).then(
         (value) => {
-          this.txStack.pop();
-          return this.commitTx(tx, label, origin, value);
+          return this.removeTx(tx) ? this.commitTx(tx, label, origin, value) : value;
         },
         (err) => {
-          this.txStack.pop();
-          this.rollbackTx(tx, label, origin);
+          if (this.removeTx(tx)) this.rollbackTx(tx, label, origin);
           throw err;
         },
       );
     }
-    this.txStack.pop();
-    return this.commitTx(tx, label, origin, result);
+    return this.removeTx(tx) ? this.commitTx(tx, label, origin, result) : result;
+  }
+
+  private removeTx(tx: TxFrame): boolean {
+    const index = this.txStack.lastIndexOf(tx);
+    if (index < 0) return false;
+    this.txStack.splice(index, 1);
+    return true;
   }
 
   private commitTx<T>(tx: TxFrame, label: string, origin: CommandOrigin, value: T): T {

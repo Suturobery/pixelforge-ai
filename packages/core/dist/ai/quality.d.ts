@@ -21,6 +21,7 @@
  *   • anisotropic stretch when fit='fill' on a mismatched aspect
  *   • background removal disabled (matte kept)
  */
+import type { GridSnapStats } from './grid-detect';
 export interface QualityFinding {
     /** stable machine id, e.g. 'bg-residue' */
     code: string;
@@ -52,6 +53,7 @@ export interface AnalyzeSpriteQualityInput {
         sourceStraysRemoved: number;
         residueRemoved: number;
         bgColor: string;
+        grid?: GridSnapStats;
     };
     /** the options the result was produced with (fit/removeBg/maxColors...) */
     opts: {

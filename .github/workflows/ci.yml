@@ -215,7 +215,7 @@ jobs:
         working-directory: apps/desktop
         run: npm run build
 
-      - name: Desktop settings/security + AI job/adapter suites
+      - name: Desktop settings/security suites
         working-directory: apps/desktop
         run: bun test tests/
 
@@ -225,11 +225,7 @@ jobs:
       # Full product stack in isolation: temp SQLite DB, seeded sample, MCP
       # server on a temp data dir, then xvfb Electron smokes — shell · dev
       # canvas · file round-trip · export round-trip · MCP bridge + live MCP
-      # E2E · settings/credential vault. Exit code of the script is the gate.
-      # Credential restart-persistence (PF_SMOKE_KEY_SEED/VERIFY) is NOT run:
-      # headless Linux has no OS keyring, so persistence would take the
-      # session-only path — real DPAPI/Keychain persistence stays a manual
-      # desktop QA item (documented, not silently skipped).
+      # E2E · settings file. Exit code of the script is the gate.
       - name: Full-stack smokes + live MCP E2E
         run: bash scripts/smoke-stack.sh
 

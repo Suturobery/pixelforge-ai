@@ -20,8 +20,9 @@ import { AGENT_FETCH_HEADERS } from './agent-headers'
 import { useAppSettings } from './settings'
 import { getBus, useEditor } from './store'
 import { notifyInBackground } from './desktop-bridge'
-import { executeMcpTool, computeStateHash } from './mcp-tools'
-import { composeFrameRgba } from '@pixelforge/core'
+import { executeMcpTool, computeStateHash, currentProjectIdentity, type ToolReview } from './mcp-tools'
+
+export { currentProjectIdentity } from './mcp-tools'
 
 export const MCP_BRIDGE_VERSION = 1
 
@@ -63,25 +64,10 @@ export interface RemoteEditRecord {
   clientName: string
   ok: boolean
   at: string
-  /** before/after snapshots for pixel-affecting agent edits (Review Result). */
-  review?: {
-    clipId: string
-    clipName: string
-    frameId: string
-    frameNumber: number
-    layerId: string
-    layerName: string
-    before: Uint8ClampedArray | null
-    after: Uint8ClampedArray
-    width: number
-    height: number
-  } | null
+  review: ToolReview | null
 }
 
 const remoteEdits: RemoteEditRecord[] = []
-
-/** Pixel tools whose relayed calls get Review Result snapshots. */
-const REMOTE_PIXEL_TOOLS = new Set(['set_pixels', 'fill_rect', 'replace_color', 'flip_frame', 'rotate_frame', 'shift_frame', 'resize_canvas'])
 
 /** Document-mutating tool calls relayed to CONNECTED MCP agents (e.g. ZCode) —
  *  the Agent panel labels these 'performed by: connected agent'. */
@@ -104,39 +90,6 @@ export function subscribeBridge(fn: Listener): () => void {
 }
 
 // ---------------------------------------------------------------------------
-// active project identity (durable where possible; session-stable otherwise)
-// ---------------------------------------------------------------------------
-
-let unsavedDocCounter = 0
-
-/**
- * Durable-ish identity for the OPEN document, used to keep task-board work in
- * its queued project. Saved projects key on the DB id or desktop file path;
- * unsaved ones key on a session-stable name so two different unsaved projects
- * never collide unless they share a name (the Brain card shows the name).
- */
-function getEditorState() {
-  return useEditor.getState()
-}
-
-export function currentProjectIdentity(): { key: string; name: string } {
-  const st = getEditorState()
-  const project = st.project
-  if (st.projectId) return { key: `db:${st.projectId}`, name: project.name }
-  if (st.filePath) return { key: `file:${st.filePath}`, name: project.name }
-  return { key: `unsaved:${project.name}:${unsavedDocCounter}`, name: project.name }
-}
-
-/**
- * Called when the editor replaces the active document (new/load): bump the
- * unsaved counter so a SECOND unsaved project in the same session never
- * inherits the previous one's identity.
- */
-export function noteDocumentReplaced(): void {
-  unsavedDocCounter++
-}
-
-// ---------------------------------------------------------------------------
 // connection management
 // ---------------------------------------------------------------------------
 
@@ -147,7 +100,9 @@ let rejectCount = 0
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let pingTimer: ReturnType<typeof setInterval> | null = null
 let eventThrottleTimer: ReturnType<typeof setTimeout> | null = null
+let unsubIdentity: (() => void) | null = null
 let lastSentHash: string | null = null
+let lastSentProjectKey: string | null = null
 let ctrlSeq = 0
 const ctrlWaiters = new Map<string, { resolve: (v: { ok: boolean; data?: unknown; error?: { code: string; message: string } }) => void; timer: ReturnType<typeof setTimeout> }>()
 let started = false
@@ -373,6 +328,7 @@ async function handleMessage(raw: string): Promise<void> {
       // project identity even if the state hash is unchanged, so claim
       // gating never sits on a null target after a reconnect
       lastSentHash = null
+      lastSentProjectKey = null
       pushProjectChanged()
       return
     }
@@ -387,45 +343,14 @@ async function handleMessage(raw: string): Promise<void> {
       const tool = typeof msg.tool === 'string' ? msg.tool : ''
       if (!id || !tool) return
       const clientName = typeof msg.clientName === 'string' ? msg.clientName : 'unknown'
-      // snapshot the target frame before/after so the Agent panel's Review
-      // Result can show exactly what the connected agent changed
-      let reviewBefore: { clipId: string; clipName: string; frameId: string; frameNumber: number; layerId: string; layerName: string; before: Uint8ClampedArray | null } | null = null
-      if (REMOTE_PIXEL_TOOLS.has(tool)) {
-        const st = useEditor.getState()
-        const clip = st.project.clips.find((c) => c.id === st.activeClipId) ?? st.project.clips[0]
-        const frame = clip?.frames[st.activeFrameIndex] ?? clip?.frames[0]
-        if (clip && frame) {
-          const layer = clip.layers.find((l) => l.id === st.activeLayerId) ?? clip.layers[clip.layers.length - 1] ?? clip.layers[0]
-          reviewBefore = {
-            clipId: clip.id,
-            clipName: clip.name,
-            frameId: frame.id,
-            frameNumber: st.activeFrameIndex + 1,
-            layerId: layer?.id ?? '',
-            layerName: layer?.name ?? '',
-            before: composeFrameRgba(st.project, clip, frame),
-          }
-        }
-      }
+      let review: ToolReview | null = null
       const result = await executeMcpTool(tool, msg.args, {
         clientId: typeof msg.clientId === 'string' ? msg.clientId : 'unknown',
         clientName,
         tier: msg.tier === 'L2' ? 'L2' : msg.tier === 'L3' ? 'L3' : msg.tier === 'L1' ? 'L1' : 'L0',
+        expectedProjectKey: typeof msg.expectedProjectKey === 'string' ? msg.expectedProjectKey : undefined,
+        onReview: (snapshot) => { review = snapshot },
       })
-      let review: RemoteEditRecord['review'] = null
-      if (reviewBefore && result.ok) {
-        const st = useEditor.getState()
-        const clip = st.project.clips.find((c) => c.id === reviewBefore.clipId)
-        const frame = clip?.frames.find((f) => f.id === reviewBefore.frameId)
-        if (clip && frame) {
-          review = {
-            ...reviewBefore,
-            after: composeFrameRgba(st.project, clip, frame),
-            width: st.project.width,
-            height: st.project.height,
-          }
-        }
-      }
       recordRemoteEdit(tool, clientName, result.ok, review)
       setState({}) // nudge subscribers (Agent panel) to re-read remoteEdits
       if (ws && ws.readyState === WebSocket.OPEN) {
@@ -458,11 +383,14 @@ function pushProjectChanged(): void {
     eventThrottleTimer = null
     if (!ws || ws.readyState !== WebSocket.OPEN) return
     try {
-      const hash = await computeStateHash()
-      if (hash === lastSentHash) return
-      lastSentHash = hash
-      const project = getBus().getProject()
+      const socket = ws
       const identity = currentProjectIdentity()
+      const hash = await computeStateHash()
+      if (socket !== ws || socket.readyState !== WebSocket.OPEN || identity.key !== currentProjectIdentity().key) return
+      if (hash === lastSentHash && identity.key === lastSentProjectKey) return
+      lastSentHash = hash
+      lastSentProjectKey = identity.key
+      const project = getBus().getProject()
       ws.send(
         JSON.stringify({
           type: 'event',
@@ -540,10 +468,10 @@ export function initMcpBridge(): void {
   // document events (bus changes only — pointer strokes bump renderTick, not
   // the bus; playhead moves never touch the bus)
   unsubBus = getBus().onChange(() => pushProjectChanged())
-  // document REPLACEMENT (new/load): bump the unsaved identity counter so a
-  // second unsaved project in the session never inherits the first one's key
-  useEditor.subscribe((s, prev) => {
-    if (s.loadEpoch !== prev.loadEpoch) noteDocumentReplaced()
+  unsubIdentity = useEditor.subscribe((s, prev) => {
+    if (s.loadEpoch !== prev.loadEpoch || s.filePath !== prev.filePath || s.projectId !== prev.projectId) {
+      pushProjectChanged()
+    }
   })
   // dev only: a hot-reload re-evaluates this module (started resets to false)
   // while the OLD socket still holds the server's single editor slot — dispose
@@ -587,6 +515,8 @@ export function shutdownMcpBridgeForTests(): void {
   }
   unsubSettings?.()
   unsubBus?.()
+  unsubIdentity?.()
+  unsubIdentity = null
   unsubSettings = null
   unsubBus = null
   try {

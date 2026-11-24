@@ -34,7 +34,7 @@ import { isDesktop } from '@/lib/pixelforge/desktop-bridge'
 import { useSaveProject } from '@/components/pixelforge/use-save'
 import { useKeyboardShortcuts } from '@/components/pixelforge/use-keyboard'
 import { useIsMobile } from '@/components/pixelforge/use-is-mobile'
-import { Layers, Sparkles, Brain, Bot, PersonStanding, UserPlus, Images, PanelRightClose, Maximize2, Minimize2 } from 'lucide-react'
+import { Layers, Brain, Bot, PersonStanding, Images, PanelRightClose, Maximize2, Minimize2 } from 'lucide-react'
 import { Header } from '@/components/pixelforge/header'
 import { ToolRail } from '@/components/pixelforge/tool-rail'
 import { CanvasStage } from '@/components/pixelforge/canvas-stage'
@@ -44,7 +44,6 @@ import { OnboardingTour } from '@/components/pixelforge/onboarding-tour'
 import { SecondBrain } from '@/components/pixelforge/second-brain'
 import { AgentPanel } from '@/components/pixelforge/agent-panel'
 import { MotionPanel } from '@/components/pixelforge/motion-panel'
-import { CharacterCreator } from '@/components/pixelforge/character-creator'
 import { ReferenceCreator } from '@/components/pixelforge/reference-creator'
 import { Footer } from '@/components/pixelforge/footer'
 import { cn } from '@/lib/utils'
@@ -52,11 +51,10 @@ import { useToast } from '@/hooks/use-toast'
 
 const RIGHT_TABS: { id: RightTab; label: string; icon: React.ReactNode; tone: 'ember' | 'frost' }[] = [
   { id: 'layers', label: 'Layers', tone: 'ember', icon: <Layers className="h-3.5 w-3.5" aria-hidden /> },
-  { id: 'create', label: 'Create', tone: 'ember', icon: <UserPlus className="h-3.5 w-3.5" aria-hidden /> },
-  { id: 'reference', label: 'Reference', tone: 'ember', icon: <Images className="h-3.5 w-3.5" aria-hidden /> },
+  { id: 'agent', label: 'Agent', tone: 'frost', icon: <Bot className="h-3.5 w-3.5" aria-hidden /> },
   { id: 'brain', label: 'Brain', tone: 'frost', icon: <Brain className="h-3.5 w-3.5" aria-hidden /> },
   { id: 'motion', label: 'Motion', tone: 'frost', icon: <PersonStanding className="h-3.5 w-3.5" aria-hidden /> },
-  { id: 'agent', label: 'Agent', tone: 'frost', icon: <Bot className="h-3.5 w-3.5" aria-hidden /> },
+  { id: 'reference', label: 'Reference', tone: 'ember', icon: <Images className="h-3.5 w-3.5" aria-hidden /> },
 ]
 
 function RightDock({ mobile }: { mobile: boolean }) {
@@ -194,7 +192,6 @@ function RightDock({ mobile }: { mobile: boolean }) {
             panel. Inactive ones are hidden, not unmounted. */}
         {([
           ['layers', <LayersPanel key="layers" />],
-          ['create', <CharacterCreator key="create" />],
           ['reference', <ReferenceCreator key="reference" />],
           ['brain', <SecondBrain key="brain" />],
           ['motion', <MotionPanel key="motion" />],

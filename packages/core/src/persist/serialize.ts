@@ -16,7 +16,7 @@
  * (verified by persist-format tests), including trash and linked identity.
  */
 
-import type { Cel, CellBuffer, Clip, Frame, Project, TrashEntry, TrashItem } from '../types/document';
+import type { BlendMode, Cel, CellBuffer, Clip, Frame, Project, TrashEntry, TrashItem } from '../types/document';
 import type {
   SerializedCelV2,
   SerializedClipV2,
@@ -87,12 +87,14 @@ export async function serializeProjectV2(project: Project): Promise<SerializedWi
     return out;
   };
 
-  const serializeLayer = (l: { id: string; name: string; visible: boolean; opacity: number; linked: boolean }): SerializedLayerV2 => ({
+  const serializeLayer = (l: { id: string; name: string; visible: boolean; opacity: number; linked: boolean; locked?: boolean; blend?: BlendMode }): SerializedLayerV2 => ({
     id: l.id,
     name: l.name,
     visible: l.visible,
     opacity: l.opacity,
     linked: l.linked,
+    ...(l.locked !== undefined ? { locked: l.locked } : {}),
+    ...(l.blend !== undefined ? { blend: l.blend } : {}),
   });
 
   const serializeClip = async (
@@ -155,7 +157,7 @@ export async function serializeProjectV2(project: Project): Promise<SerializedWi
 
 interface SerializeCtx {
   serializeClip: (clip: Clip, pathFor: (clipId: string, frameId: string, layerId: string) => string) => Promise<SerializedClipV2>;
-  serializeLayer: (l: { id: string; name: string; visible: boolean; opacity: number; linked: boolean }) => SerializedLayerV2;
+  serializeLayer: (l: { id: string; name: string; visible: boolean; opacity: number; linked: boolean; locked?: boolean; blend?: BlendMode }) => SerializedLayerV2;
   put: (src: string, buffer: CellBuffer) => Promise<SerializedCelV2>;
 }
 

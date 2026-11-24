@@ -9,9 +9,6 @@
  *   • window layout (bounds, maximized) — restored on start
  *   • panel layout (floating palette / preview / view toolbar states)
  *   • MCP connection preferences (master switch, bridge auto-connect)
- *   • AI provider profiles — apiKeyEnc holds safeStorage ciphertext ONLY
- *     (C13). Plaintext keys are never written to this file, never returned
- *     over IPC, and never logged.
  *
  * Hard rules enforced here:
  *   • allowlist validation — unknown fields are dropped, ranges are clamped
@@ -22,6 +19,12 @@
  *   • forward (higher) versions are refused → defaults + a migration flag so
  *     an older app binary never writes garbage into a newer file.
  *
+ * Legacy note: settings files written by older builds may carry ai /
+ * aiProviders / activeProviderId / brainProviderId sections and vaulted API
+ * keys. Those fields are no longer part of the schema: they are dropped on
+ * the next write (the in-app AI provider stack was removed — agents reason
+ * in the artist's IDE over MCP, so the vault had no producer).
+ *
  * This module is PURE (no electron, no fs) so bun tests can exercise every
  * rule with a fake environment.
  */
@@ -29,24 +32,6 @@
 export const SETTINGS_VERSION = 1;
 
 // --------------------------------------------------------------------- types
-
-export type AIProviderKind = 'zai' | 'openai' | 'anthropic' | 'custom';
-
-/** Provider profile as stored in the settings file. `apiKeyEnc` = safeStorage ciphertext, base64. */
-export interface StoredProvider {
-  id: string;
-  label: string;
-  kind: AIProviderKind;
-  baseUrl: string;
-  model: string;
-  enabled: boolean;
-  /** base64 ciphertext (safeStorage.encryptString). NEVER plaintext. */
-  apiKeyEnc?: string;
-  /** ISO timestamp of when the key was stored. */
-  apiKeyStoredAt?: string;
-  /** True when the key lives in memory for this session only (encryption unavailable). */
-  apiKeySessionOnly?: boolean;
-}
 
 export interface AppPreferences {
   autosaveDelay: number;
@@ -87,20 +72,6 @@ export interface McpPrefs {
   bridgeAutoConnect: boolean;
 }
 
-/**
- * AI spend controls (Task 9, plan §3.1 "spend meter + monthly cap" and
- * §3.2 "monthly cap with hard stop"). Additive v1 section — defaults keep
- * old files valid and validation clamps every value.
- */
-export interface AiPrefs {
-  /** monthly cap in USD (hard stop before submit); 0 = unlimited */
-  monthlyLimitUsd: number;
-  /** warning threshold in USD (0 = no warning) */
-  warnUsd: number;
-  /** reuse cached results for identical recipes (hits cost nothing) */
-  cacheEnabled: boolean;
-}
-
 export interface SettingsFile {
   version: number;
   updatedAt: string;
@@ -108,11 +79,6 @@ export interface SettingsFile {
   window: WindowLayout | null;
   panels: Record<string, PanelLayout>;
   mcp: McpPrefs;
-  ai: AiPrefs;
-  aiProviders: StoredProvider[];
-  activeProviderId: string;
-  /** provider the Brain (reasoning) uses — mirrored from the renderer (shared-Brain phase 3) */
-  brainProviderId: string;
 }
 
 // ------------------------------------------------------------------ defaults
@@ -137,24 +103,6 @@ export const DEFAULT_MCP_PREFS: McpPrefs = {
   bridgeAutoConnect: true,
 };
 
-export const DEFAULT_AI_PREFS: AiPrefs = {
-  monthlyLimitUsd: 5,
-  warnUsd: 1,
-  cacheEnabled: true,
-};
-
-/** Provider profiles WITHOUT secrets (defaults match the renderer's list). */
-export function defaultProviders(): StoredProvider[] {
-  return [
-    { id: 'zai', label: 'Z.AI (built-in)', kind: 'zai', baseUrl: '', model: 'auto', enabled: true },
-    { id: 'openai', label: 'OpenAI · GPT', kind: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-image-1', enabled: false },
-    { id: 'gemini', label: 'Google · Gemini', kind: 'custom', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-3.1-flash-image', enabled: false },
-    { id: 'cloudflare', label: 'Cloudflare · Workers AI', kind: 'custom', baseUrl: '', model: '@cf/black-forest-labs/flux-1-schnell', enabled: false },
-    { id: 'groq', label: 'Groq (second brain)', kind: 'custom', baseUrl: 'https://api.groq.com/openai/v1', model: 'openai/gpt-oss-120b', enabled: false },
-    { id: 'custom', label: 'Custom / MCP endpoint', kind: 'custom', baseUrl: 'http://localhost:11434/v1', model: '', enabled: false },
-  ];
-}
-
 export function defaultSettingsFile(now = new Date()): SettingsFile {
   return {
     version: SETTINGS_VERSION,
@@ -163,22 +111,15 @@ export function defaultSettingsFile(now = new Date()): SettingsFile {
     window: null,
     panels: {},
     mcp: { ...DEFAULT_MCP_PREFS },
-    ai: { ...DEFAULT_AI_PREFS },
-    aiProviders: defaultProviders(),
-    activeProviderId: 'zai',
-    brainProviderId: 'groq',
   };
 }
 
 // --------------------------------------------------------------- validation
 
-const PROVIDER_KINDS: readonly AIProviderKind[] = ['zai', 'openai', 'anthropic', 'custom'];
 const FLOAT_SIZES: readonly AppPreferences['floatBtnSize'][] = ['sm', 'md', 'lg'];
 const UI_TEXT_SCALES: readonly AppPreferences['uiTextScale'][] = ['normal', 'large'];
 const PALETTE_ID_RE = /^[a-z0-9_-]{1,64}$/;
-const PROVIDER_ID_RE = /^[a-z0-9_-]{1,64}$/;
 const CSS_COLOR_RE = /^#[0-9a-fA-F]{3,8}$/;
-export const API_KEY_PROVIDER_RE = PROVIDER_ID_RE;
 
 function clampInt(v: unknown, min: number, max: number, fallback: number): number {
   const n = typeof v === 'number' ? Math.floor(v) : NaN;
@@ -216,12 +157,6 @@ function pickPoint(v: unknown): { x: number; y: number } | undefined {
   // sane screen-space bounds (multi-monitor layouts can go somewhat negative)
   if (x < -10000 || x > 20000 || y < -10000 || y > 20000) return undefined;
   return { x, y };
-}
-
-/** Base64 sanity for apiKeyEnc (safeStorage ciphertext never contains whitespace). */
-function isBase64Ciphertext(v: unknown): v is string {
-  if (typeof v !== 'string' || v.length === 0 || v.length > 4096) return false;
-  return /^[A-Za-z0-9+/]+={0,2}$/.test(v);
 }
 
 function validateApp(raw: unknown): AppPreferences {
@@ -288,52 +223,6 @@ function validateMcp(raw: unknown): McpPrefs {
   };
 }
 
-function validateAi(raw: unknown): AiPrefs {
-  const d = DEFAULT_AI_PREFS;
-  if (typeof raw !== 'object' || raw === null) return { ...d };
-  const r = raw as Record<string, unknown>;
-  return {
-    monthlyLimitUsd: clampFloat(r['monthlyLimitUsd'], 0, 10_000, d.monthlyLimitUsd),
-    warnUsd: clampFloat(r['warnUsd'], 0, 10_000, d.warnUsd),
-    cacheEnabled: pickBool(r['cacheEnabled'], d.cacheEnabled),
-  };
-}
-
-function validateProviders(raw: unknown): StoredProvider[] {
-  if (!Array.isArray(raw)) return defaultProviders();
-  const out: StoredProvider[] = [];
-  const seen = new Set<string>();
-  for (const item of raw) {
-    if (typeof item !== 'object' || item === null) continue;
-    const r = item as Record<string, unknown>;
-    const id = pickString(r['id'], 64, '', PROVIDER_ID_RE);
-    if (!id || seen.has(id)) continue;
-    seen.add(id);
-    const kind = pickEnum(r['kind'], PROVIDER_KINDS, 'custom');
-    const p: StoredProvider = {
-      id,
-      label: pickString(r['label'], 80, id),
-      kind,
-      baseUrl: pickString(r['baseUrl'], 512, ''),
-      model: pickString(r['model'], 128, ''),
-      enabled: pickBool(r['enabled'], false),
-    };
-    const enc = r['apiKeyEnc'];
-    if (typeof enc === 'string' && enc.length > 0) {
-      if (isBase64Ciphertext(enc)) {
-        p.apiKeyEnc = enc;
-        p.apiKeyStoredAt = pickString(r['apiKeyStoredAt'], 40, new Date().toISOString());
-        p.apiKeySessionOnly = pickBool(r['apiKeySessionOnly'], false);
-      }
-      // invalid ciphertext is DROPPED (fail-closed): the key is treated as
-      // missing rather than risking a decrypt of corrupted data
-    }
-    out.push(p);
-  }
-  if (out.length === 0) return defaultProviders();
-  return out;
-}
-
 export interface ValidateResult {
   ok: boolean;
   file: SettingsFile;
@@ -374,7 +263,7 @@ export function validateAndMigrate(raw: unknown, now = new Date()): ValidateResu
 
   // v0 / legacy / unversioned → migrate into v1
   if (version < SETTINGS_VERSION) {
-    notes.push(`migrated settings v${version} → v${SETTINGS_VERSION}`);
+    notes.push(`migrated settings v${version} → ${SETTINGS_VERSION}`);
     version = SETTINGS_VERSION;
   }
 
@@ -382,19 +271,57 @@ export function validateAndMigrate(raw: unknown, now = new Date()): ValidateResu
   const window = validateWindow(r['window']);
   const panels = validatePanels(r['panels']);
   const mcp = validateMcp(r['mcp']);
-  const ai = validateAi(r['ai']);
-  const aiProviders = validateProviders(r['aiProviders']);
 
-  let activeProviderId = pickString(r['activeProviderId'], 64, 'zai', PROVIDER_ID_RE);
-  if (!aiProviders.some((p) => p.id === activeProviderId)) {
-    activeProviderId = aiProviders[0]?.id ?? 'zai';
-    notes.push(`activeProviderId not found in providers — reset to ${activeProviderId}`);
+  // Detect repairs / dropped fields so ok=false when file had to be repaired
+  const ALLOWED_TOP_KEYS = new Set(['version', 'updatedAt', 'app', 'window', 'panels', 'mcp']);
+  for (const k of Object.keys(r)) {
+    if (!ALLOWED_TOP_KEYS.has(k)) {
+      notes.push(`dropped unknown top-level field: ${k}`);
+    }
   }
 
-  let brainProviderId = pickString(r['brainProviderId'], 64, 'groq', PROVIDER_ID_RE);
-  if (!aiProviders.some((p) => p.id === brainProviderId)) {
-    brainProviderId = 'groq';
-    notes.push('brainProviderId not found in providers — reset to groq');
+  if (typeof r['app'] === 'object' && r['app'] !== null) {
+    const rawApp = r['app'] as Record<string, unknown>;
+    const ALLOWED_APP_KEYS = new Set([
+      'autosaveDelay', 'historyLimit', 'defaultClipFps', 'defaultSize',
+      'defaultPaletteId', 'showGridDefault', 'onionSkinDefault', 'onionOpacity',
+      'onionPrevTint', 'onionNextTint', 'floatBtnSize', 'uiTextScale',
+    ]);
+    for (const k of Object.keys(rawApp)) {
+      if (!ALLOWED_APP_KEYS.has(k)) {
+        notes.push(`dropped unknown app field: ${k}`);
+      }
+    }
+    for (const [k, v] of Object.entries(app)) {
+      if (rawApp[k] !== undefined && rawApp[k] !== v) {
+        notes.push(`app.${k} repaired or clamped to safe value`);
+      }
+    }
+  }
+
+  if (typeof r['window'] === 'object' && r['window'] !== null) {
+    const rawWin = r['window'] as Record<string, unknown>;
+    if (window && (rawWin['width'] !== window.width || rawWin['height'] !== window.height)) {
+      notes.push('window dimensions clamped to minimum safe bounds');
+    }
+  }
+
+  if (typeof r['panels'] === 'object' && r['panels'] !== null) {
+    for (const k of Object.keys(r['panels'] as Record<string, unknown>)) {
+      if (!/^[a-z][a-z0-9-]{0,31}$/.test(k)) {
+        notes.push(`dropped invalid panel key: ${k}`);
+      }
+    }
+  }
+
+  if (typeof r['mcp'] === 'object' && r['mcp'] !== null) {
+    const rawMcp = r['mcp'] as Record<string, unknown>;
+    if (rawMcp['agentApiEnabled'] !== undefined && typeof rawMcp['agentApiEnabled'] !== 'boolean') {
+      notes.push('mcp.agentApiEnabled was not a boolean; restored default');
+    }
+    if (rawMcp['bridgeAutoConnect'] !== undefined && typeof rawMcp['bridgeAutoConnect'] !== 'boolean') {
+      notes.push('mcp.bridgeAutoConnect was not a boolean; restored default');
+    }
   }
 
   return {
@@ -406,44 +333,7 @@ export function validateAndMigrate(raw: unknown, now = new Date()): ValidateResu
       window,
       panels,
       mcp,
-      ai,
-      aiProviders,
-      activeProviderId,
-      brainProviderId,
     },
     notes,
-  };
-}
-
-/**
- * Public (IPC) view of a provider: secrets stripped — apiKeyEnc NEVER leaves
- * the main process. This is the shape the renderer is allowed to see.
- */
-export interface ProviderView {
-  id: string;
-  label: string;
-  kind: AIProviderKind;
-  baseUrl: string;
-  model: string;
-  enabled: boolean;
-  hasKey: boolean;
-  sessionOnly: boolean;
-  apiKeyStoredAt: string | null;
-}
-
-export function toProviderView(p: StoredProvider): ProviderView {
-  const hasCipher = typeof p.apiKeyEnc === 'string' && p.apiKeyEnc.length > 0;
-  const sessionOnly = p.apiKeySessionOnly === true;
-  return {
-    id: p.id,
-    label: p.label,
-    kind: p.kind,
-    baseUrl: p.baseUrl,
-    model: p.model,
-    enabled: p.enabled,
-    // a session-only key (no OS keyring) is a usable key — report it
-    hasKey: hasCipher || sessionOnly,
-    sessionOnly,
-    apiKeyStoredAt: p.apiKeyStoredAt ?? null,
   };
 }

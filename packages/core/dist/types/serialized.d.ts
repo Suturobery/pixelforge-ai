@@ -4,7 +4,7 @@
  * and the .pixelforgeproj ZIP container belong to Task 3; this module defines
  * the contract + structural validation only (pure, DOM-free).
  */
-import type { DocumentSettings, LoopMode, PartRect } from './document';
+import type { BlendMode, DocumentSettings, LoopMode, PartRect } from './document';
 export interface SerializedCelV2 {
     /** Path inside the .pixelforgeproj ZIP, e.g. "cels/cl1/fr1/ly1.png".
      * Linked cels point at "cels/<clipId>/shared/<layerId>.png" (C2). */
@@ -25,6 +25,10 @@ export interface SerializedLayerV2 {
     visible: boolean;
     opacity: number;
     linked: boolean;
+    /** Paint-locked: pixel tools refuse to mutate this layer. Omitted = false. */
+    locked?: boolean;
+    /** Compositing mode against the layers below; omitted = normal. */
+    blend?: BlendMode;
 }
 export interface SerializedPartV2 {
     id: string;

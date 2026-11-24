@@ -19,12 +19,11 @@
  * pf:fs-* transport (path-traversal proof, user-approved locations only).
  * Single-file exports reuse project.pickSave directly.
  *
- * Task 13a adds the `settings` namespace: versioned settings-file I/O plus
- * the C13 credential vault. Plaintext API keys cross the bridge exactly
- * ONCE (setApiKey → main), are safeStorage-encrypted in the main process,
- * and are NEVER returned — the renderer only sees `hasKey` booleans and
- * credential metadata. Later tasks extend the SAME object (ai → Task 9,
- * mcp → Task 8); they must never widen it with loose `any` channels.
+ * Task 13a adds the `settings` namespace: versioned settings-file I/O. The
+ * legacy credential vault (write-only API keys, safeStorage ciphertext) was
+ * removed together with the in-app AI provider stack — agents reason in the
+ * artist's IDE over MCP. Later tasks extend the SAME object; they must never
+ * widen it with loose `any` channels.
  */
 
 export interface BridgeAppInfo {
@@ -121,31 +120,6 @@ export interface BridgeMcpPrefs {
   bridgeAutoConnect: boolean;
 }
 
-/** Provider profile as seen by the renderer: hasKey boolean, NEVER key material. */
-export interface BridgeProviderView {
-  id: string;
-  label: string;
-  kind: 'zai' | 'openai' | 'anthropic' | 'custom';
-  baseUrl: string;
-  model: string;
-  enabled: boolean;
-  hasKey: boolean;
-  sessionOnly: boolean;
-  apiKeyStoredAt: string | null;
-}
-
-export interface BridgeCredentialStatus {
-  encryptionAvailable: boolean;
-  backend: string;
-  sessionOnlyKeys: number;
-  providers: Array<{
-    id: string;
-    hasKey: boolean;
-    sessionOnly: boolean;
-    apiKeyStoredAt: string | null;
-  }>;
-}
-
 /** Full settings view returned by pf:settings-get / pf:settings-update. */
 export interface BridgeSettingsView {
   version: number;
@@ -153,41 +127,16 @@ export interface BridgeSettingsView {
   window: BridgeWindowLayout | null;
   panels: Record<string, BridgePanelLayout>;
   mcp: BridgeMcpPrefs;
-  ai: { monthlyLimitUsd: number; warnUsd: number; cacheEnabled: boolean };
-  aiProviders: BridgeProviderView[];
-  activeProviderId: string;
-  brainProviderId: string;
-  credentials: BridgeCredentialStatus;
 }
 
-/** Preference patch (validated on both sides). Secret fields are not present. */
+/** Preference patch (validated on both sides). */
 export interface BridgeSettingsUpdate {
   app?: Partial<BridgeAppPreferences>;
   mcp?: Partial<BridgeMcpPrefs>;
-  ai?: Partial<{ monthlyLimitUsd: number; warnUsd: number; cacheEnabled: boolean }>;
   panels?: Record<string, BridgePanelLayout>;
-  activeProviderId?: string;
-  brainProviderId?: string;
-  aiProviders?: Array<{
-    id: string;
-    label?: string;
-    kind?: 'zai' | 'openai' | 'anthropic' | 'custom';
-    baseUrl?: string;
-    model?: string;
-    enabled?: boolean;
-  }>;
 }
 
-export interface BridgeSetApiKeyResult {
-  ok: boolean;
-  /** true when the OS keyring was unavailable and the key is session-only */
-  sessionOnly: boolean;
-}
-
-// --------------------------- AI (Task 9) -------------------------------------
-
-/** Renderer → main AI job request (NO key material — providerId references the vault). */
-
+// ------------------------------- updates ------------------------------------
 export interface PixelForgeBridge {
   readonly bridgeVersion: 5;
   /** Round-trip smoke check: main answers `pong`. */
@@ -261,27 +210,12 @@ export interface PixelForgeBridge {
      */
     pickDir(): Promise<BridgeExportDirResult>;
   };
-  /** Task 13a: versioned settings file + C13 credential vault (main side). */
+  /** Task 13a: versioned settings file (main side). */
   settings: {
-    /** Full settings view (secrets stripped — hasKey booleans only). */
+    /** Full settings view. */
     getAll(): Promise<BridgeSettingsView>;
     /** Validated preference patch; returns the updated view. */
     update(patch: BridgeSettingsUpdate): Promise<BridgeSettingsView>;
-    /**
-     * Submit an API key (WRITE-ONLY): the plaintext crosses the bridge once,
-     * is encrypted via safeStorage in main, and is never returned.
-     */
-    setApiKey(providerId: string, plaintext: string): Promise<BridgeSetApiKeyResult>;
-    /** True when a usable key exists (persisted ciphertext or session-only). */
-    hasKey(providerId: string): Promise<boolean>;
-    /** Remove a stored credential. Returns true when something was removed. */
-    removeKey(providerId: string): Promise<boolean>;
-    /** Keyring availability + per-provider credential metadata. */
-    credentialStatus(): Promise<BridgeCredentialStatus>;
-  };
-  /** Create-from-Reference: provider fetch runs MAIN-side (key never leaves). */
-  referenceGen: {
-    generate(input: BridgeReferenceGenInput): Promise<BridgeReferenceGenResult>;
   };
   /** Packaging milestone: guarded software updates (no-op without a feed). */
   updates: {
@@ -291,27 +225,6 @@ export interface PixelForgeBridge {
     onStatus(listener: (status: UpdateStatusView) => void): () => void;
   };
 }
-
-// ------------------- Create-from-Reference generation ------------------------
-
-/** Provider id used for the Create-from-Reference credential (vault key). */
-export const REFERENCE_PROVIDER_ID = 'gemini-image';
-/** Verified against the official Gemini image-generation docs (reference
- * images supported — aistudio.google.com/docs/image-generation). */
-export const REFERENCE_GEN_MODEL = 'gemini-2.5-flash-image';
-export const REFERENCE_GEN_MAX_PROMPT = 1200;
-export const REFERENCE_GEN_MAX_PNG_BASE64 = 16384;
-
-export interface BridgeReferenceGenInput {
-  /** Composed brief + style tags (bounded; built by the renderer pipeline). */
-  prompt: string;
-  /** Approved reference sprite PNG, base64 (≤ STYLE_REFERENCE cap). */
-  referencePngBase64: string;
-}
-
-export type BridgeReferenceGenResult =
-  | { ok: true; pngBase64: string; model: string }
-  | { ok: false; error: string };
 
 export interface UpdateStatusView {
   state:

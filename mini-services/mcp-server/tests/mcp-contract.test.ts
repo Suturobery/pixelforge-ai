@@ -18,7 +18,7 @@ import { Client } from '@modelcontextprotocol/client';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { encodePng } from '../../../packages/core/src/persist/png';
 
-const PORT = 3030 + (Number(Bun.hash(process.env.HF_WORKER_ID ?? String(process.pid))) % 400);
+const PORT = 3400 + (Number(Bun.hash(process.env.HF_WORKER_ID ?? String(process.pid))) % 400);
 const BASE = `http://127.0.0.1:${PORT}`;
 const MCP_URL = `${BASE}/mcp`;
 
@@ -359,6 +359,48 @@ describe('permission tiers', () => {
     expect(write.ok).toBe(true);
     await client.close();
   });
+});
+
+test('a claimed task blocks relayed edits when the active project is unknown or different', async () => {
+  const { token } = await generatePairing('L1');
+  const pairing = await sdkClient(token);
+  const paired = textEnvelope(await pairing.callTool({ name: 'pair_client', arguments: { name: 'project-task-audit' } }));
+  await pairing.close();
+  const client = await sdkClient((paired.data as { token: string }).token);
+  const event = (projectKey: string | null) => wsSend({
+    type: 'event', event: { type: 'projectChanged', stateHash: 'test-state', projectKey, projectName: projectKey },
+  });
+  const paint = () => client.callTool({
+    name: 'set_pixels', arguments: { pixels: [{ x: 0, y: 0 }], color: '#00ff00' },
+  }).then(textEnvelope);
+
+  try {
+    event('file:A');
+    const queued = await ctrl<{ data: { tasks: { id: string }[] } }>({
+      kind: 'brain-push',
+      tasks: [{ title: 'Draw on A', detail: 'Draw a pixel', targetProject: { key: 'file:A', name: 'A' } }],
+    });
+    const id = queued.data.tasks[0]!.id;
+    const claimed = textEnvelope(await client.callTool({ name: 'brain_claim_task', arguments: { id } }));
+    expect(claimed.ok).toBeTrue();
+
+    for (const projectKey of [null, 'file:B']) {
+      event(projectKey);
+      await ctrl({ kind: 'status' });
+      expect((await paint()).error?.code).toBe('task_project_mismatch');
+    }
+    event('file:A');
+    await ctrl({ kind: 'status' });
+    expect((await paint()).ok).toBeTrue();
+    expect(textEnvelope(await client.callTool({
+      name: 'brain_complete_task', arguments: { id, result: 'Painted' },
+    })).ok).toBeTrue();
+    await ctrl({ kind: 'brain-clear' });
+  } finally {
+    event(null);
+    await ctrl({ kind: 'status' });
+    await client.close();
+  }
 });
 
 describe('revocation + operation log', () => {
@@ -735,6 +777,30 @@ describe('skill knowledge (get_knowledge / study_reference)', () => {
     expect(names).toContain('study_reference');
     expect(names).toContain('save_project');
     await pc.close();
+  });
+
+  test('a vision client receives native preview images in frame order alongside the legacy envelope', async () => {
+    const urls = await Promise.all([32, 240].map(async (shade) => {
+      const png = await encodePng(1, 1, new Uint8ClampedArray([shade, shade, shade, 255]));
+      return 'data:image/png;base64,' + Buffer.from(png).toString('base64');
+    }));
+    toolResponders.set('get_frame_png', () => ({ png: urls[0] }));
+    toolResponders.set('preview_animation', () => ({ frames: urls, renderedFrames: 2 }));
+    const client = await pairedClient('L0', 'preview-reader');
+    try {
+      for (const [tool, expected] of [['get_frame_png', urls.slice(0, 1)], ['preview_animation', urls]] as const) {
+        const result = await client.callTool({ name: tool, arguments: {} });
+        expect(result.structuredContent).toEqual(textEnvelope(result));
+        expect(result.content).toEqual([
+          expect.objectContaining({ type: 'text' }),
+          ...expected.map(url => ({ type: 'image', mimeType: 'image/png', data: url.split(',')[1] })),
+        ]);
+      }
+    } finally {
+      toolResponders.delete('get_frame_png');
+      toolResponders.delete('preview_animation');
+      await client.close();
+    }
   });
 
   test('save_project is L2-gated and relays to the editor', async () => {

@@ -13,7 +13,7 @@ function fail(code: string, message: string, hint?: string) {
   return { ok: false as const, error: { code, message, ...(hint ? { hint } : {}) } }
 }
 
-export async function importFrameStrip(args: Record<string, unknown>) {
+export async function importFrameStrip(args: Record<string, unknown>, beforeCommit?: () => void) {
   const project = getBus().getProject()
   const columns = typeof args.columns === 'number' ? Math.floor(args.columns) : 0
   const rows = typeof args.rows === 'number' ? Math.floor(args.rows) : 0
@@ -65,6 +65,7 @@ export async function importFrameStrip(args: Record<string, unknown>) {
     cells.push(cell)
   }
 
+  beforeCommit?.()
   const createdClipId = getBus().transaction(`Import strip "${name}" (${columns}×${rows})`, 'mcp', () => {
     getBus().execute('clip.add', { name, fps }, 'mcp') // clip.add creates exactly ONE frame
     let clip = getBus().getProject().clips[getBus().getProject().clips.length - 1]!

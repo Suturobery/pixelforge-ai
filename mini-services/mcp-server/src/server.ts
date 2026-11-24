@@ -32,6 +32,18 @@ export interface HostDeps {
   startedAt: string;
 }
 
+/** The editor already encodes previews as PNGs. Expose those same bytes to vision clients. */
+function previewImages(tool: string, data: unknown) {
+  if (!data || typeof data !== 'object') return [];
+  const urls = tool === 'get_frame_png' && 'png' in data ? [data.png]
+    : tool === 'preview_animation' && 'frames' in data && Array.isArray(data.frames) ? data.frames : [];
+  const prefix = 'data:image/png;base64,';
+  return urls.flatMap((url: unknown) =>
+    typeof url === 'string' && url.startsWith(prefix) && url.length > prefix.length
+      ? [{ type: 'image' as const, mimeType: 'image/png', data: url.slice(prefix.length) }]
+      : []);
+}
+
 interface SessionIdentity {
   kind: 'client';
   clientId: string;
@@ -198,7 +210,12 @@ export class McpHost {
       {
         instructions:
           'PixelForge AI pixel art & animation editor. Read get_project_state first; ids and stateHash from it ' +
-          'feed the other tools. Writes are undoable (L1) and refuse to discard unsaved work (dirty_project).',
+          'feed the other tools. Follow the project palette and Style Lock. For drawing, read get_knowledge ' +
+          'on methodology and grids, plus characters for character sprites. Block in the silhouette, draw, ' +
+          'then inspect get_frame_png at native size and revise unclear shapes. For animation read the animation ' +
+          'topic; for effects read vfx and use list_vfx. Inspect the ordered frames from preview_animation ' +
+          'and check timing and emptyFrames. Run validate_style for technical checks. If your client cannot ' +
+          'display images, report that visual review is pending. Respect dirty_project when replacing a document.',
       }
     );
 
@@ -225,7 +242,7 @@ export class McpHost {
             };
           }
           return {
-            content: [{ type: 'text' as const, text }],
+            content: [{ type: 'text' as const, text }, ...previewImages(def.name, envelope.data)],
             structuredContent: envelope as unknown as Record<string, unknown>,
           };
         }
@@ -293,7 +310,7 @@ export class McpHost {
 
   /** Active project identity from the editor link (task-board gating). */
   private get currentProject(): { key: string; name: string } | null {
-    const key = this.link.currentProjectKey;
+    const key = this.link.connected ? this.link.currentProjectKey : null;
     if (!key) return null;
     return { key, name: this.link.currentProjectName ?? 'active project' };
   }
@@ -382,6 +399,22 @@ export class McpHost {
     }
 
     this.store.touchClient(identity.clientId);
+
+    // A client with a claimed task can edit only its confirmed project.
+    // Carry that identity through the relay because the editor may switch
+    // documents before its next projectChanged notification reaches us.
+    const taskTargets = def.tier !== 'L0' && (def.relay || def.name === 'apply_library_palette')
+      ? this.store.brainClaimedTargets(identity.clientId)
+      : [];
+    const blockedTarget = taskTargets.find((target) => target.key !== this.currentProject?.key);
+    if (blockedTarget) {
+      return fail(
+        'task_project_mismatch',
+        `Task edits require project "${blockedTarget.name}". Active project: "${this.currentProject?.name ?? 'not confirmed'}".`,
+        'Open the target project and wait for the editor to report it, then retry.',
+      );
+    }
+    const expectedProjectKey = taskTargets[0]?.key;
 
     if (!def.relay) {
       if (def.name === 'get_operation_log') {
@@ -564,6 +597,7 @@ export class McpHost {
           clientId: identity.clientId,
           clientName: identity.name,
           tier: identity.tier,
+          expectedProjectKey,
         });
         if (!relayed.ok) return relayed;
         return {
@@ -589,6 +623,7 @@ export class McpHost {
       clientId: identity.clientId,
       clientName: identity.name,
       tier: identity.tier,
+      expectedProjectKey,
     });
     return envelope;
   }

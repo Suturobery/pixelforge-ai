@@ -1,5 +1,13 @@
 # PixelForge AI — MCP Service in a Packaged Windows Desktop Build
 
+> **Status (2026-11-25): superseded — kept for history.** This is the original Task 13a
+> assessment, written before the desktop app hosted the MCP service. It recommended a compiled
+> Bun sidecar ("Option A"), and that is what shipped. The implementation differs in detail: a
+> packaged app picks a free port instead of probing 3030–3039, restart backoff is 1 s / 2 s /
+> 4 s with a budget of 3, and the MCP data dir is `userData/mcp-data`. Its own closing note says
+> the manual packaging QA checklist was not executed at the time of writing. See
+> [Desktop app](desktop-app.md) for what the code does.
+
 **Task 13a deliverable (v3.1 §12 row 13a, §6 of the task brief).**
 Assessment of how the Bun-hosted MCP service (Task 8, `mini-services/mcp-server`)
 will be launched, supervised, and stopped by the packaged Electron application.

@@ -15,6 +15,7 @@ const paths_1 = require("./paths");
 const style_profile_1 = require("../style-profile");
 const HEX = /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
 const LOOP_MODES = ['forward', 'reverse', 'pingpong'];
+const BLEND_MODES = ['normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten'];
 function isRecord(v) {
     return typeof v === 'object' && v !== null;
 }
@@ -150,7 +151,12 @@ function validateClip(clip, path, index, add, clipIds, opts = {}) {
             add(`${lp}.opacity`, 'must be in 0..1');
         if (typeof l.linked !== 'boolean')
             add(`${lp}.linked`, 'must be a boolean');
-        else if (l.linked && l.id) {
+        if (l.locked !== undefined && typeof l.locked !== 'boolean')
+            add(`${lp}.locked`, 'must be a boolean when present');
+        if (l.blend !== undefined && (typeof l.blend !== 'string' || !BLEND_MODES.includes(l.blend))) {
+            add(`${lp}.blend`, 'must be a blend mode when present');
+        }
+        if (l.linked === true && l.id) {
             linkedLayers.set(l.id, opts.trashScoped ? null : `cels/${c.id}/shared/${l.id}.png`);
         }
     });

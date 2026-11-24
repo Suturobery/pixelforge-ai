@@ -35,8 +35,8 @@ export function buildAgentInstructions(endpoint: string): string {
     '## Tools',
     '',
   ]
-  for (const tier of ['L0', 'L1', 'L2', 'L3'] as const) {
-    const label = { L0: 'read-only', L1: 'editors', L2: 'destructive', L3: 'paid / AI' }[tier]
+  for (const tier of ['L0', 'L1', 'L2'] as const) {
+    const label = { L0: 'read-only', L1: 'editors', L2: 'destructive' }[tier]
     const tools = MCP_TOOLS.filter((t) => t.tier === tier)
     lines.push(`### ${tier} — ${label} (${tools.length})`)
     lines.push('')

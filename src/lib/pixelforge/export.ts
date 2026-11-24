@@ -172,7 +172,7 @@ export async function runExport(project: Project, options: ExportRunOptions): Pr
 }
 
 // keep the original helper name/behavior (web downloads)
-function downloadData(blob: Blob, filename: string): void {
+export function downloadData(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
@@ -181,6 +181,89 @@ function downloadData(blob: Blob, filename: string): void {
   a.click()
   a.remove()
   setTimeout(() => URL.revokeObjectURL(url), 4000)
+}
+
+/**
+ * Animated GIF export via gifenc.
+ * Frames are composited RGBA byte arrays (e.g. from composeFrameRgba).
+ */
+export async function exportGif(
+  frames: { width: number; height: number; data: Uint8ClampedArray | Uint8Array }[],
+  durations: number[],
+  filename: string,
+  opts: { scale?: number; checker?: boolean; bg?: string } = {}
+): Promise<void> {
+  const { GIFEncoder, quantize, applyPalette } = await import('gifenc')
+  const scale = opts.scale ?? 1
+  const bgHex = opts.bg && opts.bg !== 'transparent' ? opts.bg : '#101014'
+  const bgR = parseInt(bgHex.slice(1, 3), 16) || 16
+  const bgG = parseInt(bgHex.slice(3, 5), 16) || 16
+  const bgB = parseInt(bgHex.slice(5, 7), 16) || 20
+  const transparent = opts.bg === 'transparent'
+
+  const gif = GIFEncoder()
+  const BAYER = [
+    [0, 8, 2, 10],
+    [12, 4, 14, 6],
+    [3, 11, 1, 9],
+    [15, 7, 13, 5],
+  ]
+
+  for (let i = 0; i < frames.length; i++) {
+    const f = frames[i]
+    const fw = f.width * scale
+    const fh = f.height * scale
+    const rgba = new Uint8Array(fw * fh * 4)
+
+    for (let y = 0; y < fh; y++) {
+      const sy = Math.floor(y / scale)
+      for (let x = 0; x < fw; x++) {
+        const sx = Math.floor(x / scale)
+        const si = (sy * f.width + sx) * 4
+        const di = (y * fw + x) * 4
+        const a = f.data[si + 3] / 255
+
+        if (transparent) {
+          const t = Math.max((BAYER[y & 3][x & 3] + 0.5) / 16, 0.04)
+          rgba[di] = f.data[si]
+          rgba[di + 1] = f.data[si + 1]
+          rgba[di + 2] = f.data[si + 2]
+          rgba[di + 3] = a > t ? 255 : 0
+        } else {
+          rgba[di] = Math.round(f.data[si] * a + bgR * (1 - a))
+          rgba[di + 1] = Math.round(f.data[si + 1] * a + bgG * (1 - a))
+          rgba[di + 2] = Math.round(f.data[si + 2] * a + bgB * (1 - a))
+          rgba[di + 3] = 255
+        }
+      }
+    }
+
+    const palette = quantize(rgba, transparent ? 255 : 256, { format: 'rgb565' })
+    const indexed = applyPalette(rgba, palette, 'rgb565')
+    const frameOpts: {
+      palette: number[][]
+      delay: number
+      dispose: number
+      transparent?: boolean
+      transparentIndex?: number
+    } = { palette, delay: durations[i] || 125, dispose: 2 }
+
+    if (transparent) {
+      palette.push([0, 0, 0])
+      const ti = palette.length - 1
+      for (let p = 0; p < rgba.length; p += 4) {
+        if (rgba[p + 3] === 0) indexed[p / 4] = ti
+      }
+      frameOpts.transparent = true
+      frameOpts.transparentIndex = ti
+    }
+
+    gif.writeFrame(indexed, fw, fh, frameOpts)
+  }
+
+  gif.finish()
+  const blob = new Blob([gif.bytes() as unknown as BlobPart], { type: 'image/gif' })
+  downloadData(blob, filename)
 }
 
 /**

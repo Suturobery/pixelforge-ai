@@ -1,5 +1,14 @@
 # PixelForge AI — Development & Testing Guide
 
+> **Status (2026-11-25): partly stale.** The install, run, test and CI commands are current, but
+> this guide predates the removal of in-app AI generation. Ignore everything about Task 9 AI
+> suites, provider adapters, the AI job manager, candidate tools (`get_candidates`,
+> `accept_candidate`, `apply_normalize`), `PF_SMOKE_AI` / `PF_AI_MOCK`, and the "expected
+> baseline counts". Current test counts: core 28 files, desktop 37 tests in 3 files, MCP 3 files.
+> For the packaging and release pipeline, which this guide does not cover, see
+> [Desktop app](desktop-app.md#packaging-and-release). For the product as it is now, start at
+> [the documentation index](README.md).
+
 Contributor guide for building, running, and testing PixelForge AI (web + Electron
 desktop). All commands are run from the repository root unless noted. CI is defined
 in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).

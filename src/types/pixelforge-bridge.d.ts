@@ -83,18 +83,6 @@ interface PfAppInfo {
 
 // ------------------- settings namespace (Task 13a) --------------------------
 
-interface PfProviderView {
-  id: string;
-  label: string;
-  kind: 'zai' | 'openai' | 'custom';
-  baseUrl: string;
-  model: string;
-  enabled: boolean;
-  hasKey: boolean;
-  sessionOnly: boolean;
-  apiKeyStoredAt: string | null;
-}
-
 interface PfSettingsView {
   version: number;
   app: {
@@ -114,24 +102,7 @@ interface PfSettingsView {
   window: { x: number; y: number; width: number; height: number; isMaximized: boolean } | null;
   panels: Record<string, { pos?: { x: number; y: number }; open?: boolean; hidden?: boolean; pillPos?: { x: number; y: number } }>;
   mcp: { agentApiEnabled: boolean; bridgeAutoConnect: boolean };
-  ai: { monthlyLimitUsd: number; warnUsd: number; cacheEnabled: boolean };
-  aiProviders: PfProviderView[];
-  activeProviderId: string;
-  brainProviderId: string;
-  credentials: {
-    encryptionAvailable: boolean;
-    backend: string;
-    sessionOnlyKeys: number;
-    providers: Array<{ id: string; hasKey: boolean; sessionOnly: boolean; apiKeyStoredAt: string | null }>;
-  };
 }
-
-// ------------------------- AI namespace (Task 9) ----------------------------
-
-
-
-
-
 
 interface PixelForgeBridge {
   readonly bridgeVersion: 5;
@@ -159,38 +130,14 @@ interface PixelForgeBridge {
     /** Native directory picker; registers the chosen dir for session fs access. */
     pickDir(): Promise<PfExportDirResult>;
   };
-  /** Task 13a: versioned settings file + C13 credential vault (main side). */
+  /** Task 13a: versioned settings file (main side). */
   settings: {
     getAll(): Promise<PfSettingsView>;
     update(patch: {
       app?: Partial<PfSettingsView['app']>;
       mcp?: Partial<PfSettingsView['mcp']>;
-      ai?: Partial<PfSettingsView['ai']>;
       panels?: PfSettingsView['panels'];
-      activeProviderId?: string;
-      brainProviderId?: string;
-      aiProviders?: Array<{
-        id: string;
-        label?: string;
-        kind?: 'zai' | 'openai' | 'custom';
-        baseUrl?: string;
-        model?: string;
-        enabled?: boolean;
-      }>;
     }): Promise<PfSettingsView>;
-    /** WRITE-ONLY key submission — the plaintext never comes back. */
-    setApiKey(providerId: string, plaintext: string): Promise<{ ok: boolean; sessionOnly: boolean }>;
-    hasKey(providerId: string): Promise<boolean>;
-    removeKey(providerId: string): Promise<boolean>;
-    credentialStatus(): Promise<PfSettingsView['credentials']>;
-  };
-  /** Task 9: AI job runner lives in MAIN — the renderer never sees key material. */
-  /** Create-from-Reference: provider fetch runs MAIN-side (key never leaves). */
-  referenceGen: {
-    generate(input: {
-      prompt: string;
-      referencePngBase64: string;
-    }): Promise<{ ok: true; pngBase64: string; model: string } | { ok: false; error: string }>;
   };
   /** Packaging milestone: guarded software updates (no-op without a feed). */
   updates: {

@@ -48,6 +48,7 @@
  * fresh Uint8ClampedArray copies (source buffers are never mutated).
  */
 import { type Oklab } from './oklab';
+import { computeEdgeProfiles, detectPixelGrid, scaleSpriteWholeNumber, snapToDetectedGrid, type DetectedGrid, type GridScaleMode, type GridSnapStats, type SnappedSprite, type WholeNumberScaleResult } from './grid-detect';
 export type PaletteMode = 'project' | 'auto' | 'off';
 export interface Normalize2Options {
     /** exact output width in pixels (1..512) */
@@ -86,6 +87,13 @@ export interface Normalize2Options {
      * instead of silently erasing it.
      */
     enclosedResidueCleanup?: boolean;
+    /**
+     * Pixel-grid detection and snapping (default 'auto'): detects the AI's real
+     * fake-pixel block size + phase offset on the trimmed sprite, extracts one
+     * denoised color per block, and scales to the target canvas by whole numbers
+     * only. Set 'off' to use legacy dominant-color downscaling directly.
+     */
+    gridSnap?: 'auto' | 'off';
 }
 export declare const DEFAULT_NORMALIZE2_OPTIONS: Normalize2Options;
 export interface Normalize2Stats {
@@ -114,6 +122,8 @@ export interface Normalize2Stats {
     residueRemoved: number;
     /** the background color the pipeline matched against, as #rrggbb */
     bgColor: string;
+    /** pixel-grid detection & whole-number scaling summary */
+    grid: GridSnapStats;
 }
 export interface Normalize2Result {
     buffer: Uint8ClampedArray;
@@ -257,8 +267,10 @@ export declare function normalizeV2(src: Uint8Array | Uint8ClampedArray, srcW: n
  * Deterministic; returns a fresh buffer of exactly targetW×targetH.
  */
 export declare function nearestNeighborContain(src: Uint8Array | Uint8ClampedArray, sw: number, sh: number, targetW: number, targetH: number): Uint8ClampedArray;
-/** OKLab helper re-export for tests. */
+/** OKLab and pixel-grid helper re-exports. */
 export type { Oklab };
+export { computeEdgeProfiles, detectPixelGrid, scaleSpriteWholeNumber, snapToDetectedGrid, };
+export type { DetectedGrid, GridScaleMode, GridSnapStats, SnappedSprite, WholeNumberScaleResult, };
 /**
  * Center a normalized sprite buffer onto a canvas-sized transparent buffer
  * (pixel-perfect placement, NO resampling — pixels stay 1:1). Used by the
