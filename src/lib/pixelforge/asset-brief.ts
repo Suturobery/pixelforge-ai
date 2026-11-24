@@ -25,38 +25,186 @@ export interface PixelArtRecipe {
   label: string
   description: string
   defaults: Partial<AssetBriefFields>
+  suitableAssetTypes: readonly string[]
+  placeholder: string
 }
 
 export const PIXEL_ART_RECIPES: readonly PixelArtRecipe[] = [
   {
-    id: 'character', label: 'Character', description: 'Readable hero silhouette and idle loop',
-    defaults: { assetType: 'game character sprite', cameraAngle: 'side view', facing: 'right', poseGoal: '4-frame idle loop', detailLevel: 'medium', requiredDetails: 'readable silhouette and clear pose' },
+    id: 'character',
+    label: 'Character',
+    description: 'Readable hero silhouette and idle loop',
+    defaults: {
+      assetType: 'player hero / character sprite',
+      cameraAngle: 'side view',
+      facing: 'right',
+      poseGoal: '4-frame idle loop',
+      detailLevel: 'medium',
+      requiredDetails: 'readable silhouette and clear pose',
+      avoid: 'muddy silhouette, pillow shading',
+    },
+    suitableAssetTypes: [
+      'player hero / character sprite',
+      'friendly NPC / villager',
+      'side-scroller platformer hero',
+      'top-down RPG adventurer',
+      'turn-based battle battler',
+    ],
+    placeholder: 'e.g. knight hero / rogue / wizard / villager',
   },
   {
-    id: 'enemy', label: 'Enemy', description: 'Threat shape with an attack-ready pose',
-    defaults: { assetType: 'enemy sprite', cameraAngle: 'side view', facing: 'left', poseGoal: '4-frame idle / attack-ready loop', detailLevel: 'medium', requiredDetails: 'distinct threat silhouette and readable weak point' },
+    id: 'enemy',
+    label: 'Enemy',
+    description: 'Threat shape with an attack-ready pose',
+    defaults: {
+      assetType: 'enemy threat sprite',
+      cameraAngle: 'side view',
+      facing: 'left',
+      poseGoal: '4-frame idle / attack-ready loop',
+      detailLevel: 'medium',
+      requiredDetails: 'distinct threat silhouette and readable weak point',
+      avoid: 'unclear threat shape, low contrast against background',
+    },
+    suitableAssetTypes: [
+      'melee grunt / minion',
+      'ranged / flying threat',
+      'boss monster',
+      'dungeon crawler / beast',
+      'static hazard / sentry',
+    ],
+    placeholder: 'e.g. slime minion / skeleton archer / dragon boss',
   },
   {
-    id: 'item', label: 'Item', description: 'Iconic single-frame collectible or prop',
-    defaults: { assetType: 'game item sprite', cameraAngle: '3/4 view', facing: 'right', poseGoal: 'single frame', detailLevel: 'medium', requiredDetails: 'recognizable shape at 1x size' },
+    id: 'item',
+    label: 'Item',
+    description: 'Iconic single-frame collectible or prop',
+    defaults: {
+      assetType: 'game item / collectible',
+      cameraAngle: '3/4 view',
+      facing: 'right',
+      poseGoal: 'single frame',
+      detailLevel: 'medium',
+      requiredDetails: 'recognizable shape at 1x size',
+      avoid: 'overly complex interior lines at small scale',
+    },
+    suitableAssetTypes: [
+      'consumable potion / food',
+      'weapon / sword / staff',
+      'armor / shield / helmet',
+      'treasure chest / gold key',
+      'quest artifact / relic',
+    ],
+    placeholder: 'e.g. health potion / iron broadsword / gold key',
   },
   {
-    id: 'tileset', label: 'Tileset', description: 'Repeatable center, edges, and corners',
-    defaults: { assetType: 'environment tileset', cameraAngle: 'top-down', facing: 'front', poseGoal: 'single frame tile sheet', detailLevel: 'medium', requiredDetails: 'seamless center, edge, inner-corner, and outer-corner tiles', avoid: 'visible seams, noisy isolated pixels' },
+    id: 'tileset',
+    label: 'Tileset',
+    description: 'Repeatable center, edges, and corners',
+    defaults: {
+      assetType: 'environment tileset (wall & floor)',
+      cameraAngle: 'top-down',
+      facing: 'front',
+      poseGoal: 'single frame tile sheet',
+      detailLevel: 'medium',
+      requiredDetails: 'seamless center, edge, inner-corner, and outer-corner tiles',
+      avoid: 'visible seams, noisy isolated pixels',
+    },
+    suitableAssetTypes: [
+      'dungeon wall & floor autotile',
+      'platformer ground & ledges',
+      'overworld terrain (grass, dirt, water)',
+      'interior building & furniture tiles',
+      'sci-fi / metal facility tiles',
+    ],
+    placeholder: 'e.g. dungeon brick wall & floor / platformer grass ledge',
   },
   {
-    id: 'vfx', label: 'VFX', description: 'Anticipation, impact peak, then decay',
-    defaults: { assetType: 'gameplay VFX sprite', cameraAngle: 'front', facing: 'front', poseGoal: '6-frame anticipation, peak, and decay animation', detailLevel: 'medium', requiredDetails: 'clear impact frame and clean decay', outline: 'selective dark outline' },
+    id: 'vfx',
+    label: 'VFX',
+    description: 'Anticipation, impact peak, then decay',
+    defaults: {
+      assetType: 'gameplay VFX sprite',
+      cameraAngle: 'front',
+      facing: 'front',
+      poseGoal: '6-frame anticipation, peak, and decay animation',
+      detailLevel: 'medium',
+      requiredDetails: 'clear impact frame and clean decay',
+      outline: 'selective dark outline',
+      avoid: 'static lingering frames, inconsistent light burst',
+    },
+    suitableAssetTypes: [
+      'impact & hit spark',
+      'explosion & blast burst',
+      'melee slash & swipe trail',
+      'magic spell & fireball projectile',
+      'smoke puff / jump dust',
+    ],
+    placeholder: 'e.g. fireball burst / sword slash / jump dust',
   },
   {
-    id: 'ui-icon', label: 'UI Icon', description: 'Centered, high-contrast, low-detail symbol',
-    defaults: { assetType: 'UI icon', cameraAngle: 'front', facing: 'front', poseGoal: 'single frame', detailLevel: 'low', requiredDetails: 'centered high-contrast symbol readable at 1x size', outline: 'dark 1px' },
+    id: 'ui-icon',
+    label: 'UI Icon',
+    description: 'Centered, high-contrast, low-detail symbol',
+    defaults: {
+      assetType: 'UI icon / status badge',
+      cameraAngle: 'front',
+      facing: 'front',
+      poseGoal: 'single frame',
+      detailLevel: 'low',
+      requiredDetails: 'centered high-contrast symbol readable at 1x size',
+      outline: 'dark 1px',
+      avoid: 'subtle low-contrast borders, unreadable shapes at 1x',
+    },
+    suitableAssetTypes: [
+      'health / heart container',
+      'mana / energy crystal',
+      'ability / skill spell badge',
+      'currency / gold coin',
+      'inventory item glyph',
+    ],
+    placeholder: 'e.g. heart life / shield armor / gold coin',
   },
 ] as const
 
+export function detectRecipeSuitability(assetType: string): PixelArtRecipeId | null {
+  const lower = assetType.toLowerCase()
+  if (!lower.trim()) return null
+  if (/tile|terrain|wall|floor|ledge|autotile|scenery|brick|platform/i.test(lower)) return 'tileset'
+  if (/vfx|fx|explosion|spark|burst|slash|smoke|fireball|spell|flame|impact|blast/i.test(lower)) return 'vfx'
+  if (/icon|ui|badge|heart|mana|coin|glyph|button|inventory|currency/i.test(lower)) return 'ui-icon'
+  if (/enemy|boss|monster|beast|threat|minion|slime|crawler|hazard|sentry/i.test(lower)) return 'enemy'
+  if (/item|weapon|sword|potion|prop|chest|key|loot|relic|armor|shield|staff|consumable|food/i.test(lower)) return 'item'
+  if (/hero|character|player|npc|villager|protagonist|warrior|rogue|wizard|knight|battler/i.test(lower)) return 'character'
+  return null
+}
+
 export function applyPixelArtRecipe(fields: AssetBriefFields, recipeId: PixelArtRecipeId): AssetBriefFields {
   const recipe = PIXEL_ART_RECIPES.find((item) => item.id === recipeId)
-  return recipe ? { ...fields, ...recipe.defaults } : fields
+  if (!recipe) return fields
+
+  // When switching recipe, always ensure assetType is updated to a suitable type for the new recipe
+  // if current assetType is empty, generic, or belongs to a different recipe category.
+  const currentCategory = detectRecipeSuitability(fields.assetType)
+  const isGeneric =
+    !fields.assetType.trim() ||
+    fields.assetType === 'game character sprite' ||
+    fields.assetType === 'enemy sprite' ||
+    fields.assetType === 'game item sprite' ||
+    fields.assetType === 'environment tileset' ||
+    fields.assetType === 'gameplay VFX sprite' ||
+    fields.assetType === 'UI icon' ||
+    PIXEL_ART_RECIPES.some((r) => r.defaults.assetType === fields.assetType)
+
+  const shouldReplaceAssetType = isGeneric || (currentCategory !== null && currentCategory !== recipeId)
+  const targetAssetType = shouldReplaceAssetType
+    ? (recipe.defaults.assetType ?? fields.assetType)
+    : fields.assetType
+
+  return {
+    ...fields,
+    ...recipe.defaults,
+    assetType: targetAssetType,
+  }
 }
 
 export interface BriefProject {

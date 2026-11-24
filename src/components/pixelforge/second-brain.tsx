@@ -59,6 +59,7 @@ import {
   applyPixelArtRecipe,
   defaultBriefFields,
   buildAssetBrief,
+  detectRecipeSuitability,
   type AssetBriefFields,
   type PixelArtRecipeId,
 } from '@/lib/pixelforge/asset-brief'
@@ -176,6 +177,10 @@ export function SecondBrain() {
     setBrief((fields) => applyPixelArtRecipe(fields, recipeId))
     setBriefStatus(null)
   }
+  const currentRecipe = PIXEL_ART_RECIPES.find((r) => r.id === selectedRecipe)
+  const detectedCategory = detectRecipeSuitability(brief.assetType)
+  const isMismatch = Boolean(selectedRecipe && detectedCategory && detectedCategory !== selectedRecipe)
+  const suggestedRecipe = isMismatch && detectedCategory ? PIXEL_ART_RECIPES.find((r) => r.id === detectedCategory) : null
 
   const composeBrief = () => {
     const { detail } = buildAssetBrief(brief, project, memory)
@@ -614,16 +619,93 @@ export function SecondBrain() {
               ))}
             </div>
             <div className="grid grid-cols-2 gap-1.5">
-              <label className="min-w-0 font-mono text-[9px] text-zinc-400">
-                Asset type
-                <Input
-                  value={brief.assetType}
-                  onChange={(e) => setBriefField('assetType', e.target.value)}
-                  placeholder="knight sprite / campfire / 4-frame walk"
-                  aria-label="Asset type"
-                  className="mt-0.5 h-6 border-zinc-800 bg-zinc-950 px-2 font-mono text-[10px]"
-                />
-              </label>
+              {/* Asset type block with recipe-aware suggestions and suitability indicator */}
+              <div className="col-span-2 space-y-1">
+                <div className="flex items-center justify-between">
+                  <label htmlFor="pf-recipe-asset-type" className="font-mono text-[9px] text-zinc-400">
+                    Asset type
+                    {selectedRecipe && (
+                      <span className="ml-1 text-[8px] font-normal text-teal-400">
+                        ({currentRecipe?.label} suitable)
+                      </span>
+                    )}
+                  </label>
+                  {selectedRecipe && (
+                    <span className="font-mono text-[8px] text-zinc-500">
+                      Pick a preset below or type custom
+                    </span>
+                  )}
+                </div>
+                <div className="flex gap-1.5">
+                  <Input
+                    id="pf-recipe-asset-type"
+                    list="pf-suitable-asset-types"
+                    value={brief.assetType}
+                    onChange={(e) => {
+                      const val = e.target.value
+                      setBriefField('assetType', val)
+                      if (!selectedRecipe) {
+                        const detected = detectRecipeSuitability(val)
+                        if (detected) selectRecipe(detected)
+                      }
+                    }}
+                    placeholder={currentRecipe?.placeholder ?? 'knight sprite / tileset / vfx'}
+                    aria-label="Asset type"
+                    className="h-6 flex-1 border-zinc-800 bg-zinc-950 px-2 font-mono text-[10px]"
+                  />
+                  <datalist id="pf-suitable-asset-types">
+                    {(currentRecipe?.suitableAssetTypes ?? []).map((t) => (
+                      <option key={t} value={t} />
+                    ))}
+                  </datalist>
+                </div>
+
+                {/* Quick suggestion chips for the active recipe */}
+                {currentRecipe && (
+                  <div className="flex flex-wrap gap-1 pt-0.5" aria-label="Suitable asset type presets">
+                    {currentRecipe.suitableAssetTypes.map((typeOption) => {
+                      const active = brief.assetType.toLowerCase() === typeOption.toLowerCase()
+                      return (
+                        <button
+                          key={typeOption}
+                          type="button"
+                          onClick={() => {
+                            setBriefField('assetType', typeOption)
+                            if (selectedRecipe === 'tileset' && typeOption.includes('platformer')) {
+                              setBriefField('cameraAngle', 'side view')
+                            } else if (selectedRecipe === 'tileset' && typeOption.includes('autotile')) {
+                              setBriefField('cameraAngle', 'top-down')
+                            }
+                          }}
+                          className={`rounded px-1.5 py-0.5 font-mono text-[8px] transition-colors ${
+                            active
+                              ? 'border border-teal-500/60 bg-teal-950/60 font-semibold text-teal-300'
+                              : 'border border-zinc-800 bg-zinc-950 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
+                          }`}
+                        >
+                          {typeOption}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+
+                {/* Suitability warning if user input belongs to a different recipe */}
+                {isMismatch && suggestedRecipe && (
+                  <div className="flex items-center justify-between gap-1 rounded border border-amber-500/30 bg-amber-950/20 px-2 py-1 font-mono text-[9px] text-amber-300">
+                    <span className="truncate">
+                      ⚠️ &ldquo;{brief.assetType}&rdquo; is usually a <strong>{suggestedRecipe.label}</strong> asset.
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => selectRecipe(suggestedRecipe.id)}
+                      className="shrink-0 rounded bg-amber-500/20 px-1.5 py-0.5 text-[8px] font-semibold text-amber-200 hover:bg-amber-500/30"
+                    >
+                      Switch to {suggestedRecipe.label} recipe
+                    </button>
+                  </div>
+                )}
+              </div>
               <label className="min-w-0 font-mono text-[9px] text-zinc-400">
                 Canvas
                 <Input

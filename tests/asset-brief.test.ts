@@ -4,6 +4,7 @@ import {
   applyPixelArtRecipe,
   buildAssetBrief,
   defaultBriefFields,
+  detectRecipeSuitability,
   type BriefProject,
 } from '@/lib/pixelforge/asset-brief'
 
@@ -72,5 +73,36 @@ describe('Pixel Art Recipes', () => {
     expect(result.detail.length).toBeLessThanOrEqual(2000)
     expect(result.detail).toContain('EXECUTION CONTRACT')
     expect(result.detail).toContain('brain_complete_task')
+  })
+
+  test('every recipe defines suitable asset types and contextual placeholder', () => {
+    for (const recipe of PIXEL_ART_RECIPES) {
+      expect(recipe.suitableAssetTypes.length).toBeGreaterThanOrEqual(3)
+      expect(recipe.placeholder.length).toBeGreaterThan(0)
+    }
+  })
+
+  test('detectRecipeSuitability categorizes asset types accurately', () => {
+    expect(detectRecipeSuitability('dungeon brick wall autotile')).toBe('tileset')
+    expect(detectRecipeSuitability('platformer ground & ledges')).toBe('tileset')
+    expect(detectRecipeSuitability('knight hero sprite')).toBe('character')
+    expect(detectRecipeSuitability('slime boss monster')).toBe('enemy')
+    expect(detectRecipeSuitability('health potion consumable')).toBe('item')
+    expect(detectRecipeSuitability('fireball burst explosion')).toBe('vfx')
+    expect(detectRecipeSuitability('heart life icon')).toBe('ui-icon')
+    expect(detectRecipeSuitability('')).toBe(null)
+  })
+
+  test('applyPixelArtRecipe switches assetType when switching to tileset or unsuitable category', () => {
+    const characterBase = { ...defaultBriefFields(project, memory), assetType: 'knight hero sprite' }
+    // When picking tileset, "knight hero sprite" is unsuitable so it changes to tileset defaults
+    const tilesetResult = applyPixelArtRecipe(characterBase, 'tileset')
+    expect(detectRecipeSuitability(tilesetResult.assetType)).toBe('tileset')
+    expect(tilesetResult.poseGoal).toContain('tile sheet')
+
+    // If already a tileset assetType, keep user's specific tileset type
+    const customTileset = { ...defaultBriefFields(project, memory), assetType: 'dungeon brick wall autotile' }
+    const preservedResult = applyPixelArtRecipe(customTileset, 'tileset')
+    expect(preservedResult.assetType).toBe('dungeon brick wall autotile')
   })
 })
