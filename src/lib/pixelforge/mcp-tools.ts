@@ -38,9 +38,11 @@ import {
   uid,
   validateStyleCandidate,
   type StyleCheck,
+  type BlendMode,
   type SheetLayout,
   sha256Hex,
   type Clip,
+  type ClipTag,
   type Frame,
   type Layer,
   type LoopMode,
@@ -184,6 +186,21 @@ function asInt(v: unknown, what: string, min: number, max: number): number {
     throw new CommandError('VALIDATION_FAILED', `${what} must be an integer in [${min}, ${max}]`)
   }
   return v
+}
+
+function parseClipTags(value: unknown, clip: Clip): ClipTag[] {
+  if (!Array.isArray(value) || value.length > 128) {
+    throw new CommandError('VALIDATION_FAILED', 'tags must be an array of at most 128 frame-range tags')
+  }
+  const maxIndex = Math.max(0, clip.frames.length - 1)
+  return value.map((raw, index) => {
+    if (!isRecord(raw)) throw new CommandError('VALIDATION_FAILED', `tags[${index}] must be an object`)
+    const name = asString(raw.name, `tags[${index}].name`, 64).trim()
+    if (!name) throw new CommandError('VALIDATION_FAILED', `tags[${index}].name cannot be empty`)
+    const from = asInt(raw.from, `tags[${index}].from`, 0, maxIndex)
+    const to = asInt(raw.to, `tags[${index}].to`, from, maxIndex)
+    return { name, from, to }
+  })
 }
 
 /**
@@ -697,6 +714,13 @@ const handlers: Record<string, ToolHandler> = {
     }
   },
 
+  async rename_project(args) {
+    const name = asString(args.name, 'name', 120).trim()
+    if (!name) throw new CommandError('VALIDATION_FAILED', 'name cannot be empty')
+    execCommand('project.rename', { name })
+    return withStateHash({ name }, { undoable: true, summary: `Renamed project to "${name}"` })
+  },
+
   async add_frame(args) {
     const project = getBus().getProject()
     const clip = resolveClipRef(project, args)
@@ -729,6 +753,18 @@ const handlers: Record<string, ToolHandler> = {
     const to = asInt(args.to, 'to', 0, Math.max(0, clip.frames.length - 1))
     execCommand('frame.move', { clipId: clip.id, from, to })
     return withStateHash({ clipId: clip.id, from, to, frameCount: clip.frames.length }, { undoable: true, summary: `Moved frame ${from} → ${to} in "${clip.name}"` })
+  },
+
+  async set_frame_duration(args) {
+    const project = getBus().getProject()
+    const clip = resolveClipRef(project, args)
+    const { frame, index } = resolveFrameRef(clip, args)
+    const durationMs = asInt(args.durationMs, 'durationMs', 0, 60_000)
+    execCommand('frame.setDuration', { clipId: clip.id, frameId: frame.id, durationMs })
+    return withStateHash(
+      { clipId: clip.id, frameId: frame.id, frameIndex: index, durationMs },
+      { undoable: true, summary: `Set frame ${index + 1} duration to ${durationMs === 0 ? 'clip FPS' : `${durationMs} ms`}` },
+    )
   },
 
   async delete_frame(args) {
@@ -1019,6 +1055,14 @@ const handlers: Record<string, ToolHandler> = {
     return withStateHash({ clipId: clip.id, patch }, { undoable: true, summary: `Updated clip "${clip.name}"` })
   },
 
+  async set_clip_tags(args) {
+    const project = getBus().getProject()
+    const clip = resolveClipRef(project, args)
+    const tags = parseClipTags(args.tags, clip)
+    execCommand('clip.setTags', { clipId: clip.id, tags })
+    return withStateHash({ clipId: clip.id, tags }, { undoable: true, summary: `Set ${tags.length} animation tag${tags.length === 1 ? '' : 's'} on "${clip.name}"` })
+  },
+
   async delete_clip(args) {
     const project = getBus().getProject()
     const clip = resolveClipRef(project, args)
@@ -1082,9 +1126,32 @@ const handlers: Record<string, ToolHandler> = {
       }
       patch.opacity = args.opacity
     }
-    if (Object.keys(patch).length === 0) throw new CommandError('VALIDATION_FAILED', 'provide at least one of name/visible/opacity')
+    if (args.locked !== undefined) {
+      if (typeof args.locked !== 'boolean') throw new CommandError('VALIDATION_FAILED', 'locked must be boolean')
+      patch.locked = args.locked
+    }
+    if (args.blend !== undefined) {
+      const blendModes: BlendMode[] = ['normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten']
+      if (typeof args.blend !== 'string' || !blendModes.includes(args.blend as BlendMode)) {
+        throw new CommandError('VALIDATION_FAILED', 'blend must be normal | multiply | screen | overlay | darken | lighten')
+      }
+      patch.blend = args.blend
+    }
+    if (Object.keys(patch).length === 0) throw new CommandError('VALIDATION_FAILED', 'provide at least one of name/visible/opacity/locked/blend')
     execCommand('layer.setProps', { clipId: clip.id, layerId: layer.id, patch })
     return withStateHash({ clipId: clip.id, layerId: layer.id, patch }, { undoable: true, summary: `Updated layer "${layer.name}"` })
+  },
+
+  async set_layer_linked(args) {
+    const project = getBus().getProject()
+    const clip = resolveClipRef(project, args)
+    const layer = resolveLayerRef(clip, args)
+    if (typeof args.linked !== 'boolean') throw new CommandError('VALIDATION_FAILED', 'linked must be boolean')
+    execCommand('layer.setLinked', { clipId: clip.id, layerId: layer.id, linked: args.linked })
+    return withStateHash(
+      { clipId: clip.id, layerId: layer.id, linked: args.linked },
+      { undoable: true, summary: `${args.linked ? 'Linked' : 'Unlinked'} layer "${layer.name}" across frames` },
+    )
   },
 
   async reorder_layers(args) {
@@ -1109,6 +1176,12 @@ const handlers: Record<string, ToolHandler> = {
     const hex = asHex(args.hex, 'hex')
     execCommand('palette.addColor', { hex })
     return withStateHash({ added: hex, palette: [...getBus().getProject().palette] }, { undoable: true, summary: `Added ${hex} to the palette` })
+  },
+
+  async remove_palette_color(args) {
+    const hex = asHex(args.hex, 'hex')
+    execCommand('palette.removeColor', { hex })
+    return withStateHash({ removed: hex, palette: [...getBus().getProject().palette] }, { undoable: true, summary: `Removed ${hex} from the palette` })
   },
 
   async set_palette(args) {

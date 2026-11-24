@@ -291,6 +291,13 @@ describe('pairing + tool workflow (real MCP protocol)', () => {
     expect(names).toContain('suggest_motion_preset');
     expect(names).toContain('set_parts');
     expect(names).toContain('apply_motion_preset');
+    // Full editor parity: visible project, timing, tag, layer, and palette
+    // controls are available to paired MCP clients as well as the UI.
+    expect(names).toContain('rename_project');
+    expect(names).toContain('set_frame_duration');
+    expect(names).toContain('set_clip_tags');
+    expect(names).toContain('set_layer_linked');
+    expect(names).toContain('remove_palette_color');
 
     const state = textEnvelope(await client.callTool({ name: 'get_project_state', arguments: {} }));
     expect(state.ok).toBe(true);

@@ -276,6 +276,17 @@ export const TOOL_CATALOG: ToolDef[] = [
     },
   },
   {
+    name: 'rename_project',
+    title: 'Rename project',
+    description: 'Change the active project name. This changes document metadata only and is fully undoable.',
+    tier: 'L1',
+    relay: true,
+    inputSchema: {
+      name: z.string().trim().min(1).max(120).describe('New project name.'),
+      ...staleGuard,
+    },
+  },
+  {
     name: 'duplicate_frame',
     title: 'Duplicate frame',
     description: 'Insert an exact copy of a frame right after it (undoable, trash-free).',
@@ -311,6 +322,19 @@ export const TOOL_CATALOG: ToolDef[] = [
     inputSchema: {
       ...clipRef,
       frameIndex: z.number().int().min(0).max(4095).optional().describe('Frame to delete. Default: the active frame.'),
+      ...staleGuard,
+    },
+  },
+  {
+    name: 'set_frame_duration',
+    title: 'Set frame duration',
+    description: 'Set one frame duration in milliseconds. Use 0 to inherit the clip FPS. Fully undoable.',
+    tier: 'L1',
+    relay: true,
+    inputSchema: {
+      ...clipRef,
+      ...frameRef,
+      durationMs: z.number().int().min(0).max(60_000).describe('0 = inherit clip FPS; otherwise 1–60000 ms.'),
       ...staleGuard,
     },
   },
@@ -529,6 +553,22 @@ export const TOOL_CATALOG: ToolDef[] = [
     },
   },
   {
+    name: 'set_clip_tags',
+    title: 'Set animation tags',
+    description: 'Replace the named frame ranges for a clip (for example idle, walk, attack). Frame indexes are zero-based and inclusive.',
+    tier: 'L1',
+    relay: true,
+    inputSchema: {
+      ...clipRef,
+      tags: z.array(z.object({
+        name: z.string().trim().min(1).max(64),
+        from: z.number().int().min(0).max(4095),
+        to: z.number().int().min(0).max(4095),
+      }).strict().refine((tag) => tag.to >= tag.from, { message: 'tag.to must be greater than or equal to tag.from' })).max(128),
+      ...staleGuard,
+    },
+  },
+  {
     name: 'add_layer',
     title: 'Add layer',
     description: 'Append an empty layer to the top of a clip\'s stack.',
@@ -576,6 +616,21 @@ export const TOOL_CATALOG: ToolDef[] = [
       name: z.string().trim().min(1).max(120).optional(),
       visible: z.boolean().optional(),
       opacity: z.number().min(0).max(1).optional(),
+      locked: z.boolean().optional().describe('Paint lock: pixel tools cannot change this layer while locked.'),
+      blend: z.enum(['normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten']).optional(),
+      ...staleGuard,
+    },
+  },
+  {
+    name: 'set_layer_linked',
+    title: 'Set linked layer',
+    description: 'Link a layer so all frames share one cel, or unlink it into independent cels. Fully undoable.',
+    tier: 'L1',
+    relay: true,
+    inputSchema: {
+      ...clipRef,
+      ...layerRef,
+      linked: z.boolean(),
       ...staleGuard,
     },
   },
@@ -623,6 +678,17 @@ export const TOOL_CATALOG: ToolDef[] = [
     relay: true,
     inputSchema: {
       colors: z.array(hexColor).min(1).max(256).describe('The new palette, bottom → top order.'),
+      ...staleGuard,
+    },
+  },
+  {
+    name: 'remove_palette_color',
+    title: 'Remove palette color',
+    description: 'Remove one existing color from the project palette. It does not recolor pixels; use replace_color first when needed.',
+    tier: 'L1',
+    relay: true,
+    inputSchema: {
+      hex: hexColor.describe('Existing palette color to remove.'),
       ...staleGuard,
     },
   },

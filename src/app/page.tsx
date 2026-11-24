@@ -57,6 +57,12 @@ const RIGHT_TABS: { id: RightTab; label: string; icon: React.ReactNode; tone: 'e
   { id: 'reference', label: 'Reference', tone: 'ember', icon: <Images className="h-3.5 w-3.5" aria-hidden /> },
 ]
 
+const RIGHT_TAB_GROUPS = [
+  { label: 'Artwork', tabs: ['layers', 'reference'] as RightTab[] },
+  { label: 'Animate', tabs: ['motion'] as RightTab[] },
+  { label: 'Assist', tabs: ['agent', 'brain'] as RightTab[] },
+] as const
+
 function RightDock({ mobile }: { mobile: boolean }) {
   const rightTab = useEditor((s) => s.rightTab)
   const setRightTab = useEditor((s) => s.setRightTab)
@@ -163,26 +169,36 @@ function RightDock({ mobile }: { mobile: boolean }) {
 
         {/* tab bar — macOS segmented control; blue = artist panels, indigo = machine panels */}
         <div role="tablist" aria-label="Panel tabs" className="shrink-0 border-b border-zinc-800/80 p-2">
-          <div className="flex gap-1 rounded-lg bg-zinc-800/60 p-0.5">
-            {RIGHT_TABS.map((t) => (
-              <button
-                key={t.id}
-                role="tab"
-                type="button"
-                aria-selected={rightTab === t.id}
-                onClick={() => setRightTab(t.id)}
-                title={t.id === 'brain' ? 'Brain (Ctrl+Shift+B)' : t.label}
-                className={`flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-all ${
-                  rightTab === t.id
-                    ? t.tone === 'frost'
-                      ? 'bg-zinc-900/90 text-frost-300 shadow-sm ring-1 ring-white/10'
-                      : 'bg-zinc-900/90 text-teal-400 shadow-sm ring-1 ring-white/10'
-                    : 'text-zinc-400 hover:text-zinc-200'
-                }`}
-              >
-                {t.icon}
-                <span className="truncate">{t.label}</span>
-              </button>
+          <div className="space-y-1.5">
+            {RIGHT_TAB_GROUPS.map((group) => (
+              <div key={group.label} className="flex min-w-0 items-center gap-1.5">
+                <span className="w-11 shrink-0 font-mono text-[9px] uppercase tracking-[0.12em] text-zinc-600">{group.label}</span>
+                <div className="flex min-w-0 flex-1 gap-1 rounded-md bg-zinc-800/60 p-0.5">
+                  {group.tabs.map((id) => {
+                    const t = RIGHT_TABS.find((tab) => tab.id === id)!
+                    return (
+                      <button
+                        key={t.id}
+                        role="tab"
+                        type="button"
+                        aria-selected={rightTab === t.id}
+                        onClick={() => setRightTab(t.id)}
+                        title={t.id === 'brain' ? 'Brain (Ctrl+Shift+B)' : t.label}
+                        className={`flex min-w-0 flex-1 items-center justify-center gap-1.5 rounded px-2 py-1.5 text-xs font-medium transition-all ${
+                          rightTab === t.id
+                            ? t.tone === 'frost'
+                              ? 'bg-zinc-900/90 text-frost-300 shadow-sm ring-1 ring-white/10'
+                              : 'bg-zinc-900/90 text-teal-400 shadow-sm ring-1 ring-white/10'
+                            : 'text-zinc-400 hover:text-zinc-200'
+                        }`}
+                      >
+                        {t.icon}
+                        <span className="truncate">{t.label}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
             ))}
           </div>
         </div>

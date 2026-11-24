@@ -55,9 +55,12 @@ import {
 } from '@/lib/pixelforge/brain-core'
 import { MCP_TOOLS } from '@/lib/pixelforge/mcp-tool-catalog'
 import {
+  PIXEL_ART_RECIPES,
+  applyPixelArtRecipe,
   defaultBriefFields,
   buildAssetBrief,
   type AssetBriefFields,
+  type PixelArtRecipeId,
 } from '@/lib/pixelforge/asset-brief'
 
 const QUICK_PROMPT_EXAMPLES = [
@@ -144,10 +147,11 @@ export function SecondBrain() {
     }>
   >([])
 
-  // --- Asset Brief (deterministic work spec → task board; no model call) ---
+  // --- Pixel Art Recipe (deterministic work contract → task board) ---
   const [brief, setBrief] = useState<AssetBriefFields>(() =>
     defaultBriefFields(project, readBrainMemory()),
   )
+  const [selectedRecipe, setSelectedRecipe] = useState<PixelArtRecipeId | null>(null)
   const [briefPreviewOpen, setBriefPreviewOpen] = useState(false)
   const [briefText, setBriefText] = useState('')
   const [briefEdited, setBriefEdited] = useState(false)
@@ -167,6 +171,11 @@ export function SecondBrain() {
   const [briefBusy, setBriefBusy] = useState(false)
   const setBriefField = (key: keyof AssetBriefFields, value: string | number | string[]) =>
     setBrief((f) => ({ ...f, [key]: value }))
+  const selectRecipe = (recipeId: PixelArtRecipeId) => {
+    setSelectedRecipe(recipeId)
+    setBrief((fields) => applyPixelArtRecipe(fields, recipeId))
+    setBriefStatus(null)
+  }
 
   const composeBrief = () => {
     const { detail } = buildAssetBrief(brief, project, memory)
@@ -207,7 +216,7 @@ export function SecondBrain() {
     try {
       const res = await mcpCtrl<{ tasks: unknown[] }>({
         kind: 'brain-push',
-        tasks: [{ title: `Asset brief: ${brief.assetType || 'asset'}`, detail: briefText, targetProject: currentProjectIdentity() }],
+        tasks: [{ title: `Pixel art recipe: ${brief.assetType || 'asset'}`, detail: briefText, targetProject: currentProjectIdentity() }],
       })
       if (res.ok) {
         setBriefStatus('sent')
@@ -555,19 +564,55 @@ export function SecondBrain() {
         )}
       </div>
 
-      {/* ------------------------------------------------ 1.5 Asset Brief → IDE Agent */}
+      {/* ------------------------------------------------ 1.5 Pixel Art Recipe → IDE Agent */}
       <details className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-2.5">
         <summary className="flex cursor-pointer list-none items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-zinc-300 [&::-webkit-details-marker]:hidden">
-          <ClipboardList className="h-3.5 w-3.5 text-teal-400" /> Asset Brief → IDE Agent
-          <span className="ml-auto normal-case tracking-normal text-zinc-500">game-ready work spec</span>
+          <ClipboardList className="h-3.5 w-3.5 text-teal-400" /> Pixel Art Recipe → IDE Agent
+          <span className="ml-auto normal-case tracking-normal text-zinc-500">draw, review, refine</span>
         </summary>
         <p className="mb-2 font-mono text-[9px] leading-tight text-zinc-500">
-          Describe the asset precisely; the composed brief lands on the agent task board (or your clipboard).
-          Deterministic — no model call.
+          Choose a recipe, customize it, then send a staged drawing contract to your paired IDE agent.
+          It draws with PixelForge tools—no image generation.
         </p>
 
         {!briefPreviewOpen ? (
           <>
+            <div className="mb-2 grid grid-cols-3 gap-1" aria-label="Pixel art recipe types">
+              {PIXEL_ART_RECIPES.map((recipe) => {
+                const selected = selectedRecipe === recipe.id
+                return (
+                  <button
+                    key={recipe.id}
+                    type="button"
+                    onClick={() => selectRecipe(recipe.id)}
+                    aria-pressed={selected}
+                    title={recipe.description}
+                    className={`min-w-0 rounded border px-1.5 py-1.5 text-left transition-colors ${
+                      selected
+                        ? 'border-teal-500/60 bg-teal-950/50 text-teal-200'
+                        : 'border-zinc-800 bg-zinc-950 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
+                    }`}
+                  >
+                    <span className="block truncate font-mono text-[9px] font-semibold uppercase tracking-wide">
+                      {recipe.label}
+                    </span>
+                    <span className="mt-0.5 block line-clamp-2 text-[8px] leading-tight text-zinc-500">
+                      {recipe.description}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+            <div className="mb-2 flex items-center gap-1" aria-label="Recipe workflow">
+              {['Silhouette', 'Color', 'Polish', 'Animate', 'Review'].map((stage, index) => (
+                <div key={stage} className="flex min-w-0 flex-1 items-center gap-1">
+                  <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-zinc-800 font-mono text-[8px] text-teal-300">
+                    {index + 1}
+                  </span>
+                  <span className="truncate font-mono text-[8px] text-zinc-500">{stage}</span>
+                </div>
+              ))}
+            </div>
             <div className="grid grid-cols-2 gap-1.5">
               <label className="min-w-0 font-mono text-[9px] text-zinc-400">
                 Asset type
@@ -758,7 +803,7 @@ export function SecondBrain() {
                 setBriefText(e.target.value)
                 setBriefEdited(true)
               }}
-              aria-label="Asset brief text (editable)"
+              aria-label="Pixel art recipe text (editable)"
               className="pixelforge-scroll min-h-[140px] resize-y border-zinc-700 bg-zinc-950 px-2.5 py-2 font-mono text-[10px] leading-relaxed"
               spellCheck={false}
             />
@@ -825,20 +870,20 @@ export function SecondBrain() {
 
         {briefStatus === 'sent' && (
           <div role="status" className="mt-2 rounded border border-teal-700/60 bg-teal-950/30 px-2 py-1.5 font-mono text-[10px] leading-tight text-teal-200">
-            <strong>Brief sent to the task board</strong> — pending until an agent claims it. This is NOT “asset done”:
+            <strong>Recipe sent to the task board</strong> — pending until an agent claims it. This is NOT “asset done”:
             edits appear on the canvas when the connected agent finishes (watch the Agent Task Board below, ✓ rows).
           </div>
         )}
         {briefStatus === 'copied' && (
           <div role="status" className="mt-2 rounded border border-teal-700/60 bg-teal-950/30 px-2 py-1.5 font-mono text-[10px] leading-tight text-teal-200">
             <strong>Brief copied — paste it into your IDE agent.</strong> It will execute the same tools on the
-            same project (paired via Settings → MCP).
+            same project (paired via Settings → AI connection).
           </div>
         )}
         {briefStatus === 'not-connected-copied' && (
           <div role="alert" className="mt-2 rounded border border-amber-700/60 bg-amber-950/30 px-2 py-1.5 font-mono text-[10px] leading-tight text-amber-200">
             <strong>MCP is not connected — nothing was queued.</strong> Brief copied to your clipboard — paste it
-            into your IDE agent (pairing: Settings → MCP).
+            into your IDE agent (pairing: Settings → AI connection).
           </div>
         )}
         {briefStatus === 'not-connected-copy-failed' && (

@@ -41,9 +41,10 @@ import { StepperInput } from '@/components/pixelforge/stepper-input'
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
+import { Slider } from '@/components/ui/slider'
 import { useToast } from '@/hooks/use-toast'
 import { cn, friendlyError } from '@/lib/utils'
-import { FileImage, FolderDown, LayoutGrid, Loader2 } from 'lucide-react'
+import { FileImage, FolderDown, ImageIcon, LayoutGrid, Loader2, Minus, Plus, Scan } from 'lucide-react'
 import type { ExportOutcome, ExportScale } from '@/lib/pixelforge/export'
 
 // ---------------------------------------------------------------------------
@@ -89,6 +90,8 @@ function Segmented<T extends string>({
 const CHECKER_CLASS =
   'bg-[conic-gradient(from_90deg,#27272a_25%,#18181b_0_50%,#27272a_0_75%,#18181b_0)] bg-[length:16px_16px]'
 
+const PREVIEW_ZOOM_LEVELS = [1, 2, 4, 8, 16, 32] as const
+
 // ---------------------------------------------------------------------------
 
 export function ExportDialog({
@@ -115,6 +118,7 @@ export function ExportDialog({
   const [busy, setBusy] = useState(false)
   const [previewError, setPreviewError] = useState<string | null>(null)
   const [previewDims, setPreviewDims] = useState<{ w: number; h: number } | null>(null)
+  const [previewZoomIndex, setPreviewZoomIndex] = useState(3)
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
   // subscribe so the preview + captions track the live document & selection
@@ -284,24 +288,44 @@ export function ExportDialog({
   const desktop = typeof window !== 'undefined' && isDesktop()
   const namesPreview = planned.ok ? planned.plan.artifacts.map((a) => a.filename) : []
   const exportDisabled = busy || !planned.ok || activeClip.frames.length === 0
+  const previewZoom = PREVIEW_ZOOM_LEVELS[previewZoomIndex]
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="pixelforge-scroll max-h-[85dvh] overflow-y-auto border-zinc-800 bg-zinc-950 text-zinc-100 sm:max-w-4xl">
-        <DialogHeader>
-          <DialogTitle className="font-mono">Export game-ready assets</DialogTitle>
+      <DialogContent className="pixelforge-scroll max-h-[90dvh] overflow-y-auto border-zinc-800 bg-[#101114] p-0 text-zinc-100 sm:max-w-5xl">
+        <DialogHeader className="border-b border-zinc-800/90 bg-zinc-950/70 px-5 py-4 pr-12 sm:px-6">
+          <div className="flex items-center gap-3">
+            <div className="grid size-9 shrink-0 place-items-center rounded-md border border-teal-400/25 bg-teal-400/10 text-teal-200">
+              <ImageIcon className="size-4" />
+            </div>
+            <div className="min-w-0">
+              <DialogTitle className="font-mono text-base tracking-tight">Export assets</DialogTitle>
+              <DialogDescription className="mt-0.5 font-mono text-[11px] leading-relaxed text-zinc-400">
+                Prepare pixel-true files for your game. Editor-only overlays never export.
+              </DialogDescription>
+            </div>
+          </div>
+          <div className="sr-only">
           <DialogDescription className="font-mono text-xs text-zinc-400">
             Pixel-exact PNG + JSON metadata, deterministic across web and desktop. Onion skins,
             selection ants and guides never reach exports.
           </DialogDescription>
+          </div>
         </DialogHeader>
 
-        <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(14rem,0.85fr)_minmax(0,1.15fr)]">
+        <div className="grid min-w-0 lg:grid-cols-[minmax(18rem,0.88fr)_minmax(0,1.12fr)]">
           {/* left column: preview (landscape feel — the visual anchor) */}
-          <div className="min-w-0 space-y-1">
+          <section className="min-w-0 border-b border-zinc-800/90 bg-[#15171c] p-4 sm:p-5 lg:border-r lg:border-b-0 lg:p-6">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <h3 className="font-mono text-xs font-semibold uppercase tracking-[0.14em] text-zinc-200">Output preview</h3>
+                <p className="mt-0.5 font-mono text-[10px] text-zinc-500">Pixel-accurate, transparent canvas</p>
+              </div>
+              <div className="rounded-full border border-zinc-700 bg-zinc-900 px-2 py-1 font-mono text-[10px] text-teal-200">{previewZoom}× zoom</div>
+            </div>
             <div
               className={cn(
-                'grid h-[236px] w-full max-w-[320px] place-items-center overflow-hidden rounded-md border border-zinc-800 p-2',
+                'grid h-[min(42dvh,22rem)] w-full place-items-center overflow-auto rounded-md border border-zinc-700/80 p-5 shadow-inner',
                 CHECKER_CLASS,
               )}
             >
@@ -312,8 +336,9 @@ export function ExportDialog({
               ) : (
                 <canvas
                   ref={canvasRef}
-                  aria-label="Export preview at native pixel size"
-                  className="block h-auto max-h-full w-auto max-w-full [image-rendering:pixelated]"
+                  aria-label={`Export preview at ${previewZoom} times zoom`}
+                  className="block shrink-0 [image-rendering:pixelated]"
+                  style={previewDims ? { width: previewDims.w * previewZoom, height: previewDims.h * previewZoom } : undefined}
                 />
               )}
             </div>
@@ -322,10 +347,64 @@ export function ExportDialog({
                 ? `Output ${previewDims.w * exportScale}×${previewDims.h * exportScale} px · ${exportScale}× scale · transparent background`
                 : 'Preview unavailable'}
             </p>
-          </div>
+            <div className="mt-3 rounded-md border border-zinc-800 bg-zinc-950/50 p-2.5">
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className="size-7 border-zinc-700 bg-zinc-900 text-zinc-300 hover:bg-zinc-800 hover:text-white"
+                  onClick={() => setPreviewZoomIndex((index) => Math.max(0, index - 1))}
+                  disabled={previewZoomIndex === 0}
+                  aria-label="Zoom preview out"
+                  title="Zoom out"
+                >
+                  <Minus className="size-3.5" />
+                </Button>
+                <Slider
+                  value={[previewZoomIndex]}
+                  onValueChange={([value]) => setPreviewZoomIndex(value)}
+                  min={0}
+                  max={PREVIEW_ZOOM_LEVELS.length - 1}
+                  step={1}
+                  aria-label="Preview zoom level"
+                  className="mx-1 [&_[data-slot=slider-range]]:bg-teal-400 [&_[data-slot=slider-thumb]]:border-teal-400"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className="size-7 border-zinc-700 bg-zinc-900 text-zinc-300 hover:bg-zinc-800 hover:text-white"
+                  onClick={() => setPreviewZoomIndex((index) => Math.min(PREVIEW_ZOOM_LEVELS.length - 1, index + 1))}
+                  disabled={previewZoomIndex === PREVIEW_ZOOM_LEVELS.length - 1}
+                  aria-label="Zoom preview in"
+                  title="Zoom in"
+                >
+                  <Plus className="size-3.5" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 font-mono text-[10px] text-zinc-400 hover:bg-zinc-800 hover:text-white"
+                  onClick={() => setPreviewZoomIndex(0)}
+                  title="Show each source pixel at its native size"
+                >
+                  <Scan className="size-3" /> Native
+                </Button>
+              </div>
+              <p className="mt-2 font-mono text-[10px] leading-relaxed text-zinc-500">
+                Use the slider or + / − buttons to inspect individual pixels.
+              </p>
+            </div>
+          </section>
 
           {/* right column: all controls */}
-          <div className="min-w-0 space-y-4">
+          <section className="min-w-0 space-y-5 p-4 sm:p-5 lg:p-6">
+            <div>
+              <h3 className="font-mono text-xs font-semibold uppercase tracking-[0.14em] text-zinc-200">1. Choose what to export</h3>
+              <p className="mt-0.5 font-mono text-[10px] text-zinc-500">Pick content, format, and the final output size.</p>
+            </div>
           {/* scope + format */}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1">
@@ -376,7 +455,11 @@ export function ExportDialog({
           </div>
 
           {format === 'sheet' && (
-            <div className="space-y-3 rounded-md border border-zinc-800 bg-zinc-900/40 p-3">
+            <div className="space-y-3 rounded-md border border-zinc-800 bg-zinc-900/40 p-3.5">
+              <div>
+                <h3 className="font-mono text-xs font-semibold uppercase tracking-[0.14em] text-zinc-300">Sheet details</h3>
+                <p className="mt-0.5 font-mono text-[10px] text-zinc-500">Control how frames are packed into one image.</p>
+              </div>
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <div className="space-y-1">
                   <span className="font-mono text-[10px] uppercase tracking-wide text-zinc-400">Layout</span>
@@ -559,7 +642,7 @@ export function ExportDialog({
           <p className="flex items-center gap-1 font-mono text-[10px] text-zinc-400">
             <FileImage className="h-3 w-3" /> Files never overwrite silently — conflicts are reported before writing.
           </p>
-          </div>
+          </section>
         </div>
       </DialogContent>
     </Dialog>

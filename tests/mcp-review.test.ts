@@ -98,3 +98,27 @@ test('a pending PNG decode cannot add an image to a different project', async ()
   expect((await pending).error?.code).toBe('task_project_mismatch')
   expect(getBus().getProject()).toBe(replacement)
 })
+
+test('paired-AI editor tools cover project metadata, timing, tags, linked layers, layer access, and palette removal', async () => {
+  useEditor.getState().newProject(createProject({ name: 'Before', width: 16, height: 16 }))
+  const initial = getBus().getProject()
+  const clip = initial.clips[0]!
+  const layer = clip.layers[0]!
+
+  expect((await executeMcpTool('rename_project', { name: 'After' }, context)).ok).toBeTrue()
+  expect((await executeMcpTool('add_frame', { clipId: clip.id }, context)).ok).toBeTrue()
+  expect((await executeMcpTool('set_frame_duration', { clipId: clip.id, frameIndex: 1, durationMs: 150 }, context)).ok).toBeTrue()
+  expect((await executeMcpTool('set_clip_tags', { clipId: clip.id, tags: [{ name: 'idle', from: 0, to: 1 }] }, context)).ok).toBeTrue()
+  expect((await executeMcpTool('set_layer_linked', { clipId: clip.id, layerId: layer.id, linked: true }, context)).ok).toBeTrue()
+  expect((await executeMcpTool('set_layer_props', { clipId: clip.id, layerId: layer.id, locked: true, blend: 'multiply' }, context)).ok).toBeTrue()
+  expect((await executeMcpTool('add_palette_color', { hex: '#abcdef' }, context)).ok).toBeTrue()
+  expect((await executeMcpTool('remove_palette_color', { hex: '#abcdef' }, context)).ok).toBeTrue()
+
+  const project = getBus().getProject()
+  const updatedClip = project.clips[0]!
+  expect(project.name).toBe('After')
+  expect(updatedClip.frames[1]!.durationMs).toBe(150)
+  expect(updatedClip.tags).toEqual([{ name: 'idle', from: 0, to: 1 }])
+  expect(updatedClip.layers[0]).toMatchObject({ linked: true, locked: true, blend: 'multiply' })
+  expect(project.palette).not.toContain('#abcdef')
+})

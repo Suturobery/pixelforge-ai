@@ -55,6 +55,12 @@ export const MCP_TOOLS: McpToolInfo[] = [
     example: {},
   },
   {
+    name: 'validate_style',
+    tier: 'L0',
+    description: 'Run deterministic canvas, palette, alpha, and margin checks on a frame before review.',
+    example: { allowEdgeTouch: false },
+  },
+  {
     name: 'list_vfx',
     tier: 'L0',
     description: 'Catalog of deterministic procedural pixel-art VFX renderable locally by generate_vfx. Filter by category (fire, explosions, ice, lightning, arcane, nature, ui, pickups, …).',
@@ -103,6 +109,18 @@ export const MCP_TOOLS: McpToolInfo[] = [
     example: { copyContent: true },
   },
   {
+    name: 'rename_project',
+    tier: 'L1',
+    description: 'Rename the active project without changing its artwork.',
+    example: { name: 'hero-sprites' },
+  },
+  {
+    name: 'save_project',
+    tier: 'L2',
+    description: 'Save the active project; a new desktop project opens a native Save As dialog.',
+    example: {},
+  },
+  {
     name: 'duplicate_frame',
     tier: 'L1',
     description: 'Insert an exact copy of a frame right after it.',
@@ -119,6 +137,12 @@ export const MCP_TOOLS: McpToolInfo[] = [
     tier: 'L2',
     description: 'Delete a frame (trash-backed: restore_from_trash / undo recover it).',
     example: { frameIndex: 2 },
+  },
+  {
+    name: 'set_frame_duration',
+    tier: 'L1',
+    description: 'Set a frame duration in milliseconds; 0 inherits the clip FPS.',
+    example: { frameIndex: 0, durationMs: 120 },
   },
   {
     name: 'restore_from_trash',
@@ -205,6 +229,12 @@ export const MCP_TOOLS: McpToolInfo[] = [
     example: {},
   },
   {
+    name: 'set_clip_tags',
+    tier: 'L1',
+    description: 'Set named, inclusive frame ranges for animation states such as idle, walk, and attack.',
+    example: { tags: [{ name: 'walk', from: 0, to: 3 }] },
+  },
+  {
     name: 'add_layer',
     tier: 'L1',
     description: 'Append an empty layer to the top of the stack.',
@@ -226,13 +256,19 @@ export const MCP_TOOLS: McpToolInfo[] = [
     name: 'set_layer_props',
     tier: 'L1',
     description: 'Rename / hide / set opacity (0–1) on a layer.',
-    example: { visible: false },
+    example: { locked: true, blend: 'multiply' },
   },
   {
     name: 'reorder_layers',
     tier: 'L1',
     description: 'Move a layer up or down in the stack.',
     example: { direction: 'up' },
+  },
+  {
+    name: 'set_layer_linked',
+    tier: 'L1',
+    description: 'Link a layer across all frames or unlink it into independent cels.',
+    example: { linked: true },
   },
   {
     name: 'merge_down',
@@ -251,6 +287,12 @@ export const MCP_TOOLS: McpToolInfo[] = [
     tier: 'L2',
     description: 'Replace the whole palette (1–256 colors) in one undoable step.',
     example: { colors: ['#0d0d0d', '#f4f4f4', '#14b8a6'] },
+  },
+  {
+    name: 'remove_palette_color',
+    tier: 'L1',
+    description: 'Remove one existing color from the palette without recoloring pixels.',
+    example: { hex: '#14b8a6' },
   },
   {
     name: 'set_style_profile',

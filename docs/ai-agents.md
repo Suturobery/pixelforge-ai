@@ -70,7 +70,7 @@ The tier is fixed when the pairing code is generated. A higher tier includes eve
 | Tier | Name in the UI | Grants | Tools |
 | --- | --- | --- | --- |
 | `L0` | Read-only | Inspect state, frames, palette, style validation, animation preview, knowledge, the task board, the operation log | 20 |
-| `L1` | Read + undoable edits | Painting, frame/layer/clip edits, palette colors, imports, VFX, motion presets, macros, batch, undo/redo, claiming and finishing tasks | 39 |
+| `L1` | Read + undoable edits | Painting, frame/layer/clip edits, timing and tags, palette colors, imports, VFX, motion presets, macros, batch, undo/redo, claiming and finishing tasks | 44 |
 | `L2` | Edits + destructive and disk operations | Deletes, canvas resize, `replace_color`, `set_palette`, library palettes, exports, `save_project`, trash purge | 11 |
 | `L3` | Full project control | Same as `L2`. No tool is registered at `L3` today | 0 |
 
@@ -126,7 +126,7 @@ Coordinates are whole canvas pixels.
 
 ## Tool catalog
 
-70 tools: 55 are relayed to the editor and 15 are answered by the server. **Where** is *Editor*
+75 tools: 60 are relayed to the editor and 15 are answered by the server. **Where** is *Editor*
 (needs the app open) or *Server* (no editor needed).
 
 ### Reading the project
@@ -179,6 +179,7 @@ Coordinates are whole canvas pixels.
 | --- | --- | --- | --- | --- |
 | `create_project` | L1 | Editor | `name`, `width`, `height` (16–256), `fps` (default 8), `palette`, `confirm: true` | Replaces the active document. Refused with `dirty_project` while there are unsaved changes |
 | `open_project` | L1 | Editor | `projectId` | Same dirty guard |
+| `rename_project` | L1 | Editor | `name` | Renames the active document without changing artwork |
 | `save_project` | L2 | Editor | — | Saves to the current file. With no file yet, the app opens a native Save As dialog and waits for the human |
 | `resize_canvas` | L2 | Editor | `width`, `height`, `anchor` `top-left` or `center` | Content is shifted, never rescaled |
 | `set_style_profile` | L1 | Editor | `profile` | Sets Style Lock. The whole profile object is required |
@@ -190,6 +191,7 @@ Coordinates are whole canvas pixels.
 | `add_frame` | L1 | clip, `afterIndex`, `copyContent` | Appends, or inserts after `afterIndex`. `copyContent` duplicates that frame's pixels |
 | `duplicate_frame` | L1 | clip, `frameIndex` | Exact copy inserted after the frame |
 | `reorder_frames` | L1 | clip, `from`, `to` | Moves a frame |
+| `set_frame_duration` | L1 | clip, frame, `durationMs` | `0` inherits the clip FPS; otherwise duration is milliseconds |
 | `delete_frame` | L2 | clip, `frameIndex` | Goes to the project trash |
 | `restore_from_trash` | L1 | `entryId` | Restores a deleted frame, layer or clip |
 | `purge_trash` | L2 | optional `entryId` | Permanently removes one entry, or the whole trash |
@@ -200,6 +202,7 @@ Coordinates are whole canvas pixels.
 | --- | --- | --- | --- |
 | `add_clip` | L1 | `name`, `fps`, `frameCount` (1–64) | New clip with its own layer stack |
 | `set_clip_props` | L1 | clip, `name`, `fps`, `loop`, `loopMode` | `loopMode` is `forward`, `reverse` or `pingpong` |
+| `set_clip_tags` | L1 | clip, `tags` | Replaces named inclusive frame ranges such as `walk: 0–3` |
 | `delete_clip` | L2 | clip | Goes to the project trash |
 
 ### Layers
@@ -211,6 +214,7 @@ Coordinates are whole canvas pixels.
 | `delete_layer` | L2 | clip, layer | Goes to the project trash |
 | `set_layer_props` | L1 | clip, layer, `name`, `visible`, `opacity` (0–1) | — |
 | `reorder_layers` | L1 | clip, layer, `direction` `up` or `down` | One position |
+| `set_layer_linked` | L1 | clip, layer, `linked` | Shares one cel across all frames, or unlinks into independent cels |
 | `merge_down` | L1 | clip, layer | Composites onto the layer below |
 
 ### Painting and transforms
@@ -232,6 +236,7 @@ All of these take clip, frame and layer references and are one undo step.
 | Tool | Tier | Where | Parameters | Notes |
 | --- | --- | --- | --- | --- |
 | `add_palette_color` | L1 | Editor | `hex` | No-op if present |
+| `remove_palette_color` | L1 | Editor | `hex` | Removes a palette entry; it does not recolor pixels |
 | `set_palette` | L2 | Editor | `colors` (1–256) | Replaces the whole palette |
 | `apply_library_palette` | L2 | Server | `id` | Resolves a library palette, then performs `set_palette` on the editor |
 | `harvest_palette` | L1 | Editor | `pngBase64`, `maxColors` (2–32, default 16) | Median-cut colours from any PNG, dark to light |

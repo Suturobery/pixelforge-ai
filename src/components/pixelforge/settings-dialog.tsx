@@ -30,7 +30,7 @@ import { Switch } from '@/components/ui/switch'
 import { SoftwareUpdatesCard } from '@/components/pixelforge/software-updates-card'
 import { Button } from '@/components/ui/button'
 import { isDesktop } from '@/lib/pixelforge/desktop-bridge'
-import { RotateCcw, Bot, Brain } from 'lucide-react'
+import { Bot, Brain, Cable, RotateCcw, ShieldCheck } from 'lucide-react'
 import type { ReactNode } from 'react'
 
 function Row({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
@@ -125,11 +125,10 @@ export function SettingsDialog({
         </DialogHeader>
 
         <Tabs defaultValue="general" className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-          <TabsList className="grid w-full shrink-0 grid-cols-5 bg-zinc-900">
+          <TabsList className="grid w-full shrink-0 grid-cols-4 bg-zinc-900">
             <TabsTrigger value="general" className="font-mono text-[11px]">General</TabsTrigger>
             <TabsTrigger value="canvas" className="font-mono text-[11px]">Canvas</TabsTrigger>
-            <TabsTrigger value="ai" className="font-mono text-[11px]">Agents</TabsTrigger>
-            <TabsTrigger value="mcp" className="font-mono text-[11px]">MCP</TabsTrigger>
+            <TabsTrigger value="ai" className="font-mono text-[11px]">AI connection</TabsTrigger>
             <TabsTrigger value="shortcuts" className="font-mono text-[11px]">Keys</TabsTrigger>
           </TabsList>
 
@@ -282,7 +281,35 @@ export function SettingsDialog({
 
           
           {/* -------------------------------------------- agents (subscription-only) */}
-          <TabsContent value="ai" className="pixelforge-scroll min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden pr-1 pt-2">
+          <TabsContent value="ai" className="pixelforge-scroll min-h-0 min-w-0 flex-1 space-y-3 overflow-y-auto overflow-x-hidden pr-1 pt-2">
+            <section className="rounded-lg border border-frost-900/60 bg-[linear-gradient(135deg,rgba(20,184,166,0.10),rgba(30,41,59,0.30))] p-3">
+              <div className="flex min-w-0 items-start gap-2.5">
+                <div className="grid size-8 shrink-0 place-items-center rounded-md border border-frost-400/25 bg-frost-400/10 text-frost-300">
+                  <Cable className="size-4" />
+                </div>
+                <div className="min-w-0">
+                  <p className="font-mono text-sm text-zinc-100">Connect your AI workspace</p>
+                  <p className="mt-1 font-mono text-[10px] leading-relaxed text-zinc-400">
+                    PixelForge provides the editor tools; your IDE provides the AI model. Enable a local MCP connection below for Codex, Cursor, Claude Code, Z.AI, or another compatible assistant.
+                  </p>
+                </div>
+              </div>
+              <ol className="mt-3 grid gap-1.5 sm:grid-cols-3" aria-label="AI connection steps">
+                {[
+                  ['1', 'Enable MCP', 'Starts a local-only bridge.'],
+                  ['2', 'Choose access', 'L2 gives a trusted agent full project control.'],
+                  ['3', 'Pair your IDE', 'Copy the one-time code into your assistant.'],
+                ].map(([step, title, detail]) => (
+                  <li key={step} className="flex min-w-0 gap-2 rounded-md border border-zinc-800/80 bg-zinc-950/45 p-2">
+                    <span className="grid size-5 shrink-0 place-items-center rounded-full bg-frost-400/15 font-mono text-[10px] font-semibold text-frost-200">{step}</span>
+                    <span className="min-w-0">
+                      <span className="block font-mono text-[10px] text-zinc-200">{title}</span>
+                      <span className="block font-mono text-[9px] leading-snug text-zinc-500">{detail}</span>
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            </section>
             <div className="rounded-lg border border-sky-900/60 bg-sky-950/20 p-2.5">
               <div className="flex min-w-0 items-start gap-2">
                 <Bot className="mt-0.5 h-4 w-4 shrink-0 text-sky-400" />
@@ -312,10 +339,10 @@ export function SettingsDialog({
                 </div>
               </div>
             </div>
-          </TabsContent>
-
-          {/* --------------------------------------------------------- MCP */}
-          <TabsContent value="mcp" className="pixelforge-scroll min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden pr-1 pt-2">
+            <div className="flex items-center gap-1.5 rounded-md border border-emerald-900/50 bg-emerald-950/15 px-2.5 py-2 font-mono text-[10px] leading-relaxed text-emerald-100/85">
+              <ShieldCheck className="size-3.5 shrink-0 text-emerald-300" />
+              A paired agent can control PixelForge only. It cannot access unrelated files or system settings.
+            </div>
             <McpConnections />
           </TabsContent>
 
