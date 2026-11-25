@@ -22,7 +22,7 @@ the `import_image_as_layer` tool.
 
 ### Pair
 
-1. In PixelForge open **Settings → MCP**, turn on **Enable MCP server**, and check that the
+1. In PixelForge open **Settings → AI connection**, turn on **Enable MCP server**, and check that the
    status line shows the server and a connected editor.
 2. Press **Connect AI Assistant**, pick a permission tier, and generate a pairing code. The code
    is six hyphenated words, single-use, and expires after 15 minutes.
@@ -69,9 +69,9 @@ The tier is fixed when the pairing code is generated. A higher tier includes eve
 
 | Tier | Name in the UI | Grants | Tools |
 | --- | --- | --- | --- |
-| `L0` | Read-only | Inspect state, frames, palette, style validation, animation preview, knowledge, the task board, the operation log | 20 |
-| `L1` | Read + undoable edits | Painting, frame/layer/clip edits, timing and tags, palette colors, imports, VFX, motion presets, macros, batch, undo/redo, claiming and finishing tasks | 44 |
-| `L2` | Edits + destructive and disk operations | Deletes, canvas resize, `replace_color`, `set_palette`, library palettes, exports, `save_project`, trash purge | 11 |
+| `L0` | Read-only | Inspect state, frames, palette, style validation, asset set consistency, animation preview, knowledge, the task board, the operation log | 23 |
+| `L1` | Read + undoable edits | Painting, frame/layer/clip edits, timing and tags, palette colors, imports, VFX, motion presets, macros, batch, undo/redo, claiming and finishing tasks | 54 |
+| `L2` | Edits + destructive and disk operations | Deletes, canvas resize, `replace_color`, `set_palette`, library palettes, exports, `save_project`, trash purge | 13 |
 | `L3` | Full project control | Same as `L2`. No tool is registered at `L3` today | 0 |
 
 A tier is checked twice: by the server before relaying, and by argument validation in the
@@ -126,7 +126,7 @@ Coordinates are whole canvas pixels.
 
 ## Tool catalog
 
-75 tools: 60 are relayed to the editor and 15 are answered by the server. **Where** is *Editor*
+90 tools: 75 are relayed to the editor and 15 are answered by the server. **Where** is *Editor*
 (needs the app open) or *Server* (no editor needed).
 
 ### Reading the project
@@ -139,6 +139,8 @@ Coordinates are whole canvas pixels.
 | `get_frame_png` | L0 | Editor | clip, frame, `scale` 1 / 0.5 / 0.25 | One composited frame as a PNG image and data URL |
 | `get_palette` | L0 | Editor | — | Palette and the enforcement flag |
 | `validate_style` | L0 | Editor | clip, frame, `allowEdgeTouch` | Technical checks: size, crisp alpha, palette membership, transparent background, margins |
+| `analyze_pixel_craft` | L0 | Editor | clip, frame | Pixel craft score and exact locations of common artifacts |
+| `validate_asset_set` | L0 | Editor | optional `actorClipIds` | Checks each clip's representative frame against the project palette; selected actors are compared with the pinned hero's height, ground line and outline |
 | `preview_animation` | L0 | Editor | clip, `maxFrames` (1–64, default 32) | Ordered frame PNGs, the playback schedule and empty-frame invariants |
 | `subscribe_events` | L0 | Editor | — | Current `stateHash` and how `projectChanged` notifications arrive |
 | `suggest_motion_preset` | L0 | Editor | `prompt` (≤500 chars) | A preset and parameters, from keyword matching. No model call |
@@ -402,6 +404,7 @@ The task board hands work from the artist to connected agents. It lives in the M
 | `planId`, `idempotencyKey` | Plan grouping and de-duplication |
 | `stateHashAtClaim`, `stateHashAtFinish`, `verified` | Completion verification |
 | `targetProjectKey`, `targetProjectName` | The project the task must run in |
+| `reviewStatus`, `reviewClipId`, `reviewFrameIndex`, `reviewStateHash`, `reviewedAt` | Artist's approval or revision request for a completed task, tied to the reviewed project state and frame |
 
 A project key is `db:<id>` for a database project, `file:<path>` for a file, or
 `unsaved:<session>:<epoch>` for an untitled document.
@@ -436,20 +439,24 @@ format version 2):
 Controls: clear recent activity and feedback while keeping preferences; factory reset; copy
 the whole record as JSON.
 
-**Asset Brief.** A form — asset type, camera angle, facing, pose or animation goal, colour
-limit, outline, lighting, detail level, references, must-include details, things to avoid,
-notes — turned into a structured work brief. **Queue** puts it on the task board for a
-connected agent. **Copy** is the fallback when MCP is unreachable: paste the brief into your
-IDE. A queued brief is a pending task, not finished art.
+**Pixel Art Recipe.** Choose a sprite recipe, set camera, pose, palette limit, lighting and
+references, then compose an editable drawing contract. **Queue** sends it to a connected IDE
+agent; **Copy** is the fallback when MCP is unreachable. The agent is asked to draw, inspect
+the native PNG, refine, and complete the task.
+
+**Artwork proof.** Open **Review** on a completed task to inspect the live selected clip at
+native 1× and enlarged size, play its frames with their saved timing, and see technical craft
+and Style Lock warnings. **Approve frame** stores a human verdict. **Request revision** queues
+a project-bound task with your feedback and the selected clip/frame. A warning appears if the
+project changes after approval; the proof is a live view, not a saved snapshot of agent output.
 
 **Board controls.** Cancel a task, re-queue failed tasks, remove finished tasks, and revoke an
 agent's token.
 
 ## Agent Console
 
-The **Agent** tab runs tools inside the app. It lists the 54 tools in
-`src/lib/pixelforge/mcp-tool-catalog.ts` — the relayed tools except `save_project` and
-`validate_style`, plus `get_operation_log` — executes each call in-process on the CommandBus,
+The **Agent** tab runs editor tools inside the app from
+`src/lib/pixelforge/mcp-tool-catalog.ts` — executes each call in-process on the CommandBus,
 and shows results, errors and a sprite preview.
 
 - **Review Result.** For pixel tools (`set_pixels`, `fill_rect`, `replace_color`, the

@@ -181,6 +181,16 @@ export const TOOL_CATALOG: ToolDef[] = [
     },
   },
   {
+    name: 'validate_asset_set',
+    title: 'Check asset set consistency',
+    description: 'Check each clip representative frame for project-palette colors. Pass actor clip ids to compare their height, ground line, and outline with the pinned Hero Style Anchor. Advisory: props and VFX should not be treated as actors.',
+    tier: 'L0',
+    relay: true,
+    inputSchema: {
+      actorClipIds: z.array(z.string().min(1).max(120)).max(64).optional().describe('Clip ids for characters and enemies; omitted clips receive palette checks only.'),
+    },
+  },
+  {
     name: 'list_templates',
     title: 'List starter sprite templates',
     description:

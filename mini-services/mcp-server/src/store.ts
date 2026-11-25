@@ -54,6 +54,13 @@ export interface BrainTask {
    *  is gated against the editor's ACTIVE project so work stays in place. */
   targetProjectKey: string | null;
   targetProjectName: string | null;
+  /** Human review of a completed task. The selected frame is a live project
+   * view; reviewStateHash records which document state was approved. */
+  reviewStatus: 'approved' | 'needs_changes' | null;
+  reviewClipId: string | null;
+  reviewFrameIndex: number | null;
+  reviewStateHash: string | null;
+  reviewedAt: number | null;
 }
 
 const BRAIN_STATUSES: readonly BrainTaskStatus[] = ['pending', 'claimed', 'running', 'done', 'failed', 'cancelled'];
@@ -79,6 +86,11 @@ function normalizeBrainTask(raw: Partial<BrainTask>): BrainTask {
     targetProjectKey: typeof raw.targetProjectKey === 'string' ? raw.targetProjectKey.slice(0, 160) : null,
     targetProjectName: typeof raw.targetProjectName === 'string' ? raw.targetProjectName.slice(0, 120) : null,
     verified: typeof raw.verified === 'boolean' ? raw.verified : null,
+    reviewStatus: raw.reviewStatus === 'approved' || raw.reviewStatus === 'needs_changes' ? raw.reviewStatus : null,
+    reviewClipId: typeof raw.reviewClipId === 'string' ? raw.reviewClipId.slice(0, 120) : null,
+    reviewFrameIndex: typeof raw.reviewFrameIndex === 'number' && Number.isInteger(raw.reviewFrameIndex) && raw.reviewFrameIndex >= 0 && raw.reviewFrameIndex < 4096 ? raw.reviewFrameIndex : null,
+    reviewStateHash: typeof raw.reviewStateHash === 'string' ? raw.reviewStateHash.slice(0, 64) : null,
+    reviewedAt: typeof raw.reviewedAt === 'number' && Number.isFinite(raw.reviewedAt) ? raw.reviewedAt : null,
   };
 }
 
@@ -341,6 +353,11 @@ export class McpStore {
           t.targetProject && typeof t.targetProject.name === 'string'
             ? t.targetProject.name.slice(0, 120)
             : null,
+        reviewStatus: null,
+        reviewClipId: null,
+        reviewFrameIndex: null,
+        reviewStateHash: null,
+        reviewedAt: null,
       });
     }
     // replace mode: a new plan supersedes ALL still-pending items (history stays);
@@ -354,6 +371,28 @@ export class McpStore {
   brainList(): BrainTask[] {
     this.sweepStaleClaims();
     return this.brainTasks;
+  }
+
+  /** Only the editor control plane can record a human verdict. The server
+   * checks the task and active project before persisting the review. */
+  brainReview(
+    id: string,
+    verdict: 'approved' | 'needs_changes',
+    clipId: string,
+    frameIndex: number,
+    currentProjectKey: string | null,
+    stateHash: string | null,
+  ): BrainTask | null {
+    const task = this.brainTasks.find((item) => item.id === id && item.status === 'done');
+    if (!task || !task.targetProjectKey || task.targetProjectKey !== currentProjectKey) return null;
+    if (!clipId || clipId.length > 120 || !Number.isInteger(frameIndex) || frameIndex < 0 || frameIndex >= 4096) return null;
+    task.reviewStatus = verdict;
+    task.reviewClipId = clipId;
+    task.reviewFrameIndex = frameIndex;
+    task.reviewStateHash = typeof stateHash === 'string' ? stateHash.slice(0, 64) : null;
+    task.reviewedAt = Date.now();
+    this.saveBrainTasks();
+    return task;
   }
 
   /** Project-gated claim result: `task` when claimed, `blockedBy` when the

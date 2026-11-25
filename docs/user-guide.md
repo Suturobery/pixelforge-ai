@@ -253,7 +253,9 @@ by side), `prompt.txt` and, when a reference is set, `style-reference.png`.
 The Agent and Brain panels work with AI assistants. See [AI and agents](ai-agents.md).
 
 - **Agent** runs tools inside the app and shows what connected agents did.
-- **Brain** interprets prompts, builds asset briefs and manages the task board. Ctrl+Shift+B.
+- **Brain** interprets prompts, builds Pixel Art Recipes and manages the task board. Ctrl+Shift+B.
+- On a completed task, choose **Review** to inspect the live clip at true 1× size or enlarged,
+  play its animation, see technical craft warnings, and approve the frame or request an IDE revision.
 - **Reference** also links to the reference clips used by Style Lock.
 
 ## Export
@@ -264,11 +266,11 @@ files, so what you see is what you get.
 | Option | Values |
 | --- | --- |
 | Scope | Current frame, current clip, or all clips |
-| Format | PNG frames · Sprite sheet · GIF (clip) |
+| Format | PNG frames · Sprite sheet · Master Atlas (all clips) · GIF (clip) |
 | Layout | Grid or horizontal strip (sprite sheet) |
 | Columns | Frames per row in grid layout |
 | Padding, spacing | Outer margin and gap between frames, in pixels |
-| Scale | 1× (native), 2×, 4×, 8×, nearest-neighbour |
+| Scale | 1× (native), 2×, 4×, 8×, 16×, nearest-neighbour |
 | GIF background | Transparent (dithered), dark, black, white |
 | File name base | Defaults to a slug of the project name |
 | Frame number digits | Zero-padding of frame indices |
@@ -285,26 +287,32 @@ or dithered when you pick "Trans".
 
 The source project is never modified by an export.
 
+For an all-clips sheet or Master Atlas, open **Asset set check** before export. It checks a
+representative frame of each clip for project-palette colors. Mark character or enemy clips as
+**Actor** to compare height, ground line and outline with your pinned Hero Style Anchor. Props,
+tiles and effects are not forced to match the hero's proportions. Warnings are advisory.
+
 ## Settings
 
 | Tab | Contents |
 | --- | --- |
 | General | Autosave delay, undo history limit, floating button size, UI text scale, software updates (desktop) |
 | Canvas | Defaults for new projects: canvas size, frame rate, palette; grid, onion skin, its opacity and tints |
-| Agents | Explains that agents use your IDE subscription and that deterministic Brain features stay in-app |
-| MCP | Server status and switch, pairing, connected clients, recent operations, troubleshooting |
+| AI connection | Explains IDE subscriptions and local Brain features; MCP server status, pairing, connection check, connected clients and troubleshooting |
 | Keys | The shortcut reference |
 
 Settings are remembered per browser. On desktop the settings file is the source of truth and
 follows your Windows account.
 
-### Settings → MCP
+### Settings → AI connection
 
 - **Enable MCP server** is the master switch. When off, every tool except pairing returns
   `mcp_disabled`.
 - The status line shows the endpoint, whether the editor is attached, and how many clients are
   paired.
 - **Connect AI Assistant** generates a pairing code for a tier you choose.
+- Choose the IDE name for the copied pairing guide. After the IDE calls `get_project_state`,
+  **Check connection** reports the service, editor, pairing and recent project read separately.
 - **Connected clients** lists paired assistants. Revoke one to cut its access immediately.
 - **Recent MCP operations** shows the audit trail.
 - **Take over the bridge** claims the editor slot from another PixelForge window that holds it.

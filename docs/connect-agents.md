@@ -6,7 +6,7 @@ review, L1 for drawing and animation, or L2 for project saves and disk exports.
 
 ## Connect (2 minutes)
 
-1. Open PixelForge → **Settings → MCP** → pick a permission tier →
+1. Open PixelForge → **Settings → AI connection** → choose your IDE and permission tier →
    **Generate pairing code** (6 words, single-use, expires in 15 minutes).
 2. In your IDE, add an MCP server:
    - Endpoint: `http://127.0.0.1:3030/mcp` (Streamable HTTP, localhost only)
@@ -14,8 +14,9 @@ review, L1 for drawing and animation, or L2 for project saves and disk exports.
 3. Call `pair_client { name: "your-client" }` — you get a persistent
    `pfm_…` token. **Replace** the temporary Authorization header with it.
 4. Start every session with `get_project_state` — its ids and `stateHash`
-   feed every other tool. The in-app guide (`Settings → MCP → IDE guide`)
+   feed every other tool. The in-app guide (`Settings → AI connection → IDE guide`)
    copies these steps with the live endpoint filled in.
+5. Ask the IDE agent to call `get_project_state`, then run **Check connection** in PixelForge.
 
 Desktop app: it supervises the MCP service itself — no terminal needed.
 Web/dev: `bun src/index.ts` inside `mini-services/mcp-server`.
@@ -55,13 +56,12 @@ Text-only clients can still read frame metadata, timing and technical checks.
 - Read-only resources: `pixelforge://capabilities` (tier-filtered
   catalog) and `pixelforge://project/active` (live project summary).
 
-**In-app Asset Brief (artist-side):** the Brain Panel can compose a
-structured, editable work brief (asset type, camera, facing, pose, color
-limit, outline, lighting, references, must-include/avoid) from the active
-project + Style Lock and queue it on this same task board via `brain-push`
-— deterministic, no model call. If MCP is unreachable it offers a
-clipboard fallback for pasting into your IDE agent. A sent brief is a
-task pending; it is not completed art until an agent finishes the work.
+**In-app Pixel Art Recipe (artist-side):** the Brain panel composes a staged
+drawing contract from the active project + Style Lock. The agent draws via MCP,
+then reviews the PNG and technical checks. After a task finishes, the artist
+can open **Review**, approve a frame, or queue a revision with specific feedback.
+`validate_asset_set` checks palette consistency across clips; provide
+`actorClipIds` for hero-based height, ground line and outline comparisons.
 
 ## Troubleshooting
 

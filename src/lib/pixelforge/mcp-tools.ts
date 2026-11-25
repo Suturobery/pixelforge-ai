@@ -68,6 +68,7 @@ import {
   type RGBA,
 } from '@pixelforge/core'
 import { generateGodot4AtlasTres, type ExportScale } from './export'
+import { reviewAssetSet } from './asset-set-review'
 import { getBus, useEditor } from './store'
 import { MCP_TOOLS } from './mcp-tool-catalog'
 import { hexToRgba } from './color'
@@ -659,6 +660,22 @@ const handlers: Record<string, ToolHandler> = {
       },
       { summary: report.summary },
     )
+  },
+
+  async validate_asset_set(args) {
+    const project = getBus().getProject()
+    const raw = args.actorClipIds
+    if (raw !== undefined && (!Array.isArray(raw) || raw.length > 64 || raw.some((id) => typeof id !== 'string' || id.length === 0 || id.length > 120 || !project.clips.some((clip) => clip.id === id)))) {
+      throw new CommandError('VALIDATION_FAILED', 'actorClipIds must be an array of up to 64 clip ids from the active project')
+    }
+    const rows = reviewAssetSet(project, (raw as string[] | undefined) ?? [])
+    const attention = rows.filter((row) => row.issues.length > 0).length
+    return withStateHash({
+      anchor: project.settings.styleProfile?.anchor ?? null,
+      rows,
+      attention,
+      scope: 'representative frame of each clip; actor comparisons only for actorClipIds',
+    }, { summary: `${rows.length} clips checked; ${attention} need attention` })
   },
 
   async list_templates() {

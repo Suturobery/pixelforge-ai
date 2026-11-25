@@ -34,10 +34,12 @@ export interface IdeGuideInput {
   tier: PairingTier
   endpoint: string
   token: string
+  clientName?: string
 }
 
 /** Build the clipboard guide for ONE pairing — tier-accurate, deterministic. */
-export function buildIdeGuide({ tier, endpoint, token }: IdeGuideInput): string {
+export function buildIdeGuide({ tier, endpoint, token, clientName = 'IDE assistant' }: IdeGuideInput): string {
+  const name = clientName.trim().slice(0, 80) || 'IDE assistant'
   return [
     `PixelForge AI MCP — pairing tier ${tier} (${tierSummary(tier).replace(/^L\d — /, '')})`,
     `Endpoint: ${endpoint}`,
@@ -46,11 +48,12 @@ export function buildIdeGuide({ tier, endpoint, token }: IdeGuideInput): string 
     '',
     'Connect steps:',
     '1. Add the endpoint as an MCP server in your IDE assistant.',
-    '2. Call pair_client with a friendly name (for example "Codex" or "Claude Desktop").',
+    `2. Call pair_client { name: ${JSON.stringify(name)} } with the temporary code.`,
     '3. Replace the temporary Authorization value with the returned persistent token.',
     '4. Call get_project_state first, then use the returned ids/stateHash for tools.',
     '5. Read get_knowledge for the task (methodology and grids for drawing, animation for motion, vfx for effects).',
     '6. Review the PNG from get_frame_png or the sequence from preview_animation. Inspect readability and run validate_style.',
+    'For IDEs that only launch local MCP commands, use the PixelForge stdio proxy with PF_MCP_URL and the persistent PF_MCP_TOKEN after pairing.',
     '',
     TIER_PERMISSIONS[tier],
     'No image generation tool exists (generate_sprite is not registered) and none is planned.',

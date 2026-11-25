@@ -66,6 +66,25 @@ test('a targeted task waits for a known matching project before claim, progress 
   expect(store.brainFinish(task!.id, 'client', true, 'Done', null, project).task?.status).toBe('done');
 });
 
+test('human artwork review is recorded only for a completed task in its target project', () => {
+  const store = freshStore();
+  const project = { key: 'file:hero', name: 'Hero' };
+  const [task] = store.brainPush([{ title: 'Draw hero', detail: 'Make a sprite', targetProject: project }]);
+  expect(store.brainReview(task!.id, 'approved', 'clip-1', 0, project.key, 'hash-1')).toBeNull();
+  store.brainClaim(task!.id, 'agent', 'client', 'before', project);
+  store.brainFinish(task!.id, 'client', true, 'Done', 'after', project);
+  expect(store.brainReview(task!.id, 'approved', 'clip-1', 0, 'file:other', 'hash-1')).toBeNull();
+  expect(store.brainReview(task!.id, 'approved', 'clip-1', -1, project.key, 'hash-1')).toBeNull();
+  const reviewed = store.brainReview(task!.id, 'approved', 'clip-1', 0, project.key, 'hash-1');
+  expect(reviewed?.reviewStatus).toBe('approved');
+  expect(reviewed?.reviewStateHash).toBe('hash-1');
+  expect(reviewed?.reviewClipId).toBe('clip-1');
+  const reloaded = new McpStore({ dataDir: store.dataDir });
+  expect(reloaded.brainList()[0]?.reviewStatus).toBe('approved');
+  expect(reloaded.brainReview(task!.id, 'needs_changes', 'clip-1', 64, project.key, 'hash-2')?.reviewFrameIndex).toBe(64);
+  expect(store.brainReview(task!.id, 'approved', 'clip-1', 4096, project.key, 'hash-3')).toBeNull();
+});
+
 describe('task board reliability (P0-3)', () => {
   test('push → list → claim (exclusive) → complete', () => {
     const store = freshStore();

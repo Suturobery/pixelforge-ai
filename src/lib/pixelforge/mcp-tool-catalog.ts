@@ -67,6 +67,12 @@ export const MCP_TOOLS: McpToolInfo[] = [
     example: {},
   },
   {
+    name: 'validate_asset_set',
+    tier: 'L0',
+    description: 'Check each clip representative frame against the project palette; compare actorClipIds with the pinned Hero Style Anchor for height, ground line, and outline.',
+    example: { actorClipIds: [] },
+  },
+  {
     name: 'list_templates',
     tier: 'L0',
     description: 'List the 8 built-in palette-locked Starter Sprite Templates (chibi-humanoid, slime, rpg-sword, potion-flask, treasure-chest, stone-pedestal, topdown-tree, dungeon-tile).',

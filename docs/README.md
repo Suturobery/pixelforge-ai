@@ -4,8 +4,8 @@ PixelForge AI is a Windows-first pixel-art and frame-by-frame animation studio w
 local MCP server, so AI assistants running in your own IDE can inspect and edit the same
 document you edit by hand — through the same command bus, with the same undo history.
 
-This folder is the complete documentation set. It describes the code as it is on disk on
-**2026-11-25** (commit `b007c55` plus uncommitted working-tree changes).
+This folder describes the current source and historical project decisions. Check the package
+manifests and tool catalog for the exact version and MCP count in your checkout.
 
 ## The docs
 
@@ -14,7 +14,7 @@ This folder is the complete documentation set. It describes the code as it is on
 | [Overview](overview.md) | What the product is, who it is for, the full feature list, what is deliberately absent, component versions, quick start, repository map | Current |
 | [User guide](user-guide.md) | The editor: layout, tools, shortcuts, layers, timeline, palettes, Style Lock, Motion, VFX, Reference, export, files, settings | Current |
 | [Architecture](architecture.md) | Processes and ports, the single mutation path, how a tool call travels, editor bridge protocol, trust boundaries, HTTP API surface | Current |
-| [AI and agents](ai-agents.md) | Pairing, permission tiers, rate limits, all 70 MCP tools, result envelope, error codes, notifications and resources, task board, Second Brain, Agent Console | Current |
+| [AI and agents](ai-agents.md) | Pairing, permission tiers, rate limits, MCP tools, result envelope, error codes, notifications and resources, task board, Second Brain, Agent Console | Current |
 | [Knowledge base](knowledge-base.md) | The 21 knowledge topics agents can read, learned styles, the 2006-palette library | Current |
 | [Project and file formats](project-format.md) | Document model v2, `.pixelforgeproj` container, the v1 web/SQLite format, autosave and journal files, where every file lives | Current |
 | [Core engine](core-engine.md) | `@pixelforge/core`: module map, public API, CommandBus, pixel ops, history, playback, export service, motion presets, AI helpers, persistence | Current |

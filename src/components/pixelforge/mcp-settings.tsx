@@ -49,6 +49,7 @@ interface PairingClient {
 
 interface OpRow {
   ts: string
+  clientId: string | null
   clientName: string
   tool: string
   tier: 'L0' | 'L1' | null
@@ -104,7 +105,16 @@ export function McpConnections() {
   // are registered at L3 anymore). The user can still deliberately choose a
   // smaller tier for an untrusted/read-only assistant.
   const [pairTier, setPairTier] = useState<'L0' | 'L1' | 'L2'>('L2')
+  const [ideName, setIdeName] = useState('Codex')
   const [pairingBusy, setPairingBusy] = useState(false)
+  const [checking, setChecking] = useState(false)
+  const [connectionCheck, setConnectionCheck] = useState<{
+    server: boolean
+    editor: boolean
+    paired: boolean
+    recentRead: boolean
+    error?: string
+  } | null>(null)
   const [copied, setCopied] = useState<'code' | 'endpoint' | 'guide' | null>(null)
 
   const refresh = useCallback(async () => {
@@ -186,6 +196,32 @@ export function McpConnections() {
     }
   }
 
+  const checkConnection = async () => {
+    setChecking(true)
+    try {
+      const [status, clientResult, operationResult] = await Promise.all([
+        mcpCtrl<{ mcpEnabled: boolean; editorConnected: boolean }>({ kind: 'status' }),
+        mcpCtrl<{ clients: PairingClient[] }>({ kind: 'clients-list' }),
+        mcpCtrl<{ ops: OpRow[] }>({ kind: 'ops-recent', limit: 100 }),
+      ])
+      const active = clientResult.ok ? clientResult.data?.clients.filter((client) => !client.revoked) ?? [] : []
+      const clientIds = new Set(active.map((client) => client.clientId))
+      const cutoff = Date.now() - 30 * 60_000
+      setConnectionCheck({
+        server: status.ok && status.data?.mcpEnabled === true,
+        editor: status.ok && status.data?.editorConnected === true,
+        paired: active.length > 0,
+        recentRead: operationResult.ok && (operationResult.data?.ops.some((op) => op.ok && op.tool === 'get_project_state' && op.clientId !== null && clientIds.has(op.clientId) && new Date(op.ts).getTime() >= cutoff) ?? false),
+        error: !status.ok ? status.error?.message ?? 'MCP service unavailable' : undefined,
+      })
+      await refresh()
+    } catch {
+      setConnectionCheck({ server: false, editor: false, paired: false, recentRead: false, error: 'Could not reach the MCP service.' })
+    } finally {
+      setChecking(false)
+    }
+  }
+
   const secsLeft = pairing ? Math.max(0, Math.floor((new Date(pairing.expiresAt).getTime() - Date.now()) / 1000)) : 0
   const activeClients = clients.filter((c) => !c.revoked)
   const serverReady = bridge.status === 'connected' && bridge.server?.mcpEnabled === true
@@ -196,6 +232,7 @@ export function McpConnections() {
         tier: pairing.tier,
         endpoint: bridge.server?.endpoint ?? 'http://127.0.0.1:3030/mcp',
         token: pairing.token,
+        clientName: ideName,
       })
     : null
 
@@ -296,6 +333,14 @@ export function McpConnections() {
         </p>
         {!pairing ? (
           <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2">
+            <Select value={ideName} onValueChange={setIdeName}>
+              <SelectTrigger className="data-[size=default]:h-7 w-[130px] border-zinc-800 bg-zinc-900 px-2 font-mono text-[10px] text-zinc-300" aria-label="IDE assistant">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="border-zinc-800 bg-zinc-950">
+                {['Codex', 'Claude', 'Antigravity', 'Cursor', 'Other IDE'].map((name) => <SelectItem key={name} value={name} className="font-mono text-[11px] text-zinc-200">{name}</SelectItem>)}
+              </SelectContent>
+            </Select>
             <Select value={pairTier} onValueChange={(v) => setPairTier(v as 'L0' | 'L1' | 'L2')}>
               <SelectTrigger
                 className="data-[size=default]:h-7 max-w-full w-[210px] gap-1 border-zinc-800 bg-zinc-900 px-2 font-mono text-[10px] text-zinc-300"
@@ -377,6 +422,30 @@ export function McpConnections() {
               <span className="text-zinc-300"> Authorization: Bearer &lt;code&gt;</span> and calls{' '}
               <span className="text-zinc-300">pair_client</span> — the returned token replaces the code immediately.
             </p>
+          </div>
+        )}
+      </div>
+
+      <div className="min-w-0 rounded-lg border border-zinc-800 bg-zinc-900/50 p-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <p className="font-mono text-xs text-zinc-100">Connection check</p>
+            <p className="mt-0.5 text-[10px] text-zinc-500">After pairing, ask the IDE agent to call get_project_state, then run this check.</p>
+          </div>
+          <Button size="sm" variant="outline" className="h-7 border-zinc-700 font-mono text-[10px]" onClick={() => void checkConnection()} disabled={checking}>
+            {checking ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <RefreshCw className="mr-1 h-3 w-3" />}Check connection
+          </Button>
+        </div>
+        {connectionCheck && (
+          <div className="mt-2 grid gap-1 font-mono text-[10px] sm:grid-cols-2" role="status">
+            {([
+              ['MCP service on', connectionCheck.server],
+              ['Editor attached', connectionCheck.editor],
+              ['Assistant paired', connectionCheck.paired],
+              ['Recent project read', connectionCheck.recentRead],
+            ] as const).map(([label, ok]) => <p key={label} className={ok ? 'text-emerald-300' : 'text-amber-300'}>{ok ? '✓' : '○'} {label}</p>)}
+            {connectionCheck.error && <p className="sm:col-span-2 text-amber-300">{connectionCheck.error}</p>}
+            {!connectionCheck.recentRead && connectionCheck.paired && connectionCheck.editor && <p className="sm:col-span-2 text-zinc-400">No successful get_project_state call was observed in the last 30 minutes. Ask the paired IDE agent to run it, then check again.</p>}
           </div>
         )}
       </div>

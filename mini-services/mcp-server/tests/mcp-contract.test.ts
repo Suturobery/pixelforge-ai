@@ -335,6 +335,36 @@ describe('pairing + tool workflow (real MCP protocol)', () => {
 });
 
 describe('permission tiers', () => {
+  test('L0 asset-set check is listed and relays actor clip ids to the editor', async () => {
+    const { token } = await generatePairing('L0');
+    const pairing = await sdkClient(token);
+    const paired = textEnvelope(await pairing.callTool({ name: 'pair_client', arguments: { name: 'asset-review-bot' } }));
+    const clientToken = (paired.data as { token: string }).token;
+    await pairing.close();
+
+    const client = await sdkClient(clientToken);
+    try {
+      const catalog = await client.listTools();
+      expect(catalog.tools.some((tool) => tool.name === 'validate_asset_set')).toBe(true);
+      const received: Array<Record<string, unknown>> = [];
+      toolResponders.set('validate_asset_set', (args) => {
+        received.push(args);
+        return { rows: [{ clipId: 'hero', actor: true, issues: [] }], attention: 0 };
+      });
+      const result = textEnvelope(await client.callTool({
+        name: 'validate_asset_set',
+        arguments: { actorClipIds: ['hero'] },
+      }));
+      expect(result.ok).toBe(true);
+      expect(received).toEqual([{ actorClipIds: ['hero'] }]);
+      expect((result.data as { attention: number }).attention).toBe(0);
+      expect(result.stateHash).toBe('mockhash-0001');
+    } finally {
+      toolResponders.delete('validate_asset_set');
+      await client.close();
+    }
+  });
+
   test('L0 client cannot execute L1 writes', async () => {
     const { token } = await generatePairing('L0');
     const pc = await sdkClient(token);

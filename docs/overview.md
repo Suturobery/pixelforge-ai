@@ -123,25 +123,19 @@ arcane, nature, UI, pickups…), rendered deterministically from a seed into a n
 
 - A loopback-only MCP server with pairing codes, four permission tiers, rate limits and an
   audit log.
-- 70 tools: reading, painting, animation, motion, VFX, palettes, imports, export, macros and
+- 90 tools: reading, painting, animation, motion, VFX, palettes, imports, export, macros and
   batch transactions.
 - An Agent Console to run the same tools by hand in the app.
 - A task board for handing work to IDE agents, gated to the project it was queued for.
+- Human artwork review in the Brain panel: native-size and animated proof, craft checks,
+  approval, and project-bound revision requests.
+- Asset set consistency checks before batch export and via `validate_asset_set` for IDE agents.
 
 ### Desktop shell
 
 - Electron app with a sandboxed renderer, a bundled renderer server and a supervised MCP
   sidecar — no terminal needed.
 - Versioned settings file, native file dialogs, optional in-app updates.
-
-## In the engine, not yet in the editor
-
-The document model and `@pixelforge/core` support these, but no editor control or agent tool
-uses them today:
-
-- **Linked layers** — one cel shared by every frame of a clip (command `layer.setLinked`).
-- **Frame-range tags** — stored in the document and written to export metadata, with no editor
-  for them.
 
 ## What is not included
 
@@ -151,23 +145,20 @@ These are absent from the code today, not merely turned off:
 - Accounts, cloud sync, marketplace or collaboration (the rail has an "Accounts — coming soon"
   placeholder).
 - Skeleton rigging, interpolation or 3D-to-pixel workflows.
-- A Godot `.tres` exporter.
 - Code signing and a configured update feed for the installer.
 
 ## Components and versions
 
 | Component | Path | Stack | Version |
 | --- | --- | --- | --- |
-| Desktop shell | `apps/desktop` | Electron 45, electron-builder 25.1.8, electron-updater 6.8.11 | `0.2.9` |
-| Editor UI (renderer) | `src/` | Next.js 16.4.6, React 19, Tailwind CSS 4, Zustand 5, Radix UI | `0.2.1` (root `package.json`) |
-| Editor core | `packages/core` | Pure TypeScript, zero dependencies | `@pixelforge/core` `0.3.0` |
+| Desktop shell | `apps/desktop` | Electron 45, electron-builder 25.1.8, electron-updater 6.8.11 | `0.4.1` |
+| Editor UI (renderer) | `src/` | Next.js 16.4.6, React 19, Tailwind CSS 4, Zustand 5, Radix UI | `0.4.1` (root `package.json`) |
+| Editor core | `packages/core` | Pure TypeScript, zero dependencies | `@pixelforge/core` `0.4.1` |
 | MCP server | `mini-services/mcp-server` | Bun, `@modelcontextprotocol/server` 2.4.0, zod 4 | `@pixelforge/mcp-server` `1.0.0` |
 | Database | `prisma/schema.prisma` | SQLite through Prisma 6.11 | — |
 
-Version numbers are not unified. The desktop package is at `0.2.9`, the root package still at
-`0.2.1`, the core package at `0.3.0` while its `CORE_VERSION` constant says `0.2.0`, and the
-most recent commit message mentions a "0.2.5 installer". The MCP handshake reports server
-version `1.0.0`.
+The desktop, renderer, and core package manifests currently say `0.4.1`. The core's
+`CORE_VERSION` constant still says `0.3.0`; the MCP server has its own `1.0.0` package version.
 
 ## Quick start
 

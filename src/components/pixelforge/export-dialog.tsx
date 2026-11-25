@@ -23,6 +23,7 @@ import {
   type Project,
 } from '@pixelforge/core'
 import { runAtlasExport, runExport, type JsonMetadataFormat } from '@/lib/pixelforge/export'
+import { reviewAssetSet } from '@/lib/pixelforge/asset-set-review'
 import { isDesktop } from '@/lib/pixelforge/desktop-bridge'
 import { Button } from '@/components/ui/button'
 import {
@@ -123,6 +124,7 @@ export function ExportDialog({
   const [previewError, setPreviewError] = useState<string | null>(null)
   const [previewDims, setPreviewDims] = useState<{ w: number; h: number } | null>(null)
   const [previewZoomIndex, setPreviewZoomIndex] = useState(3)
+  const [actorClipIds, setActorClipIds] = useState<string[]>([])
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
   // subscribe so the preview + captions track the live document & selection
@@ -130,6 +132,12 @@ export function ExportDialog({
   const activeClipId = useEditor((s) => s.activeClipId)
   const activeFrameIndex = useEditor((s) => s.activeFrameIndex)
   const activeClip = useMemo(() => getActiveClip({ project, activeClipId }), [project, activeClipId])
+  const setExport = format === 'atlas' || (scope === 'all-clips' && format !== 'gif')
+  const setReview = useMemo(
+    () => open && setExport ? reviewAssetSet(project, [...actorClipIds, project.settings.styleProfile?.anchor?.clipId ?? '']) : [],
+    [open, setExport, project, actorClipIds],
+  )
+  const setIssues = setReview.filter((row) => row.issues.length > 0).length
 
   const effectiveBase = baseName.trim() || slugify(project.name)
   const sheetOptions = useMemo(
@@ -700,6 +708,47 @@ export function ExportDialog({
               </div>
             )}
           </div>
+
+          {/* asset set consistency */}
+          {setExport && (
+            <details className="rounded-md border border-zinc-800 bg-zinc-900/40 p-3">
+              <summary className="cursor-pointer font-mono text-[10px] uppercase tracking-wide text-zinc-300">
+                Asset set check · {setIssues === 0 ? `${setReview.length} clips checked` : `${setIssues} clip${setIssues === 1 ? '' : 's'} need attention`}
+              </summary>
+              <p className="mt-1.5 text-[10px] leading-relaxed text-zinc-500">
+                A representative frame of each clip is checked against the project palette. Mark characters and enemies as actors to compare their height, ground line, and outline with the pinned Hero Style Anchor. These checks are advisory.
+              </p>
+              {!project.settings.styleProfile?.anchor && (
+                <p className="mt-1.5 rounded border border-amber-800/50 px-2 py-1 text-[10px] text-amber-300">
+                  Pin an approved hero frame in Layers to enable actor comparisons.
+                </p>
+              )}
+              <div className="pixelforge-scroll mt-2 max-h-44 space-y-1.5 overflow-y-auto">
+                {setReview.map((row) => {
+                  const isAnchor = row.clipId === project.settings.styleProfile?.anchor?.clipId
+                  return (
+                    <div key={row.clipId} className="rounded border border-zinc-800 bg-zinc-950/60 p-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="min-w-0 truncate font-mono text-[10px] text-zinc-200">{row.clipName}{isAnchor ? ' · anchor' : ''}</span>
+                        <button
+                          type="button"
+                          disabled={isAnchor || !project.settings.styleProfile?.anchor}
+                          aria-pressed={row.actor}
+                          aria-label={`Compare ${row.clipName} as an actor`}
+                          onClick={() => setActorClipIds((ids) => ids.includes(row.clipId) ? ids.filter((id) => id !== row.clipId) : [...ids, row.clipId])}
+                          className={`shrink-0 rounded border px-1.5 py-0.5 font-mono text-[9px] focus-visible:outline focus-visible:outline-2 focus-visible:outline-teal-400 disabled:opacity-50 ${row.actor ? 'border-teal-600 text-teal-300' : 'border-zinc-700 text-zinc-500 hover:text-zinc-200'}`}
+                        >Actor</button>
+                      </div>
+                      <p className="mt-0.5 font-mono text-[9px] text-zinc-500">
+                        {row.width === null ? 'Empty frame' : `${row.width}×${row.height}px · ground ${row.groundMargin}px · ${row.outline}`}
+                      </p>
+                      {row.issues.length === 0 ? <p className="mt-0.5 text-[9px] text-emerald-400">No technical drift detected</p> : row.issues.map((issue) => <p key={issue} className="mt-0.5 text-[9px] text-amber-300">• {issue}</p>)}
+                    </div>
+                  )
+                })}
+              </div>
+            </details>
+          )}
 
           {/* destination */}
           <div className="space-y-1 rounded-md border border-zinc-800 bg-zinc-900/40 p-3">

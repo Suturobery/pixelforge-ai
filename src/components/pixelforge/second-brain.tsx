@@ -54,6 +54,7 @@ import {
   type SecondBrainMemory,
 } from '@/lib/pixelforge/brain-core'
 import { MCP_TOOLS } from '@/lib/pixelforge/mcp-tool-catalog'
+import { ArtworkReview, type ArtworkReviewTask } from '@/components/pixelforge/artwork-review'
 import {
   PIXEL_ART_RECIPES,
   applyPixelArtRecipe,
@@ -69,6 +70,13 @@ const QUICK_PROMPT_EXAMPLES = [
   'chibbi slime atack with fire',
   'add lightning effect to it',
 ]
+
+type BoardTask = ArtworkReviewTask & {
+  claimedBy: string | null
+  result: string | null
+  progress: string | null
+  targetProjectName?: string | null
+}
 
 /** Compact relative time for "last seen" rows ("just now", "4m", "2h"). */
 function relTime(iso: string | null): string {
@@ -130,23 +138,13 @@ export function SecondBrain() {
     clientsConnected: number
     sessions: number
     lastProjectName: string | null
+    lastStateHash: string | null
   } | null>(null)
   const [mcpClients, setMcpClients] = useState<
     Array<{ clientId: string; name: string; tier: string; lastSeen: string | null; revoked: boolean }>
   >([])
-  const [boardTasks, setBoardTasks] = useState<
-    Array<{
-      id: string
-      title: string
-      status: string
-      claimedBy: string | null
-      result: string | null
-      progress: string | null
-      verified: boolean | null
-      targetProjectName?: string | null
-      targetProjectKey?: string | null
-    }>
-  >([])
+  const [boardTasks, setBoardTasks] = useState<BoardTask[]>([])
+  const [reviewTaskId, setReviewTaskId] = useState<string | null>(null)
 
   // --- Pixel Art Recipe (deterministic work contract → task board) ---
   const [brief, setBrief] = useState<AssetBriefFields>(() =>
@@ -251,19 +249,7 @@ export function SecondBrain() {
 
   // Poll the MCP agent task board + overview facts on one timer
   const pollBoard = useCallback(async () => {
-    const res = await mcpCtrl<{
-      tasks: Array<{
-        id: string
-        title: string
-        status: string
-        claimedBy: string | null
-        result: string | null
-        progress: string | null
-        verified: boolean | null
-        targetProjectName?: string | null
-        targetProjectKey?: string | null
-      }>
-    }>({
+    const res = await mcpCtrl<{ tasks: BoardTask[] }>({
       kind: 'brain-tasks',
     })
     if (res.ok && res.data?.tasks) setBoardTasks(res.data.tasks)
@@ -274,6 +260,7 @@ export function SecondBrain() {
       clientsConnected: number
       sessions: number
       lastProjectName: string | null
+      lastStateHash: string | null
     }>({ kind: 'status' })
     if (statusRes.ok && statusRes.data) setMcpStatus(statusRes.data)
     const clientsRes = await mcpCtrl<{
@@ -355,6 +342,7 @@ export function SecondBrain() {
 
   const hasFinishedBoardTasks = boardTasks.some((t) => t.status === 'done' || t.status === 'failed' || t.status === 'cancelled')
   const hasFailedBoardTasks = boardTasks.some((t) => t.status === 'failed')
+  const reviewTask = boardTasks.find((t) => t.id === reviewTaskId && t.status === 'done')
 
   return (
     <div
@@ -1085,7 +1073,20 @@ export function SecondBrain() {
                   ) : null}
                   {t.status === 'done' && t.verified === true ? <span className="text-emerald-500/80"> · changes detected</span> : null}
                   {t.status === 'done' && t.verified === false ? <span className="text-amber-500/80"> · no changes detected</span> : null}
+                  {t.status === 'done' && t.reviewStatus === 'approved' ? <span className="text-teal-400"> · artist approved</span> : null}
+                  {t.status === 'done' && t.reviewStatus === 'needs_changes' ? <span className="text-amber-400"> · revision requested</span> : null}
                 </span>
+                {t.status === 'done' && (
+                  <button
+                    type="button"
+                    onClick={() => setReviewTaskId((current) => current === t.id ? null : t.id)}
+                    aria-label={`Review artwork for ${t.title}`}
+                    aria-expanded={reviewTaskId === t.id}
+                    className={`shrink-0 rounded border px-1.5 py-0.5 text-[8px] focus-visible:outline focus-visible:outline-2 focus-visible:outline-teal-400 ${reviewTaskId === t.id ? 'border-teal-600 text-teal-200' : 'border-zinc-700 text-zinc-400 hover:text-zinc-100'}`}
+                  >
+                    Review
+                  </button>
+                )}
                 {(t.status === 'pending' || t.status === 'claimed' || t.status === 'running') && (
                   <button
                     type="button"
@@ -1100,6 +1101,15 @@ export function SecondBrain() {
               </div>
             ))}
           </div>
+        )}
+        {reviewTask && (
+          <ArtworkReview
+            key={reviewTask.id}
+            task={reviewTask}
+            currentStateHash={mcpStatus?.lastStateHash ?? null}
+            onClose={() => setReviewTaskId(null)}
+            onRefresh={() => void pollBoard()}
+          />
         )}
       </details>
 

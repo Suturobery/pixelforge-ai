@@ -126,6 +126,7 @@ export type CtrlRequest =
   | { kind: 'brain-tasks' }
   | { kind: 'brain-clear' }
   | { kind: 'brain-retry'; id?: string }
+  | { kind: 'brain-review'; id: string; verdict: 'approved' | 'needs_changes'; clipId: string; frameIndex: number }
   /** editor-side cancel — the human may cancel ANY unfinished task */
   | { kind: 'brain-cancel'; id: string }
   /** dormant: broadcast tools/list_changed when the catalog ever becomes dynamic */

@@ -162,6 +162,20 @@ function handleCtrl(msg: EditorInbound, reply: (id: string, ok: boolean, data?: 
       reply(id, true, { tasks: store.brainRetryFailed(typeof ctrl.id === 'string' ? ctrl.id : undefined) });
       return;
     }
+    case 'brain-review': {
+      const reviewed =
+        typeof ctrl.id === 'string' &&
+        (ctrl.verdict === 'approved' || ctrl.verdict === 'needs_changes') &&
+        typeof ctrl.clipId === 'string' &&
+        typeof ctrl.frameIndex === 'number'
+          ? store.brainReview(ctrl.id, ctrl.verdict, ctrl.clipId, ctrl.frameIndex, link.currentProjectKey, link.lastStateHash)
+          : null;
+      reply(id, !!reviewed, reviewed ? { task: reviewed } : undefined, reviewed ? undefined : {
+        code: 'review_unavailable',
+        message: 'Open the task’s project and review a completed task before trying again.',
+      });
+      return;
+    }
     case 'brain-cancel': {
       // no requesterClient: the editor speaks for the human, who outranks agents
       const cancelled = typeof ctrl.id === 'string' ? store.brainCancel(ctrl.id) : null;
