@@ -139,6 +139,18 @@ export const MCP_TOOLS: McpToolInfo[] = [
     example: { from: 1, to: 0 },
   },
   {
+    name: 'reverse_clip',
+    tier: 'L1',
+    description: 'Reverse the frame order of a clip in one undoable transaction.',
+    example: {},
+  },
+  {
+    name: 'bake_pingpong',
+    tier: 'L1',
+    description: 'Bake a 3+ frame clip into explicit forward ping-pong frames (appends mirrored inner frames) for forward-only game engines.',
+    example: {},
+  },
+  {
     name: 'delete_frame',
     tier: 'L2',
     description: 'Delete a frame (trash-backed: restore_from_trash / undo recover it).',

@@ -1374,3 +1374,166 @@ export function computeTrimBounds(
     dy,
   };
 }
+
+// ---------------------------------------------------------------------------
+// 7. Batch 3 Manual Artist Helpers: Magic Wand Bounds & 4×4 Bayer Gradient
+// ---------------------------------------------------------------------------
+
+export interface MagicWandResult {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  pixelCount: number;
+}
+
+/**
+ * Flood-find a contiguous same-color island starting at `(sx, sy)` and return
+ * its tight bounding rectangle + pixel count.
+ */
+export function magicWandBounds(
+  buf: Uint8ClampedArray,
+  w: number,
+  h: number,
+  sx: number,
+  sy: number,
+  opts: { diagonal?: boolean } = {},
+): MagicWandResult | null {
+  if (!inBounds(w, h, sx, sy)) return null;
+  const si = (sy * w + sx) * 4;
+  const tr = buf[si]!;
+  const tg = buf[si + 1]!;
+  const tb = buf[si + 2]!;
+  const ta = buf[si + 3]!;
+
+  const matches = (idx: number): boolean => {
+    const o = idx * 4;
+    if (ta === 0) return buf[o + 3] === 0;
+    return buf[o] === tr && buf[o + 1] === tg && buf[o + 2] === tb && buf[o + 3] === ta;
+  };
+
+  const visited = new Uint8Array(w * h);
+  const start = sy * w + sx;
+  visited[start] = 1;
+  const stack: number[] = [start];
+  let minX = sx;
+  let maxX = sx;
+  let minY = sy;
+  let maxY = sy;
+  let count = 0;
+
+  const dirs = opts.diagonal
+    ? [
+        [-1, 0], [1, 0], [0, -1], [0, 1],
+        [-1, -1], [1, -1], [-1, 1], [1, 1],
+      ]
+    : [
+        [-1, 0], [1, 0], [0, -1], [0, 1],
+      ];
+
+  while (stack.length > 0) {
+    const cur = stack.pop()!;
+    const cx = cur % w;
+    const cy = (cur / w) | 0;
+    count++;
+    if (cx < minX) minX = cx;
+    if (cx > maxX) maxX = cx;
+    if (cy < minY) minY = cy;
+    if (cy > maxY) maxY = cy;
+    for (const [dx, dy] of dirs) {
+      const nx = cx + dx!;
+      const ny = cy + dy!;
+      if (!inBounds(w, h, nx, ny)) continue;
+      const ni = ny * w + nx;
+      if (visited[ni]) continue;
+      if (matches(ni)) {
+        visited[ni] = 1;
+        stack.push(ni);
+      }
+    }
+  }
+
+  return {
+    x: minX,
+    y: minY,
+    w: maxX - minX + 1,
+    h: maxY - minY + 1,
+    pixelCount: count,
+  };
+}
+
+const BAYER4: readonly (readonly number[])[] = [
+  [0, 8, 2, 10],
+  [12, 4, 14, 6],
+  [3, 11, 1, 9],
+  [15, 7, 13, 5],
+];
+
+export interface DitherGradientOptions {
+  mirrorX?: boolean;
+  mirrorY?: boolean;
+  /** Optional clip rectangle (e.g., active marquee selection). Defaults to full canvas. */
+  clipRect?: { x: number; y: number; w: number; h: number } | null;
+}
+
+/**
+ * Draw a crisp 4×4 ordered Bayer dither linear gradient from `(x0, y0)` (`fromColor`)
+ * to `(x1, y1)` (`toColor`), clipped to `clipRect` when provided.
+ */
+export function drawDitherGradientPixels(
+  buf: Uint8ClampedArray,
+  w: number,
+  h: number,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  fromColor: RGBA,
+  toColor: RGBA,
+  opts: DitherGradientOptions = {},
+): boolean {
+  const vx = x1 - x0;
+  const vy = y1 - y0;
+  const len2 = vx * vx + vy * vy;
+
+  const rx0 = opts.clipRect ? Math.max(0, opts.clipRect.x) : 0;
+  const ry0 = opts.clipRect ? Math.max(0, opts.clipRect.y) : 0;
+  const rx1 = opts.clipRect ? Math.min(w - 1, opts.clipRect.x + opts.clipRect.w - 1) : w - 1;
+  const ry1 = opts.clipRect ? Math.min(h - 1, opts.clipRect.y + opts.clipRect.h - 1) : h - 1;
+  if (rx0 > rx1 || ry0 > ry1) return false;
+
+  const mirrorX = opts.mirrorX === true;
+  const mirrorY = opts.mirrorY === true;
+  let changed = false;
+
+  const put = (x: number, y: number, c: RGBA): void => {
+    if (!inBounds(w, h, x, y)) return;
+    const i = (y * w + x) * 4;
+    if (buf[i] === c[0] && buf[i + 1] === c[1] && buf[i + 2] === c[2] && buf[i + 3] === c[3]) return;
+    buf[i] = c[0];
+    buf[i + 1] = c[1];
+    buf[i + 2] = c[2];
+    buf[i + 3] = c[3];
+    changed = true;
+  };
+
+  for (let y = ry0; y <= ry1; y++) {
+    const row = BAYER4[y & 3]!;
+    for (let x = rx0; x <= rx1; x++) {
+      let t = 0;
+      if (len2 > 0) {
+        t = ((x - x0) * vx + (y - y0) * vy) / len2;
+        if (t < 0) t = 0;
+        else if (t > 1) t = 1;
+      }
+      const threshold = (row[x & 3]! + 0.5) / 16;
+      const chosen = t > threshold ? toColor : fromColor;
+      put(x, y, chosen);
+      if (mirrorX) put(w - 1 - x, y, chosen);
+      if (mirrorY) put(x, h - 1 - y, chosen);
+      if (mirrorX && mirrorY) put(w - 1 - x, h - 1 - y, chosen);
+    }
+  }
+
+  return changed;
+}

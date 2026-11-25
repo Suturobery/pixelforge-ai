@@ -8,7 +8,9 @@ import {
   computeTrimBounds,
   createProject,
   CommandBus,
+  drawDitherGradientPixels,
   drawPolygonPixels,
+  magicWandBounds,
   polishLayerPixelArt,
   remapBufferToPalette,
   renderInspectionRgba,
@@ -302,5 +304,43 @@ describe('Pro Pixel Craft utilities', () => {
       dx: -14,
       dy: -14,
     });
+  });
+
+  test('magicWandBounds flood-selects contiguous color island and respects 4-way vs 8-way', () => {
+    const buf = new Uint8ClampedArray(16 * 16 * 4);
+    const blue: RGBA = [65, 166, 246, 255];
+    const green: RGBA = [56, 183, 100, 255];
+    setPx(buf, 16, 4, 4, blue);
+    setPx(buf, 16, 5, 4, blue);
+    setPx(buf, 16, 6, 5, blue); // diagonal neighbor only
+    setPx(buf, 16, 5, 5, green);
+
+    expect(magicWandBounds(buf, 16, 16, 4, 4)).toEqual({ x: 4, y: 4, w: 2, h: 1, pixelCount: 2 });
+    expect(magicWandBounds(buf, 16, 16, 4, 4, { diagonal: true })).toEqual({ x: 4, y: 4, w: 3, h: 2, pixelCount: 3 });
+  });
+
+  test('drawDitherGradientPixels renders Bayer 4x4 transition clipped to selection', () => {
+    const buf = new Uint8ClampedArray(16 * 16 * 4);
+    const from: RGBA = [255, 205, 117, 255];
+    const to: RGBA = [26, 28, 44, 255];
+    const changed = drawDitherGradientPixels(buf, 16, 16, 2, 2, 10, 2, from, to, {
+      clipRect: { x: 2, y: 2, w: 9, h: 4 },
+    });
+    expect(changed).toBe(true);
+    // Start edge uses fromColor, end edge uses toColor, outside clipRect stays transparent
+    expect(getPixel(buf, 16, 2, 2)).toEqual(from);
+    expect(getPixel(buf, 16, 10, 2)).toEqual(to);
+    expect(getPixel(buf, 16, 0, 0)[3]).toBe(0);
+    // Midpoint region contains a mix of both colors (true ordered dither)
+    let sawFrom = false;
+    let sawTo = false;
+    for (let y = 2; y <= 5; y++) {
+      for (let x = 5; x <= 7; x++) {
+        const px = getPixel(buf, 16, x, y);
+        if (px[0] === from[0]) sawFrom = true;
+        if (px[0] === to[0]) sawTo = true;
+      }
+    }
+    expect(sawFrom && sawTo).toBe(true);
   });
 });

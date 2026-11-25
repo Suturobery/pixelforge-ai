@@ -104,6 +104,10 @@ export function ToolOptionsBar() {
   const tool = useEditor((s) => s.tool)
   const ellipseFilled = useEditor((s) => s.ellipseFilled)
   const setEllipseFilled = useEditor((s) => s.setEllipseFilled)
+  const wandDiagonal = useEditor((s) => s.wandDiagonal)
+  const setWandDiagonal = useEditor((s) => s.setWandDiagonal)
+  const gradientToAlpha = useEditor((s) => s.gradientToAlpha)
+  const setGradientToAlpha = useEditor((s) => s.setGradientToAlpha)
   const selection = useEditor((s) => s.selection)
   const clipboard = useEditor((s) => s.clipboard)
   const playing = useEditor((s) => s.playing)
@@ -120,7 +124,16 @@ export function ToolOptionsBar() {
   const scaleH = sizeEd && sizeEd.key === selKey ? sizeEd.h : selection?.h ?? 1
 
   if (playing) return null
-  if (tool !== 'ellipse' && tool !== 'rect' && tool !== 'marquee' && tool !== 'shade') return null
+  if (
+    tool !== 'ellipse' &&
+    tool !== 'rect' &&
+    tool !== 'marquee' &&
+    tool !== 'shade' &&
+    tool !== 'wand' &&
+    tool !== 'gradient'
+  ) {
+    return null
+  }
 
   return (
     <TooltipProvider delayDuration={250}>
@@ -136,6 +149,48 @@ export function ToolOptionsBar() {
             </span>
             <span className="px-1 font-mono text-[10px] text-zinc-400">
               L-click: darken (cool) · R-click / Shift: lighten (warm) · 1 step/stroke
+            </span>
+          </>
+        )}
+
+        {tool === 'gradient' && (
+          <>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={gradientToAlpha}
+              onClick={() => setGradientToAlpha(!gradientToAlpha)}
+              className={`rounded-md px-2 py-1 font-mono text-[10px] transition-colors ${
+                gradientToAlpha
+                  ? 'bg-teal-500/15 text-teal-300 ring-1 ring-teal-500/40'
+                  : 'text-zinc-400 hover:text-zinc-200'
+              }`}
+            >
+              Fade to alpha
+            </button>
+            <span className="px-1 font-mono text-[10px] text-zinc-400">
+              Drag Primary → {gradientToAlpha ? 'Transparent' : 'Secondary'} (4×4 Bayer{selection ? ' · clipped to selection' : ''})
+            </span>
+          </>
+        )}
+
+        {tool === 'wand' && (
+          <>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={wandDiagonal}
+              onClick={() => setWandDiagonal(!wandDiagonal)}
+              className={`rounded-md px-2 py-1 font-mono text-[10px] transition-colors ${
+                wandDiagonal
+                  ? 'bg-teal-500/15 text-teal-300 ring-1 ring-teal-500/40'
+                  : 'text-zinc-400 hover:text-zinc-200'
+              }`}
+            >
+              {wandDiagonal ? '8-way (diagonal)' : '4-way'}
+            </button>
+            <span className="px-1 font-mono text-[10px] text-zinc-400">
+              Click color island to select · Shift+click adds to selection
             </span>
           </>
         )}
@@ -168,7 +223,7 @@ export function ToolOptionsBar() {
 
         {/* Task 10b tilemap toggle — the full controls live in the tool rail */}
 
-        {tool === 'marquee' && (
+        {(tool === 'marquee' || (tool === 'wand' && selection)) && (
           <>
             {!selection && (
               <span className="px-1.5 font-mono text-[10px] text-zinc-400 hidden @[560px]:inline">

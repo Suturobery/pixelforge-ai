@@ -267,6 +267,10 @@ export interface EditorState {
   /** fill tool: 2×2 Bayer dither between primary and secondary */
   dither: boolean
   ellipseFilled: boolean
+  /** Magic Wand tool: 8-way diagonal connectivity when true (default 4-way) */
+  wandDiagonal: boolean
+  /** Bayer Gradient tool: fade from primary to transparent instead of secondary */
+  gradientToAlpha: boolean
   // marquee selection — VIEW state only (v3.1 §2.8: excluded from history
   // until an op commits; cleared on frame/layer/clip switches)
   selection: SelectionRect | null
@@ -375,6 +379,10 @@ export interface EditorState {
   ) => number
   addClip: (name: string) => void
   deleteClip: (clipId: string) => void
+  /** Reverse frame order of the active clip in one undoable transaction. */
+  reverseClipFrames: () => boolean
+  /** Bake a ping-pong cycle into explicit forward frames (appends inner reversed frames, sets loopMode='forward'). */
+  bakePingPongClip: () => boolean
   setClipTags: (tags: ClipTag[]) => void
   setClipProp: (
     clipId: string,
@@ -435,6 +443,8 @@ export interface EditorState {
   setMirrorY: (v: boolean) => void
   setDither: (v: boolean) => void
   setEllipseFilled: (v: boolean) => void
+  setWandDiagonal: (v: boolean) => void
+  setGradientToAlpha: (v: boolean) => void
   // --- selection ops (Task 5a) ---
   setSelection: (rect: SelectionRect | null) => void
   deselect: () => void
@@ -559,6 +569,8 @@ export const useEditor = create<EditorState>()((set, get) => ({
   mirrorY: false,
   dither: false,
   ellipseFilled: false,
+  wandDiagonal: false,
+  gradientToAlpha: false,
   selection: null,
   clipboard: null,
   zoom: 12,
@@ -1596,6 +1608,61 @@ export const useEditor = create<EditorState>()((set, get) => ({
     }
   },
 
+  reverseClipFrames: () => {
+    const refs = activeRefs(get())
+    if (!refs) return false
+    const clip = bus.getProject().clips.find((c) => c.id === refs.clipId)
+    if (!clip || clip.frames.length <= 1) {
+      toast({ title: 'Nothing to reverse', description: 'Need at least 2 frames in the active clip.' })
+      return false
+    }
+    const n = clip.frames.length
+    try {
+      bus.transaction('Reverse clip frames', ORIGIN, () => {
+        for (let i = 0; i < n - 1; i++) {
+          bus.execute('frame.move', { clipId: clip.id, from: n - 1, to: i }, ORIGIN)
+        }
+      })
+      set({ playing: false })
+      return true
+    } catch (err) {
+      toast({ title: 'Reverse failed', description: friendlyError(err), variant: 'destructive' })
+      return false
+    }
+  },
+
+  bakePingPongClip: () => {
+    const refs = activeRefs(get())
+    if (!refs) return false
+    const clip = bus.getProject().clips.find((c) => c.id === refs.clipId)
+    if (!clip || clip.frames.length < 3) {
+      toast({ title: 'Need at least 3 frames', description: 'Ping-pong baking mirrors inner frames (e.g. 1-2-3 → 1-2-3-2).' })
+      return false
+    }
+    const n = clip.frames.length
+    if (n + (n - 2) > 64) {
+      toast({ title: 'Frame limit reached', description: 'Baked ping-pong would exceed 64 frames.', variant: 'destructive' })
+      return false
+    }
+    try {
+      bus.transaction('Bake ping-pong loop', ORIGIN, () => {
+        for (let srcIdx = n - 2; srcIdx >= 1; srcIdx--) {
+          bus.execute('frame.add', { clipId: clip.id, afterIndex: srcIdx, copy: true }, ORIGIN)
+          const curLen = bus.getProject().clips.find((c) => c.id === clip.id)?.frames.length ?? 0
+          if (curLen > srcIdx + 2) {
+            bus.execute('frame.move', { clipId: clip.id, from: srcIdx + 1, to: curLen - 1 }, ORIGIN)
+          }
+        }
+        bus.execute('clip.setProps', { clipId: clip.id, patch: { loopMode: 'forward' } }, ORIGIN)
+      })
+      set({ playing: false })
+      return true
+    } catch (err) {
+      toast({ title: 'Bake ping-pong failed', description: friendlyError(err), variant: 'destructive' })
+      return false
+    }
+  },
+
   addPaletteColor: (hex) => {
     if (bus.getProject().palette.includes(hex.toLowerCase())) return
     try {
@@ -1757,6 +1824,8 @@ export const useEditor = create<EditorState>()((set, get) => ({
   setMirrorY: (v) => set({ mirrorY: v }),
   setDither: (v) => set({ dither: v }),
   setEllipseFilled: (v) => set({ ellipseFilled: v }),
+  setWandDiagonal: (v) => set({ wandDiagonal: v }),
+  setGradientToAlpha: (v) => set({ gradientToAlpha: v }),
   setZoom: (z) => set({ zoom: Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z)) }),
   setPan: (x, y) => set({ panX: x, panY: y }),
   setShowGrid: (v) => set({ showGrid: v }),

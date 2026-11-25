@@ -9,15 +9,17 @@ import {
   ONION_MAX,
   applyShadeBrush,
   applyShadeLine,
+  drawDitherGradientPixels,
   drawLineWrapped,
   floodFillDither,
+  magicWandBounds,
   pixelPerfectStroke,
   stampBrushWrapped,
   wrapCoord,
   type PixelPerfectState,
   type ShadeMode,
 } from '@pixelforge/core'
-import { useEditor, getActiveClip, MIN_ZOOM, MAX_ZOOM } from '@/lib/pixelforge/store'
+import { useEditor, getActiveClip, getActiveFrame, MIN_ZOOM, MAX_ZOOM } from '@/lib/pixelforge/store'
 import { useToast } from '@/hooks/use-toast'
 import { friendlyError } from '@/lib/utils'
 import { hexToRgba } from '@/lib/pixelforge/color'
@@ -447,7 +449,15 @@ export function CanvasStage() {
     }
 
     // hover cursor (paint tools), grey like the frame-thumb hover border
-    if (hover && !playing && tool !== 'eyedropper' && tool !== 'move' && tool !== 'marquee') {
+    if (
+      hover &&
+      !playing &&
+      tool !== 'eyedropper' &&
+      tool !== 'move' &&
+      tool !== 'marquee' &&
+      tool !== 'wand' &&
+      tool !== 'gradient'
+    ) {
       const size = tool === 'fill' ? 1 : brushSize
       const off2 = Math.floor((Math.max(1, size) - 1) / 2)
       const hx = (hover.x - off2) * zoom
@@ -787,7 +797,8 @@ export function CanvasStage() {
       }
       case 'line':
       case 'rect':
-      case 'ellipse': {
+      case 'ellipse':
+      case 'gradient': {
         const handle = st.beginStroke()
         if (!handle) return
         interactionRef.current = {
@@ -798,6 +809,29 @@ export function CanvasStage() {
           handle,
           snapshot: new Uint8ClampedArray(handle.buffer),
           changed: false,
+          btn: e.button,
+        }
+        break
+      }
+      case 'wand': {
+        const clip = getActiveClip(st)
+        const frame = getActiveFrame(st)
+        const layerId = clip.layers.some((l) => l.id === st.activeLayerId)
+          ? st.activeLayerId
+          : (clip.layers.at(-1)?.id ?? '')
+        const cel = frame.cels[layerId]
+        const src = cel ? cel.buffer : new Uint8ClampedArray(w * h * 4)
+        const res = magicWandBounds(src, w, h, px.x, px.y, { diagonal: st.wandDiagonal })
+        if (!res) break
+        const nextRect: SelectionRect = { x: res.x, y: res.y, w: res.w, h: res.h }
+        if (e.shiftKey && st.selection) {
+          const x0 = Math.min(st.selection.x, nextRect.x)
+          const y0 = Math.min(st.selection.y, nextRect.y)
+          const x1 = Math.max(st.selection.x + st.selection.w, nextRect.x + nextRect.w)
+          const y1 = Math.max(st.selection.y + st.selection.h, nextRect.y + nextRect.h)
+          st.setSelection({ x: x0, y: y0, w: x1 - x0, h: y1 - y0 })
+        } else {
+          st.setSelection(nextRect)
         }
         break
       }
@@ -1051,6 +1085,15 @@ export function CanvasStage() {
         if (st.mirrorY) {
           drawRectPixels(handle.buffer, w, h, it.start.x, h - 1 - it.start.y, px.x, h - 1 - px.y, st.brushSize, c, filled, st.mirrorX, st.brushShape)
         }
+      } else if (it.tool === 'gradient') {
+        const fromC = hexToRgba(st.primary)
+        const toC: [number, number, number, number] =
+          st.gradientToAlpha || it.btn === 2 ? [0, 0, 0, 0] : hexToRgba(st.secondary)
+        drawDitherGradientPixels(handle.buffer, w, h, it.start.x, it.start.y, px.x, px.y, fromC, toC, {
+          mirrorX: st.mirrorX,
+          mirrorY: st.mirrorY,
+          clipRect: st.selection,
+        })
       } else {
         // ellipse: outline uses the primary color; filled uses the secondary
         // (v3.1 §2.1 shape convention). Shift inverts the fill toggle.
@@ -1116,7 +1159,15 @@ export function CanvasStage() {
             : 'Pencil'
       st.endStroke(label, it.changed)
     } else if (it.mode === 'shape' && it.tool) {
-      st.endStroke(it.tool === 'line' ? 'Line' : it.tool === 'ellipse' ? 'Ellipse' : 'Rect', it.changed)
+      const shapeLabel =
+        it.tool === 'line'
+          ? 'Line'
+          : it.tool === 'ellipse'
+            ? 'Ellipse'
+            : it.tool === 'gradient'
+              ? 'Bayer gradient'
+              : 'Rect'
+      st.endStroke(shapeLabel, it.changed)
     } else if (it.mode === 'move') {
       st.endStroke('Move layer', it.changed)
     } else if (it.mode === 'marquee-create') {

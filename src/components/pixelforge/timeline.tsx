@@ -52,6 +52,7 @@ import {
   Square,
   Timer,
   ArrowLeftRight,
+  RefreshCw,
   Images,
   ClipboardPaste,
   Tag,
@@ -672,6 +673,8 @@ export function Timeline() {
   const addClip = useEditor((s) => s.addClip)
   const deleteClip = useEditor((s) => s.deleteClip)
   const setClipProp = useEditor((s) => s.setClipProp)
+  const reverseClipFrames = useEditor((s) => s.reverseClipFrames)
+  const bakePingPongClip = useEditor((s) => s.bakePingPongClip)
   const importCandidateAsFrame = useEditor((s) => s.importCandidateAsFrame)
   const [renamingClip, setRenamingClip] = useState<string | null>(null)
   const clipStripRef = useRef<HTMLDivElement>(null)
@@ -1001,6 +1004,48 @@ export function Timeline() {
                 </Button>
               </TooltipTrigger>
               <TooltipContent>{clip.loop ? 'Looping' : 'Play once'}</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 text-zinc-400 hover:text-zinc-100 disabled:opacity-35"
+                  disabled={clip.frames.length < 2}
+                  onClick={() => {
+                    if (reverseClipFrames()) {
+                      toast({ title: `Reversed "${clip.name}"`, description: `${clip.frames.length} frames inverted (Ctrl+Z to undo).` })
+                    }
+                  }}
+                  aria-label="Reverse clip frames"
+                >
+                  <ArrowLeftRight className="h-3.5 w-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Reverse frame order</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 text-zinc-400 hover:text-zinc-100 disabled:opacity-35"
+                  disabled={clip.frames.length < 3 || clip.frames.length * 2 - 2 > 64}
+                  onClick={() => {
+                    const before = clip.frames.length
+                    if (bakePingPongClip()) {
+                      toast({
+                        title: `Baked ping-pong "${clip.name}"`,
+                        description: `${before} → ${before * 2 - 2} forward frames (Ctrl+Z to undo).`,
+                      })
+                    }
+                  }}
+                  aria-label="Bake ping-pong loop into forward frames"
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Bake ping-pong into explicit forward frames (for forward-only engines)</TooltipContent>
             </Tooltip>
             <OnionPopover />
             <label className="flex items-center gap-1.5 font-mono text-[10px] text-zinc-400">

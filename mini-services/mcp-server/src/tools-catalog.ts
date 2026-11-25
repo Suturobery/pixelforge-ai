@@ -333,6 +333,30 @@ export const TOOL_CATALOG: ToolDef[] = [
     },
   },
   {
+    name: 'reverse_clip',
+    title: 'Reverse clip frames',
+    description: 'Invert the frame order of a clip (preserving layers, linked cels, and per-frame durations) in one undoable transaction.',
+    tier: 'L1',
+    relay: true,
+    inputSchema: {
+      ...clipRef,
+      ...staleGuard,
+    },
+  },
+  {
+    name: 'bake_pingpong',
+    title: 'Bake ping-pong loop',
+    description:
+      'Convert a 3+ frame clip into explicit forward ping-pong frames (appends mirrored inner frames [n-2..1] and sets loopMode="forward") ' +
+      'for forward-only game engines. One undoable transaction.',
+    tier: 'L1',
+    relay: true,
+    inputSchema: {
+      ...clipRef,
+      ...staleGuard,
+    },
+  },
+  {
     name: 'delete_frame',
     title: 'Delete frame',
     description:

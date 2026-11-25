@@ -17,10 +17,12 @@ const TOOL_LABEL: Record<ToolId, string> = {
   eraser: 'eraser',
   shade: 'shade',
   fill: 'fill',
+  gradient: 'gradient',
   line: 'line',
   rect: 'rect',
   ellipse: 'ellipse',
   marquee: 'select',
+  wand: 'wand',
   eyedropper: 'eyedropper',
   move: 'move',
 }

@@ -31,10 +31,12 @@ export type ToolId =
   | 'eraser'
   | 'shade'
   | 'fill'
+  | 'gradient'
   | 'line'
   | 'rect'
   | 'ellipse'
   | 'marquee'
+  | 'wand'
   | 'eyedropper'
   | 'move'
 

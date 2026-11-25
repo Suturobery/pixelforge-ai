@@ -823,6 +823,51 @@ const handlers: Record<string, ToolHandler> = {
     return withStateHash({ clipId: clip.id, from, to, frameCount: clip.frames.length }, { undoable: true, summary: `Moved frame ${from} → ${to} in "${clip.name}"` })
   },
 
+  async reverse_clip(args) {
+    const project = getBus().getProject()
+    const clip = resolveClipRef(project, args)
+    const n = clip.frames.length
+    if (n <= 1) {
+      return withStateHash({ clipId: clip.id, reversed: false, frameCount: n }, { undoable: false, summary: `Clip "${clip.name}" has fewer than 2 frames` })
+    }
+    execTransaction(`Reverse clip "${clip.name}"`, () => {
+      for (let i = 0; i < n - 1; i++) {
+        getBus().execute('frame.move', { clipId: clip.id, from: n - 1, to: i }, 'mcp')
+      }
+    })
+    return withStateHash(
+      { clipId: clip.id, reversed: true, frameCount: n },
+      { undoable: true, summary: `Reversed ${n} frames in "${clip.name}"` },
+    )
+  },
+
+  async bake_pingpong(args) {
+    const project = getBus().getProject()
+    const clip = resolveClipRef(project, args)
+    const n = clip.frames.length
+    if (n < 3) {
+      return fail('validation_failed', `Clip "${clip.name}" needs at least 3 frames to bake a ping-pong cycle (has ${n})`)
+    }
+    if (n + (n - 2) > 64) {
+      return fail('validation_failed', `Baking ping-pong on ${n} frames would exceed the 64-frame limit`)
+    }
+    execTransaction(`Bake ping-pong "${clip.name}"`, () => {
+      for (let srcIdx = n - 2; srcIdx >= 1; srcIdx--) {
+        getBus().execute('frame.add', { clipId: clip.id, afterIndex: srcIdx, copy: true }, 'mcp')
+        const curLen = getBus().getProject().clips.find((c) => c.id === clip.id)?.frames.length ?? 0
+        if (curLen > srcIdx + 2) {
+          getBus().execute('frame.move', { clipId: clip.id, from: srcIdx + 1, to: curLen - 1 }, 'mcp')
+        }
+      }
+      getBus().execute('clip.setProps', { clipId: clip.id, patch: { loopMode: 'forward' } }, 'mcp')
+    })
+    const finalCount = getBus().getProject().clips.find((c) => c.id === clip.id)?.frames.length ?? n
+    return withStateHash(
+      { clipId: clip.id, originalFrames: n, frameCount: finalCount, loopMode: 'forward' },
+      { undoable: true, summary: `Baked ping-pong in "${clip.name}" (${n} → ${finalCount} forward frames)` },
+    )
+  },
+
   async set_frame_duration(args) {
     const project = getBus().getProject()
     const clip = resolveClipRef(project, args)

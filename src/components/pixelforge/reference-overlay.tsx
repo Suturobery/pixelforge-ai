@@ -20,9 +20,12 @@ import {
   Lock,
   LockOpen,
   Minus,
+  Palette,
   Plus,
   X,
 } from 'lucide-react'
+import { remapBufferToPalette } from '@pixelforge/core'
+import { useEditor } from '@/lib/pixelforge/store'
 
 import { Button } from '@/components/ui/button'
 import { Slider } from '@/components/ui/slider'
@@ -31,7 +34,10 @@ const MIN_W = 64
 const MAX_W = 900
 
 export function ReferenceOverlay() {
+  const palette = useEditor((s) => s.project.palette)
   const [imgSrc, setImgSrc] = useState<string | null>(null)
+  const [quantizedSrc, setQuantizedSrc] = useState<string | null>(null)
+  const [quantizeToPalette, setQuantizeToPalette] = useState(false)
   const [hidden, setHidden] = useState(false)
   const [opacity, setOpacity] = useState(0.5)
   const [mirrored, setMirrored] = useState(false)
@@ -129,10 +135,44 @@ export function ReferenceOverlay() {
     setResizing(false)
   }
 
+  // Re-quantize the reference image live to the active project palette via OKLab
+  useEffect(() => {
+    if (!imgSrc || !quantizeToPalette || palette.length === 0) {
+      setQuantizedSrc(null)
+      return
+    }
+    let alive = true
+    const im = new Image()
+    im.onload = () => {
+      if (!alive || im.naturalWidth === 0 || im.naturalHeight === 0) return
+      const maxDim = 256
+      const scale = Math.min(1, maxDim / Math.max(im.naturalWidth, im.naturalHeight))
+      const rw = Math.max(1, Math.round(im.naturalWidth * scale))
+      const rh = Math.max(1, Math.round(im.naturalHeight * scale))
+      const cv = document.createElement('canvas')
+      cv.width = rw
+      cv.height = rh
+      const ctx = cv.getContext('2d')
+      if (!ctx) return
+      ctx.imageSmoothingEnabled = false
+      ctx.drawImage(im, 0, 0, rw, rh)
+      const imgData = ctx.getImageData(0, 0, rw, rh)
+      remapBufferToPalette(imgData.data, palette, { mode: 'nearest' })
+      ctx.putImageData(imgData, 0, 0)
+      if (alive) setQuantizedSrc(cv.toDataURL('image/png'))
+    }
+    im.src = imgSrc
+    return () => {
+      alive = false
+    }
+  }, [imgSrc, quantizeToPalette, palette])
+
   const pickFile = (f: File | undefined) => {
     if (!f || !f.type.startsWith('image/')) return
     if (imgSrc) URL.revokeObjectURL(imgSrc)
     setImgSrc(URL.createObjectURL(f))
+    setQuantizedSrc(null)
+    setQuantizeToPalette(false)
     setHidden(false)
     setPos(null)
     setOpacity(0.5)
@@ -202,6 +242,16 @@ export function ReferenceOverlay() {
           </button>
           <button
             type="button"
+            className={`rounded p-0.5 ${quantizeToPalette ? 'bg-teal-500/20 text-teal-300' : 'text-zinc-400 hover:text-zinc-100'}`}
+            onClick={() => setQuantizeToPalette((v) => !v)}
+            aria-label="Quantize reference image to active palette"
+            aria-pressed={quantizeToPalette}
+            title="Quantize reference to active project palette (OKLab)"
+          >
+            <Palette className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
             className="rounded p-0.5 text-zinc-400 hover:text-zinc-100"
             onClick={() => setMirrored(!mirrored)}
             aria-label="Mirror reference"
@@ -242,7 +292,7 @@ export function ReferenceOverlay() {
             translucent ref. Unlocked (lock button off): the image itself is
             the drag grip for moving the panel. */}
         <img
-          src={imgSrc}
+          src={quantizeToPalette && quantizedSrc ? quantizedSrc : imgSrc}
           alt="Reference"
           draggable={false}
           onPointerDown={onImagePointerDown}
@@ -256,6 +306,7 @@ export function ReferenceOverlay() {
             width,
             height: 'auto',
             opacity,
+            imageRendering: quantizeToPalette ? 'pixelated' : undefined,
             transform: mirrored ? 'scaleX(-1)' : undefined,
             pointerEvents: unlocked ? 'auto' : 'none',
           }}
