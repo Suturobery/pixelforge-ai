@@ -211,11 +211,13 @@ export class McpHost {
         instructions:
           'PixelForge AI pixel art & animation editor. Read get_project_state first; ids and stateHash from it ' +
           'feed the other tools. Follow the project palette and Style Lock. For drawing, read get_knowledge ' +
-          'on methodology and grids, plus characters for character sprites. Block in the silhouette, draw, ' +
-          'then inspect get_frame_png at native size and revise unclear shapes. For animation read the animation ' +
-          'topic; for effects read vfx and use list_vfx. Inspect the ordered frames from preview_animation ' +
-          'and check timing and emptyFrames. Run validate_style for technical checks. If your client cannot ' +
-          'display images, report that visual review is pending. Respect dirty_project when replacing a document.',
+          'on methodology, shade, and the matching subject topic (characters, tileset, vfx). Block organic silhouettes ' +
+          'with draw_ellipse, draw_polygon, draw_line, flood_fill, and set_pixels (avoid boxy rectangles). Inspect ' +
+          'get_frame_png at scale=8 with showGrid=true plus native scale=1, run analyze_pixel_craft to catch doubles, ' +
+          'orphans, jaggies, and pillow shading, and polish with beautify_layer (selOut=true, cleanDoubles=true, paletteLock=true). ' +
+          'For animation read the animation topic, inspect preview_animation frames, and check timing and emptyFrames. ' +
+          'Run validate_style for technical checks. If your client cannot display images, report that visual review is pending. ' +
+          'Respect dirty_project when replacing a document.',
       }
     );
 

@@ -252,33 +252,41 @@ export function buildAssetBrief(
     .slice(0, 6)
   const animated = !/^single frame(?:\s|$)/i.test(fields.poseGoal)
     && /\d+\s*[- ]?frame|animation|cycle|walk|idle|attack|loop|vfx|effect/i.test(fields.poseGoal)
+  const detectedRecipe = detectRecipeSuitability(fields.assetType)
+  const knowledgeTopic =
+    detectedRecipe === 'tileset' ? 'tileset'
+    : detectedRecipe === 'vfx' ? 'vfx'
+    : detectedRecipe === 'character' || detectedRecipe === 'enemy' ? 'characters'
+    : 'methodology'
   const short = (value: string, max = 180) => value.length > max ? `${value.slice(0, max - 1)}…` : value
 
-  const lines = [
+  const headerLines = [
     `PIXEL ART RECIPE - ${short(fields.assetType || 'unspecified asset', 100)}`,
     `Project "${short(project.name, 80)}" ${project.width}x${project.height}; project palette only (${project.palette.length} colors, limit ${fields.colorLimit}).`,
     `Camera ${short(fields.cameraAngle, 60)}; facing ${short(fields.facing, 30)}; goal ${short(fields.poseGoal)}.`,
     `Outline ${short(fields.outline, 80)}; light ${short(fields.lighting, 80)}; detail ${short(fields.detailLevel, 40)}.`,
-    `References: ${fields.references.length ? short(fields.references.join(', ')) : 'none; create fresh'}.`,
-    `Must include: ${short(fields.requiredDetails || 'clear readable form')}. Avoid: ${short(avoidItems.join('; ') || 'uncontrolled noise')}.`,
-    `Style Lock: ${short(styleLock, 220)}.`,
-    '',
+    `References: ${fields.references.length ? short(fields.references.join(', '), 120) : 'none; create fresh'}.`,
+    `Must include: ${short(fields.requiredDetails || 'clear readable form', 140)}. Avoid: ${short(avoidItems.join('; ') || 'uncontrolled noise', 140)}.`,
+    `Style Lock: ${short(styleLock, 180)}.`,
+  ]
+  const contractLines = [
     'EXECUTION CONTRACT - actually draw in the active PixelForge project; do not only describe or return code. No image generation or imported generated PNG.',
-    '1. INSPECT: get_project_state, get_palette, and get_frame_png; bind to current ids/stateHash.',
-    '2. SILHOUETTE: use fill_rect + set_pixels on a dedicated layer. Establish proportion, pose, and negative space first.',
-    '3. REVIEW: inspect get_frame_png at native 1x size; revise until the silhouette reads without interior detail.',
-    '4. COLOR: add compact base, shadow, and highlight clusters using project-palette colors only; avoid pillow shading and stray pixels.',
-    '5. POLISH: apply controlled outline, consistent light, selective details, and clean clusters.',
+    `1. INSPECT: get_project_state, get_palette, get_frame_png, get_knowledge (${knowledgeTopic}, shade); bind ids/stateHash.`,
+    '2. SILHOUETTE: block organic forms with draw_ellipse, draw_polygon, draw_line, flood_fill, set_pixels on dedicated layers (avoid boxy shapes).',
+    '3. REVIEW: inspect get_frame_png(scale=8, showGrid=true) and get_frame_png at native 1x size; revise silhouette before shading.',
+    '4. COLOR: add hue-shifted base, shadow, and warm top-left highlight clusters using project-palette colors only; avoid pillow shading and stray pixels.',
+    '5. POLISH: apply selective colored outlines (beautify_layer selOut=true, cleanDoubles=true, paletteLock=true) and run analyze_pixel_craft.',
     animated
-      ? '6. ANIMATE: use whole-pixel movement; create frames, set_frame_duration, and set_clip_tags. Check arcs, spacing, and loop continuity.'
+      ? '6. ANIMATE: use whole-pixel movement & follow-through; create frames, set_frame_duration, set_clip_tags. Check arcs, spacing, and loop continuity.'
       : '6. COMPOSE: keep it centered/balanced and recognizable at native 1x; preserve intentional transparent space.',
     animated
-      ? '7. REVIEW: run preview_animation plus get_frame_png, then validate_style. Fix timing, flicker, tangents, palette, and readability issues.'
-      : '7. REVIEW: run get_frame_png and validate_style. Fix tangents, palette, composition, and 1x readability issues.',
+      ? '7. REVIEW: run preview_animation + get_frame_png(scale=8), analyze_pixel_craft, validate_style. Fix timing, flicker, doubles, palette, readability.'
+      : '7. REVIEW: run get_frame_png(scale=8), analyze_pixel_craft, validate_style. Fix doubles, jaggies, palette, and 1x readability.',
     '8. REFINE: repeat preview and fixes until clean, then brain_complete_task with a short change summary.',
     'All canvas edits must use PixelForge MCP tools and remain undoable.',
-    fields.notes ? `Artist notes: ${short(fields.notes, 300)}` : '',
-  ].filter(Boolean)
+  ]
+  const notesLine = fields.notes ? `Artist notes: ${short(fields.notes, 300)}` : ''
+  const lines = [...headerLines, '', ...contractLines, ...(notesLine ? [notesLine] : [])]
 
   const detail = lines.join('\n')
   const LIMIT = 2000

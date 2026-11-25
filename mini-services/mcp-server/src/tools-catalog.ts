@@ -109,13 +109,20 @@ export const TOOL_CATALOG: ToolDef[] = [
     title: 'Get frame as PNG',
     description:
       'Inspect one composited frame as a native MCP PNG image. The result envelope also includes its PNG data URL. ' +
-      'scale 0.5/0.25 downsamples with nearest-neighbor (no smoothing).',
+      'Supports nearest-neighbor scale 0.25/0.5/1/2/4/8 (use scale=8 with showGrid=true to visually inspect pixel craft, proportions, and alignment).',
     tier: 'L0',
     relay: true,
     inputSchema: {
       ...clipRef,
       ...frameRef,
-      scale: z.union([z.literal(1), z.literal(0.5), z.literal(0.25)]).optional().describe('Output scale. Default 1 (native size).'),
+      scale: z
+        .union([z.literal(0.25), z.literal(0.5), z.literal(1), z.literal(2), z.literal(4), z.literal(8)])
+        .optional()
+        .describe('Nearest-neighbor output scale. Default 1 (native). Use 4 or 8 for crisp visual critique.'),
+      showGrid: z
+        .boolean()
+        .optional()
+        .describe('When scale >= 4, overlay a subtle pixel grid + 8px major ruler + checkerboard behind transparent pixels. Default false.'),
     },
   },
   {
@@ -142,6 +149,20 @@ export const TOOL_CATALOG: ToolDef[] = [
       allowEdgeTouch: z.boolean().optional().describe(
         'true = sprite may touch canvas edges (tilesets, full-bleed backgrounds). Default false.',
       ),
+    },
+  },
+  {
+    name: 'analyze_pixel_craft',
+    title: 'Analyze pixel-art craft defects',
+    description:
+      'Deterministic pixel-art craft linter (pure, $0): inspects one composited frame and reports exact (x, y) ' +
+      'coordinates of outline doubles (thick L-corners), orphan stray speckles, silhouette jaggies, and pillow shading, ' +
+      'plus a 0–100 craft score and bounding-box coverage metrics. Run alongside get_frame_png(scale=8, showGrid=true) to refine artwork.',
+    tier: 'L0',
+    relay: true,
+    inputSchema: {
+      ...clipRef,
+      ...frameRef,
     },
   },
     {
@@ -445,6 +466,81 @@ export const TOOL_CATALOG: ToolDef[] = [
       to: z.object({ x: z.number().int(), y: z.number().int() }).describe('Opposite corner.'),
       color: hexColor.describe('Rectangle color.'),
       filled: z.boolean().optional().describe('true (default) = filled; false = outline only.'),
+      ...staleGuard,
+    },
+  },
+  {
+    name: 'draw_line',
+    title: 'Draw pixel line',
+    description: 'Draw a crisp Bresenham pixel line between two points, in one undoable step.',
+    tier: 'L1',
+    relay: true,
+    inputSchema: {
+      ...clipRef,
+      ...frameRef,
+      ...layerRef,
+      from: z.object({ x: z.number().int(), y: z.number().int() }).describe('Start point.'),
+      to: z.object({ x: z.number().int(), y: z.number().int() }).describe('End point.'),
+      color: hexColor.describe('Line color.'),
+      size: z.number().int().min(1).max(8).optional().describe('Brush size 1–8. Default 1.'),
+      mirrorX: z.boolean().optional().describe('Mirror horizontally across the canvas center. Default false.'),
+      ...staleGuard,
+    },
+  },
+  {
+    name: 'draw_ellipse',
+    title: 'Draw pixel ellipse',
+    description: 'Draw a filled (default) or outlined pixel-art ellipse/circle inside a bounding box, in one undoable step. Prefer this over fill_rect for heads, shields, potions, curves, and organic silhouettes.',
+    tier: 'L1',
+    relay: true,
+    inputSchema: {
+      ...clipRef,
+      ...frameRef,
+      ...layerRef,
+      from: z.object({ x: z.number().int(), y: z.number().int() }).describe('First corner of bounding box.'),
+      to: z.object({ x: z.number().int(), y: z.number().int() }).describe('Opposite corner of bounding box.'),
+      color: hexColor.describe('Ellipse color.'),
+      filled: z.boolean().optional().describe('true (default) = filled; false = outline only.'),
+      size: z.number().int().min(1).max(8).optional().describe('Outline brush size 1–8. Default 1.'),
+      mirrorX: z.boolean().optional().describe('Mirror horizontally across the canvas center. Default false.'),
+      ...staleGuard,
+    },
+  },
+  {
+    name: 'draw_polygon',
+    title: 'Draw pixel polygon',
+    description: 'Draw a filled (default) or outlined polygon from 2–64 vertices, in one undoable step. Ideal for capes, tapered swords, triangular silhouettes, roofs, and dynamic limbs.',
+    tier: 'L1',
+    relay: true,
+    inputSchema: {
+      ...clipRef,
+      ...frameRef,
+      ...layerRef,
+      points: z
+        .array(z.object({ x: z.number().int(), y: z.number().int() }))
+        .min(2)
+        .max(64)
+        .describe('Ordered polygon vertices.'),
+      color: hexColor.describe('Polygon color.'),
+      filled: z.boolean().optional().describe('true (default) = filled; false = outline only.'),
+      mirrorX: z.boolean().optional().describe('Mirror horizontally across the canvas center. Default false.'),
+      ...staleGuard,
+    },
+  },
+  {
+    name: 'flood_fill',
+    title: 'Flood fill region',
+    description: 'Scanline flood-fill a contiguous region starting at (x, y) with color, in one undoable step.',
+    tier: 'L1',
+    relay: true,
+    inputSchema: {
+      ...clipRef,
+      ...frameRef,
+      ...layerRef,
+      x: z.number().int().describe('Seed x coordinate.'),
+      y: z.number().int().describe('Seed y coordinate.'),
+      color: hexColor.describe('Fill color.'),
+      mirrorX: z.boolean().optional().describe('Also fill the horizontally mirrored seed point. Default false.'),
       ...staleGuard,
     },
   },
@@ -868,18 +964,23 @@ export const TOOL_CATALOG: ToolDef[] = [
   },
     {
     name: 'beautify_layer',
-    title: 'Beautify layer',
+    title: 'Beautify & polish layer',
     description:
-      'One-call polish: 1px outline around the target layer + directional shading on bottom/right edges ' +
-      '(light from top-left). outline=null skips the outline. One undoable step.',
+      'One-call pixel-art polish: supports OKLab hue-shifted selective colored outlines (selOut=true) or flat 1px outline, ' +
+      'palette-locked directional shadows (bottom/right) and warm rim highlights (top/left), plus automatic removal of ' +
+      'clunky outer L-corner outline doubles (cleanDoubles=true). One undoable step.',
     tier: 'L1',
     relay: true,
     inputSchema: {
       ...clipRef,
       ...frameRef,
       ...layerRef,
-      outline: z.string().regex(HEX_RE).nullable().optional().describe('Outline color. Default the dark studio ink. null = no outline.'),
-      shade: z.boolean().optional().describe('Darken bottom/right inner edges by 28%. Default true.'),
+      outline: z.string().regex(HEX_RE).nullable().optional().describe('Flat outline color when selOut is false. Default dark studio ink. null = no outline.'),
+      selOut: z.boolean().optional().describe('true = OKLab hue-shifted selective colored outlines matched to each adjacent cluster in the project palette. Default false.'),
+      shade: z.boolean().optional().describe('Add directional bottom/right shadows (palette-locked when paletteLock is true). Default true.'),
+      highlight: z.boolean().optional().describe('Add subtle warm top/left rim highlights from the project palette. Default false.'),
+      cleanDoubles: z.boolean().optional().describe('Remove outer L-shaped outline double corners for crisp 1px lines. Default true.'),
+      paletteLock: z.boolean().optional().describe('Snap all shaded/highlighted/sel-out pixels strictly to the active project palette via OKLab. Default true.'),
       ...staleGuard,
     },
   },

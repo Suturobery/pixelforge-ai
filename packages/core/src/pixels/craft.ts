@@ -1,0 +1,836 @@
+/**
+ * @pixelforge/core — Pro Pixel Craft utilities (pure, DOM-free, deterministic).
+ *
+ * Powers the artist-grade MCP pixel craft loop:
+ *   1. `drawPolygonPixels` — scanline-filled or outlined polygons for organic silhouettes.
+ *   2. `renderInspectionRgba` — nearest-neighbor upscaling (up to 8×) with optional
+ *      pixel grid + checkerboard so vision-capable IDE agents can inspect pixel flaws.
+ *   3. `analyzePixelCraft` — deterministic craft linter that pinpoints exact (x, y)
+ *      coordinates of outline doubles, orphan speckles, jaggies, and pillow shading.
+ *   4. `polishLayerPixelArt` — OKLab hue-shifted selective outlines (sel-out),
+ *      palette-locked directional highlights & shadows, and automatic double cleanup.
+ */
+
+import type { RGBA } from '../types/document';
+import {
+  oklabDistance2,
+  parseHexColor,
+  rgbToOklab,
+  type Oklab,
+} from '../ai/oklab';
+import { drawLinePixels, inBounds } from './ops';
+
+export interface CraftPoint {
+  x: number;
+  y: number;
+}
+
+function setPx(buf: Uint8ClampedArray, w: number, h: number, x: number, y: number, c: RGBA): void {
+  if (!inBounds(w, h, x, y)) return;
+  const i = (y * w + x) * 4;
+  buf[i] = c[0];
+  buf[i + 1] = c[1];
+  buf[i + 2] = c[2];
+  buf[i + 3] = c[3];
+}
+
+// ---------------------------------------------------------------------------
+// 1. Polygon rasterizer (scanline fill + Bresenham edges)
+// ---------------------------------------------------------------------------
+
+/**
+ * Draw a polygon onto an RGBA buffer (filled or outlined).
+ * Uses integer scanline rasterization (even-odd rule) plus crisp Bresenham edges
+ * so thin tips and corners never vanish at low pixel-art resolutions.
+ */
+export function drawPolygonPixels(
+  buf: Uint8ClampedArray,
+  w: number,
+  h: number,
+  points: readonly CraftPoint[],
+  c: RGBA,
+  filled = true,
+  mirrorX = false,
+): void {
+  if (points.length < 2) {
+    if (points.length === 1) {
+      const p = points[0]!;
+      setPx(buf, w, h, p.x, p.y, c);
+      if (mirrorX) setPx(buf, w, h, w - 1 - p.x, p.y, c);
+    }
+    return;
+  }
+
+  // Always rasterize the perimeter edges so 1px tips and edges remain crisp.
+  for (let i = 0; i < points.length; i++) {
+    const a = points[i]!;
+    const b = points[(i + 1) % points.length]!;
+    drawLinePixels(buf, w, h, a.x, a.y, b.x, b.y, 1, c, mirrorX);
+  }
+
+  if (!filled || points.length < 3) return;
+
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const p of points) {
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+  }
+  const yStart = Math.max(0, Math.floor(minY));
+  const yEnd = Math.min(h - 1, Math.ceil(maxY));
+
+  for (let y = yStart; y <= yEnd; y++) {
+    const scanY = y + 0.5;
+    const xs: number[] = [];
+    for (let i = 0; i < points.length; i++) {
+      const p1 = points[i]!;
+      const p2 = points[(i + 1) % points.length]!;
+      if ((p1.y <= scanY && p2.y > scanY) || (p2.y <= scanY && p1.y > scanY)) {
+        const t = (scanY - p1.y) / (p2.y - p1.y);
+        xs.push(p1.x + t * (p2.x - p1.x));
+      }
+    }
+    xs.sort((a, b) => a - b);
+    for (let i = 0; i + 1 < xs.length; i += 2) {
+      const x0 = Math.max(0, Math.ceil(xs[i]!));
+      const x1 = Math.min(w - 1, Math.floor(xs[i + 1]!));
+      for (let x = x0; x <= x1; x++) {
+        setPx(buf, w, h, x, y, c);
+        if (mirrorX) setPx(buf, w, h, w - 1 - x, y, c);
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 2. Nearest-neighbor upscaled inspection renderer (with optional grid)
+// ---------------------------------------------------------------------------
+
+export type InspectionScale = 0.25 | 0.5 | 1 | 2 | 4 | 8;
+
+/**
+ * Render an RGBA frame at nearest-neighbor scale (0.25..8).
+ * When `showGrid` is true and `scale >= 4`, renders a subtle dark transparency
+ * checkerboard behind transparent pixels plus a crisp 1px pixel grid (with a
+ * slightly brighter major grid line every 8 source pixels) so vision-capable
+ * agents can inspect exact pixel coordinates and silhouette quality.
+ */
+export function renderInspectionRgba(
+  rgba: Uint8ClampedArray,
+  w: number,
+  h: number,
+  scale: InspectionScale,
+  showGrid = false,
+): { rgba: Uint8ClampedArray; w: number; h: number } {
+  if (scale === 1 && !showGrid) return { rgba, w, h };
+
+  const ow = Math.max(1, Math.floor(w * scale));
+  const oh = Math.max(1, Math.floor(h * scale));
+  const out = new Uint8ClampedArray(ow * oh * 4);
+  const drawGrid = showGrid && scale >= 4;
+
+  for (let y = 0; y < oh; y++) {
+    const sy = Math.min(h - 1, Math.floor(y / scale));
+    const subY = drawGrid ? y % scale : -1;
+    const majorY = drawGrid && subY === 0 && sy > 0 && sy % 8 === 0;
+    const minorY = drawGrid && subY === 0 && sy > 0 && !majorY;
+
+    for (let x = 0; x < ow; x++) {
+      const sx = Math.min(w - 1, Math.floor(x / scale));
+      const si = (sy * w + sx) * 4;
+      const di = (y * ow + x) * 4;
+
+      let r = rgba[si]!;
+      let g = rgba[si + 1]!;
+      let b = rgba[si + 2]!;
+      let a = rgba[si + 3]!;
+
+      if (drawGrid && a < 255) {
+        // Dark neutral checkerboard so transparent edges & dark outlines both read clearly
+        const lightTile = (sx + sy) % 2 === 0;
+        const bg = lightTile ? 58 : 44;
+        if (a === 0) {
+          r = bg;
+          g = bg;
+          b = bg;
+          a = 255;
+        } else {
+          const t = a / 255;
+          r = Math.round(r * t + bg * (1 - t));
+          g = Math.round(g * t + bg * (1 - t));
+          b = Math.round(b * t + bg * (1 - t));
+          a = 255;
+        }
+      }
+
+      if (drawGrid) {
+        const subX = x % scale;
+        const majorX = subX === 0 && sx > 0 && sx % 8 === 0;
+        const minorX = subX === 0 && sx > 0 && !majorX;
+        if (majorX || majorY) {
+          // Crisp teal-tinted major 8px ruler line
+          r = Math.round(r * 0.55 + 94 * 0.45);
+          g = Math.round(g * 0.55 + 234 * 0.45);
+          b = Math.round(b * 0.55 + 212 * 0.45);
+          a = 255;
+        } else if (minorX || minorY) {
+          // Subtle 1px cell divider
+          r = Math.round(r * 0.8 + 120 * 0.2);
+          g = Math.round(g * 0.8 + 128 * 0.2);
+          b = Math.round(b * 0.8 + 140 * 0.2);
+          a = 255;
+        }
+      }
+
+      out[di] = r;
+      out[di + 1] = g;
+      out[di + 2] = b;
+      out[di + 3] = a;
+    }
+  }
+
+  return { rgba: out, w: ow, h: oh };
+}
+
+// ---------------------------------------------------------------------------
+// 3. Deterministic Pixel-Art Craft Linter (`analyzePixelCraft`)
+// ---------------------------------------------------------------------------
+
+export interface PixelCraftInput {
+  buffer: Uint8ClampedArray;
+  width: number;
+  height: number;
+  lighting?: 'top-left' | 'top' | 'front' | 'flat';
+}
+
+export interface CraftDefect {
+  kind: 'doubles' | 'orphans' | 'jaggies' | 'pillow_shading' | 'empty';
+  severity: 'warning' | 'info';
+  count: number;
+  message: string;
+  hint: string;
+  /** Up to 24 sample (x, y) pixel coordinates where the defect occurs */
+  locations: CraftPoint[];
+}
+
+export interface PixelCraftReport {
+  /** Deterministic heuristic craft score 0..100 */
+  score: number;
+  summary: string;
+  metrics: {
+    opaquePixels: number;
+    coveragePercent: number;
+    boundingBox: { x: number; y: number; w: number; h: number } | null;
+    connectedParts: number;
+    uniqueColors: number;
+    doublesCount: number;
+    orphansCount: number;
+    jaggiesCount: number;
+    litSideLightness: number | null;
+    shadowSideLightness: number | null;
+  };
+  defects: CraftDefect[];
+}
+
+function isOpaqueAt(buf: Uint8ClampedArray, w: number, h: number, x: number, y: number): boolean {
+  if (x < 0 || y < 0 || x >= w || y >= h) return false;
+  return buf[(y * w + x) * 4 + 3]! >= 128;
+}
+
+function colorKeyAt(buf: Uint8ClampedArray, w: number, x: number, y: number): number {
+  const i = (y * w + x) * 4;
+  return (buf[i]! << 16) | (buf[i + 1]! << 8) | buf[i + 2]!;
+}
+
+function lightnessAt(buf: Uint8ClampedArray, w: number, x: number, y: number): number {
+  const i = (y * w + x) * 4;
+  return rgbToOklab(buf[i]!, buf[i + 1]!, buf[i + 2]!).L;
+}
+
+/**
+ * Analyze a composited sprite buffer for pixel-art craft defects:
+ *   - Outline doubles (thick L-shaped outline corners)
+ *   - Orphan speckles (isolated 1–2px disconnected opaque specks)
+ *   - Silhouette jaggies (irregular 1px stair-steps on diagonal outlines)
+ *   - Pillow shading (uniform inward shading ignoring top-left light)
+ */
+export function analyzePixelCraft(input: PixelCraftInput): PixelCraftReport {
+  const { buffer, width: w, height: h } = input;
+  const lighting = input.lighting ?? 'top-left';
+  const total = w * h;
+
+  let opaquePixels = 0;
+  let minX = w;
+  let minY = h;
+  let maxX = -1;
+  let maxY = -1;
+  const colors = new Set<number>();
+
+  // Identify boundary pixels (opaque pixels touching at least one transparent 4-neighbor)
+  const isBoundary = new Uint8Array(total);
+  const isDarkBoundary = new Uint8Array(total);
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (!isOpaqueAt(buffer, w, h, x, y)) continue;
+      opaquePixels++;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+      colors.add(colorKeyAt(buffer, w, x, y));
+
+      const touchesEmpty =
+        !isOpaqueAt(buffer, w, h, x - 1, y) ||
+        !isOpaqueAt(buffer, w, h, x + 1, y) ||
+        !isOpaqueAt(buffer, w, h, x, y - 1) ||
+        !isOpaqueAt(buffer, w, h, x, y + 1);
+      if (touchesEmpty) {
+        const idx = y * w + x;
+        isBoundary[idx] = 1;
+        if (lightnessAt(buffer, w, x, y) < 0.42) {
+          isDarkBoundary[idx] = 1;
+        }
+      }
+    }
+  }
+
+  if (opaquePixels === 0) {
+    return {
+      score: 0,
+      summary: 'Frame is empty — block in a silhouette first.',
+      metrics: {
+        opaquePixels: 0,
+        coveragePercent: 0,
+        boundingBox: null,
+        connectedParts: 0,
+        uniqueColors: 0,
+        doublesCount: 0,
+        orphansCount: 0,
+        jaggiesCount: 0,
+        litSideLightness: null,
+        shadowSideLightness: null,
+      },
+      defects: [
+        {
+          kind: 'empty',
+          severity: 'warning',
+          count: 1,
+          message: 'Frame has no visible pixels.',
+          hint: 'Use draw_ellipse, draw_polygon, draw_line, or set_pixels to block in the silhouette.',
+          locations: [],
+        },
+      ],
+    };
+  }
+
+  // 1. Connected components (8-connected) to find orphan speckles (size <= 2 when main body >= 12)
+  const visited = new Uint8Array(total);
+  const components: CraftPoint[][] = [];
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const start = y * w + x;
+      if (visited[start] || !isOpaqueAt(buffer, w, h, x, y)) continue;
+      const comp: CraftPoint[] = [];
+      const stack: number[] = [start];
+      visited[start] = 1;
+      while (stack.length > 0) {
+        const cur = stack.pop()!;
+        const cx = cur % w;
+        const cy = (cur / w) | 0;
+        comp.push({ x: cx, y: cy });
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            if (dx === 0 && dy === 0) continue;
+            const nx = cx + dx;
+            const ny = cy + dy;
+            if (!inBounds(w, h, nx, ny)) continue;
+            const ni = ny * w + nx;
+            if (!visited[ni] && isOpaqueAt(buffer, w, h, nx, ny)) {
+              visited[ni] = 1;
+              stack.push(ni);
+            }
+          }
+        }
+      }
+      components.push(comp);
+    }
+  }
+  const largestComp = components.reduce((m, c) => Math.max(m, c.length), 0);
+  const orphanLocations: CraftPoint[] = [];
+  if (largestComp >= 12) {
+    for (const comp of components) {
+      if (comp.length <= 2) {
+        for (const pt of comp) orphanLocations.push(pt);
+      }
+    }
+  }
+
+  // 2. Outline doubles: dark boundary pixels forming thick outer L-corners
+  // An outer corner double at (x, y) has 2 orthogonal dark-boundary neighbors,
+  // an interior (non-boundary) opaque pixel on the diagonal between them,
+  // and transparent pixels on the two opposite sides.
+  const doubleLocations: CraftPoint[] = [];
+  const isInterior = (x: number, y: number): boolean =>
+    inBounds(w, h, x, y) && isOpaqueAt(buffer, w, h, x, y) && isBoundary[y * w + x] === 0;
+  const isDarkEdge = (x: number, y: number): boolean =>
+    inBounds(w, h, x, y) && isDarkBoundary[y * w + x] === 1;
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (!isDarkEdge(x, y)) continue;
+      const u = isDarkEdge(x, y - 1);
+      const d = isDarkEdge(x, y + 1);
+      const l = isDarkEdge(x - 1, y);
+      const r = isDarkEdge(x + 1, y);
+
+      const emptyU = !isOpaqueAt(buffer, w, h, x, y - 1);
+      const emptyD = !isOpaqueAt(buffer, w, h, x, y + 1);
+      const emptyL = !isOpaqueAt(buffer, w, h, x - 1, y);
+      const emptyR = !isOpaqueAt(buffer, w, h, x + 1, y);
+
+      const isDoubleCorner =
+        (r && d && emptyL && emptyU && isInterior(x + 1, y + 1)) ||
+        (l && d && emptyR && emptyU && isInterior(x - 1, y + 1)) ||
+        (r && u && emptyL && emptyD && isInterior(x + 1, y - 1)) ||
+        (l && u && emptyR && emptyD && isInterior(x - 1, y - 1));
+
+      if (isDoubleCorner) {
+        doubleLocations.push({ x, y });
+      }
+    }
+  }
+
+  // 3. Silhouette jaggies: detect 1px stair-step hiccups along horizontal/vertical runs
+  // Specifically, a boundary pixel protruding 1px out of a straight run of >= 3 pixels
+  const jaggyLocations: CraftPoint[] = [];
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      if (!isBoundary[y * w + x]) continue;
+      // Top-edge 1px bump: empty above, left, right; opaque below, with opaque shelf on both bottom-diagonals
+      const bumpTop =
+        !isOpaqueAt(buffer, w, h, x, y - 1) &&
+        !isOpaqueAt(buffer, w, h, x - 1, y) &&
+        !isOpaqueAt(buffer, w, h, x + 1, y) &&
+        isOpaqueAt(buffer, w, h, x, y + 1) &&
+        isOpaqueAt(buffer, w, h, x - 1, y + 1) &&
+        isOpaqueAt(buffer, w, h, x + 1, y + 1) &&
+        // exclude deliberate narrow spikes (check neighbors 2px out are also flat)
+        isOpaqueAt(buffer, w, h, x - 2, y + 1) &&
+        isOpaqueAt(buffer, w, h, x + 2, y + 1);
+      const bumpBottom =
+        !isOpaqueAt(buffer, w, h, x, y + 1) &&
+        !isOpaqueAt(buffer, w, h, x - 1, y) &&
+        !isOpaqueAt(buffer, w, h, x + 1, y) &&
+        isOpaqueAt(buffer, w, h, x, y - 1) &&
+        isOpaqueAt(buffer, w, h, x - 1, y - 1) &&
+        isOpaqueAt(buffer, w, h, x + 1, y - 1) &&
+        isOpaqueAt(buffer, w, h, x - 2, y - 1) &&
+        isOpaqueAt(buffer, w, h, x + 2, y - 1);
+      const bumpLeft =
+        !isOpaqueAt(buffer, w, h, x - 1, y) &&
+        !isOpaqueAt(buffer, w, h, x, y - 1) &&
+        !isOpaqueAt(buffer, w, h, x, y + 1) &&
+        isOpaqueAt(buffer, w, h, x + 1, y) &&
+        isOpaqueAt(buffer, w, h, x + 1, y - 1) &&
+        isOpaqueAt(buffer, w, h, x + 1, y + 1) &&
+        isOpaqueAt(buffer, w, h, x + 1, y - 2) &&
+        isOpaqueAt(buffer, w, h, x + 1, y + 2);
+      const bumpRight =
+        !isOpaqueAt(buffer, w, h, x + 1, y) &&
+        !isOpaqueAt(buffer, w, h, x, y - 1) &&
+        !isOpaqueAt(buffer, w, h, x, y + 1) &&
+        isOpaqueAt(buffer, w, h, x - 1, y) &&
+        isOpaqueAt(buffer, w, h, x - 1, y - 1) &&
+        isOpaqueAt(buffer, w, h, x - 1, y + 1) &&
+        isOpaqueAt(buffer, w, h, x - 1, y - 2) &&
+        isOpaqueAt(buffer, w, h, x - 1, y + 2);
+
+      if (bumpTop || bumpBottom || bumpLeft || bumpRight) {
+        jaggyLocations.push({ x, y });
+      }
+    }
+  }
+
+  // 4. Directional lighting / pillow-shading check on interior pixels (excluding dark outlines)
+  let litSum = 0;
+  let litCount = 0;
+  let shadowSum = 0;
+  let shadowCount = 0;
+  let centerSum = 0;
+  let centerCount = 0;
+
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      if (!isInterior(x, y)) continue;
+      const L = lightnessAt(buffer, w, x, y);
+      const nearTopLeft = isBoundary[y * w + (x - 1)] === 1 || isBoundary[(y - 1) * w + x] === 1;
+      const nearBottomRight = isBoundary[y * w + (x + 1)] === 1 || isBoundary[(y + 1) * w + x] === 1;
+      if (nearTopLeft && !nearBottomRight) {
+        litSum += L;
+        litCount++;
+      } else if (nearBottomRight && !nearTopLeft) {
+        shadowSum += L;
+        shadowCount++;
+      } else if (!nearTopLeft && !nearBottomRight) {
+        centerSum += L;
+        centerCount++;
+      }
+    }
+  }
+
+  const litAvg = litCount > 0 ? litSum / litCount : null;
+  const shadowAvg = shadowCount > 0 ? shadowSum / shadowCount : null;
+  const centerAvg = centerCount > 0 ? centerSum / centerCount : null;
+
+  const defects: CraftDefect[] = [];
+  let score = 100;
+
+  if (doubleLocations.length > 0) {
+    const severity = doubleLocations.length >= 4 ? 'warning' : 'info';
+    score -= Math.min(25, doubleLocations.length * 3);
+    defects.push({
+      kind: 'doubles',
+      severity,
+      count: doubleLocations.length,
+      message: `${doubleLocations.length} outline double corner(s) detected — thick L-corners make silhouettes look clunky.`,
+      hint: 'Remove outer L-corner outline pixels or run beautify_layer with cleanDoubles: true.',
+      locations: doubleLocations.slice(0, 24),
+    });
+  }
+
+  if (orphanLocations.length > 0) {
+    score -= Math.min(20, orphanLocations.length * 4);
+    defects.push({
+      kind: 'orphans',
+      severity: 'warning',
+      count: orphanLocations.length,
+      message: `${orphanLocations.length} isolated stray/orphan pixel(s) detached from the main silhouette.`,
+      hint: 'Erase stray pixels unless they are intentional floating sparkles/particles.',
+      locations: orphanLocations.slice(0, 24),
+    });
+  }
+
+  if (jaggyLocations.length > 0) {
+    score -= Math.min(18, jaggyLocations.length * 3);
+    defects.push({
+      kind: 'jaggies',
+      severity: jaggyLocations.length >= 3 ? 'warning' : 'info',
+      count: jaggyLocations.length,
+      message: `${jaggyLocations.length} single-pixel silhouette bump(s) / jaggy step(s) detected.`,
+      hint: 'Smooth stair-step runs (e.g. 3-2-1) so curves read cleanly at 1×.',
+      locations: jaggyLocations.slice(0, 24),
+    });
+  }
+
+  if (lighting === 'top-left' && litAvg !== null && shadowAvg !== null && litCount >= 4 && shadowCount >= 4) {
+    const contrast = litAvg - shadowAvg;
+    const looksPillowed =
+      contrast < 0.02 ||
+      (centerAvg !== null && centerAvg - litAvg > 0.08 && centerAvg - shadowAvg > 0.08);
+    if (looksPillowed) {
+      score -= 18;
+      defects.push({
+        kind: 'pillow_shading',
+        severity: 'warning',
+        count: 1,
+        message: `Weak directional lighting (top-left avg L=${litAvg.toFixed(2)} vs bottom-right avg L=${shadowAvg.toFixed(2)}) — sprite may look flat or pillow-shaded.`,
+        hint: 'Brighten top-left facing clusters with warmer highlights and push bottom-right edges into cooler, darker palette shades (or run beautify_layer with shade: true, highlight: true).',
+        locations: [],
+      });
+    }
+  }
+
+  score = Math.max(0, Math.min(100, Math.round(score)));
+  const warnings = defects.filter((d) => d.severity === 'warning').length;
+  const summary =
+    warnings === 0 && defects.length === 0
+      ? `Clean pixel craft (${score}/100) — no doubles, orphans, jaggies, or pillow shading.`
+      : `Pixel craft score ${score}/100 — ${warnings} warning(s), ${defects.length} finding(s) to refine.`;
+
+  return {
+    score,
+    summary,
+    metrics: {
+      opaquePixels,
+      coveragePercent: Math.round((opaquePixels / total) * 1000) / 10,
+      boundingBox: { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 },
+      connectedParts: components.length,
+      uniqueColors: colors.size,
+      doublesCount: doubleLocations.length,
+      orphansCount: orphanLocations.length,
+      jaggiesCount: jaggyLocations.length,
+      litSideLightness: litAvg !== null ? Math.round(litAvg * 1000) / 1000 : null,
+      shadowSideLightness: shadowAvg !== null ? Math.round(shadowAvg * 1000) / 1000 : null,
+    },
+    defects,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 4. Pro Artist Polish Engine (OKLab Hue-Shifted Sel-Out, Shading & Cleanup)
+// ---------------------------------------------------------------------------
+
+interface PaletteEntry {
+  rgba: RGBA;
+  lab: Oklab;
+}
+
+function buildPaletteEntries(palette: readonly string[]): PaletteEntry[] {
+  const out: PaletteEntry[] = [];
+  for (const hex of palette) {
+    const rgb = parseHexColor(hex);
+    if (!rgb) continue;
+    out.push({
+      rgba: [rgb[0], rgb[1], rgb[2], 255],
+      lab: rgbToOklab(rgb[0], rgb[1], rgb[2]),
+    });
+  }
+  return out;
+}
+
+/**
+ * Find the best hue-shifted darker color in the palette for a given base pixel.
+ * Shifts OKLab lightness down and nudges hue subtly cooler (toward indigo/violet).
+ */
+function pickHueShiftedDarker(
+  base: Oklab,
+  entries: readonly PaletteEntry[],
+  lightnessDelta: number,
+  minDrop: number,
+  preserveHueWeight = 1.6,
+): RGBA | null {
+  const target: Oklab = {
+    L: Math.max(0.08, base.L - lightnessDelta),
+    a: base.a * 0.9 + 0.01,
+    b: base.b * 0.9 - 0.025,
+  };
+  let best: PaletteEntry | null = null;
+  let bestDist = Infinity;
+  for (const e of entries) {
+    if (e.lab.L > base.L - minDrop) continue;
+    const dl = target.L - e.lab.L;
+    const da = target.a - e.lab.a;
+    const db = target.b - e.lab.b;
+    const d = dl * dl + preserveHueWeight * (da * da + db * db);
+    if (d < bestDist) {
+      bestDist = d;
+      best = e;
+    }
+  }
+  if (best) return best.rgba;
+  // Fallback: darkest color in palette
+  let darkest: PaletteEntry | null = null;
+  for (const e of entries) {
+    if (!darkest || e.lab.L < darkest.lab.L) darkest = e;
+  }
+  return darkest ? darkest.rgba : null;
+}
+
+/**
+ * Find the best hue-shifted lighter color in the palette for top-left rim highlights.
+ * Shifts OKLab lightness up and nudges hue subtly warmer (toward warm yellow).
+ */
+function pickHueShiftedLighter(
+  base: Oklab,
+  entries: readonly PaletteEntry[],
+  lightnessDelta: number,
+  minRise: number,
+): RGBA | null {
+  const target: Oklab = {
+    L: Math.min(0.98, base.L + lightnessDelta),
+    a: base.a * 0.9,
+    b: base.b * 0.9 + 0.028,
+  };
+  let best: PaletteEntry | null = null;
+  let bestDist = Infinity;
+  for (const e of entries) {
+    if (e.lab.L < base.L + minRise) continue;
+    // Prefer preserving hue family rather than jumping across opposite hues
+    const d = oklabDistance2(target, e.lab) + 1.5 * ((e.lab.a - target.a) ** 2 + (e.lab.b - target.b) ** 2);
+    if (d < bestDist) {
+      bestDist = d;
+      best = e;
+    }
+  }
+  return best ? best.rgba : null;
+}
+
+export interface PolishPixelArtOptions {
+  /** Active project palette hexes — locks all shading, highlights & sel-out strictly to palette */
+  palette?: readonly string[];
+  /** Explicit flat outline color; ignored when `selOut: true` (unless palette is empty); `null` disables outline */
+  outline?: RGBA | null;
+  /** Use OKLab hue-shifted selective colored outlines (sel-out) matched to each adjacent cluster */
+  selOut?: boolean;
+  /** Add directional hue-shifted shadows on bottom/right inner edges (top-left light) */
+  shade?: boolean;
+  /** Add directional hue-shifted rim highlights on top/left inner edges (top-left light) */
+  highlight?: boolean;
+  /** Remove clunky outer L-shaped outline double corners after outlining */
+  cleanDoubles?: boolean;
+}
+
+/**
+ * Palette-aware pixel-art polish pass:
+ *   - Hue-shifted selective outlines (`selOut`) OR flat 1px outline
+ *   - Palette-locked directional shadows (bottom/right) and warm highlights (top/left)
+ *   - Automatic outer L-corner double cleanup (`cleanDoubles`)
+ */
+export function polishLayerPixelArt(
+  buf: Uint8ClampedArray,
+  w: number,
+  h: number,
+  opts: PolishPixelArtOptions = {},
+): boolean {
+  const entries = opts.palette && opts.palette.length > 0 ? buildPaletteEntries(opts.palette) : [];
+  const useSelOut = opts.selOut === true && entries.length > 0;
+  const flatOutline = opts.outline === undefined ? ([26, 28, 44, 255] as RGBA) : opts.outline;
+  const doOutline = useSelOut || (flatOutline !== null && flatOutline[3] > 0);
+  const doShade = opts.shade !== false;
+  const doHighlight = opts.highlight === true;
+  const doCleanDoubles = opts.cleanDoubles !== false;
+
+  const snapshot = Uint8ClampedArray.from(buf);
+  const alphaAt = (x: number, y: number): number =>
+    x < 0 || y < 0 || x >= w || y >= h ? 0 : snapshot[(y * w + x) * 4 + 3]!;
+  const labAt = (x: number, y: number): Oklab => {
+    const i = (y * w + x) * 4;
+    return rgbToOklab(snapshot[i]!, snapshot[i + 1]!, snapshot[i + 2]!);
+  };
+
+  let changed = false;
+  const addedOutline = new Uint8Array(w * h);
+
+  // 1. Outline pass (flat or OKLab hue-shifted sel-out)
+  if (doOutline) {
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (alphaAt(x, y) > 0) continue;
+        const neighbors: Array<[number, number]> = [];
+        if (alphaAt(x - 1, y) > 0) neighbors.push([x - 1, y]);
+        if (alphaAt(x + 1, y) > 0) neighbors.push([x + 1, y]);
+        if (alphaAt(x, y - 1) > 0) neighbors.push([x, y - 1]);
+        if (alphaAt(x, y + 1) > 0) neighbors.push([x, y + 1]);
+        if (neighbors.length === 0) continue;
+
+        let chosen: RGBA | null = flatOutline;
+        if (useSelOut) {
+          // Average OKLab of opaque 4-neighbors (weighted toward darker/structural color)
+          let sumL = 0;
+          let sumA = 0;
+          let sumB = 0;
+          for (const [nx, ny] of neighbors) {
+            const lab = labAt(nx, ny);
+            sumL += lab.L;
+            sumA += lab.a;
+            sumB += lab.b;
+          }
+          const avg: Oklab = {
+            L: sumL / neighbors.length,
+            a: sumA / neighbors.length,
+            b: sumB / neighbors.length,
+          };
+          // Top-left outline pixels get colored hue-shifted sel-out; bottom-right get deeper anchoring ink
+          const isLitSide = alphaAt(x + 1, y) > 0 || alphaAt(x, y + 1) > 0;
+          const drop = isLitSide ? 0.2 : 0.36;
+          chosen = pickHueShiftedDarker(avg, entries, drop, 0.1, isLitSide ? 2.4 : 1.3) ?? flatOutline;
+        }
+        if (chosen && chosen[3] > 0) {
+          setPx(buf, w, h, x, y, chosen);
+          addedOutline[y * w + x] = 1;
+          changed = true;
+        }
+      }
+    }
+  }
+
+  // 2. Clean outer L-corner doubles (both newly added and pre-existing dark edge doubles)
+  if (doCleanDoubles) {
+    const postOutline = Uint8ClampedArray.from(buf);
+    const isEdgeDark = (x: number, y: number): boolean => {
+      if (!inBounds(w, h, x, y)) return false;
+      const idx = y * w + x;
+      if (addedOutline[idx] === 1) return true;
+      const i = idx * 4;
+      if (postOutline[i + 3]! < 128) return false;
+      const touchesEmpty =
+        !isOpaqueAt(postOutline, w, h, x - 1, y) ||
+        !isOpaqueAt(postOutline, w, h, x + 1, y) ||
+        !isOpaqueAt(postOutline, w, h, x, y - 1) ||
+        !isOpaqueAt(postOutline, w, h, x, y + 1);
+      if (!touchesEmpty) return false;
+      return rgbToOklab(postOutline[i]!, postOutline[i + 1]!, postOutline[i + 2]!).L < 0.4;
+    };
+    const isOrigInterior = (x: number, y: number): boolean =>
+      inBounds(w, h, x, y) && isOpaqueAt(postOutline, w, h, x, y) && !isEdgeDark(x, y);
+
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (!isEdgeDark(x, y)) continue;
+        const u = isEdgeDark(x, y - 1);
+        const d = isEdgeDark(x, y + 1);
+        const l = isEdgeDark(x - 1, y);
+        const r = isEdgeDark(x + 1, y);
+        const eU = !isOpaqueAt(postOutline, w, h, x, y - 1);
+        const eD = !isOpaqueAt(postOutline, w, h, x, y + 1);
+        const eL = !isOpaqueAt(postOutline, w, h, x - 1, y);
+        const eR = !isOpaqueAt(postOutline, w, h, x + 1, y);
+
+        const isDouble =
+          (r && d && eL && eU && isOrigInterior(x + 1, y + 1)) ||
+          (l && d && eR && eU && isOrigInterior(x - 1, y + 1)) ||
+          (r && u && eL && eD && isOrigInterior(x + 1, y - 1)) ||
+          (l && u && eR && eD && isOrigInterior(x - 1, y - 1));
+
+        if (isDouble) {
+          setPx(buf, w, h, x, y, [0, 0, 0, 0]);
+          changed = true;
+        }
+      }
+    }
+  }
+
+  // 3. Directional shading & top-left rim highlights (strictly palette-locked when palette provided)
+  if (doShade || doHighlight) {
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (alphaAt(x, y) === 0) continue; // only shade/highlight original sprite pixels
+        const i = (y * w + x) * 4;
+        if (buf[i + 3] === 0) continue;
+
+        const baseLab = labAt(x, y);
+        // Never shade/highlight already-ink-dark outline pixels (L < 0.25)
+        if (baseLab.L < 0.25) continue;
+
+        const edgeDown = alphaAt(x, y + 1) === 0;
+        const edgeRight = alphaAt(x + 1, y) === 0;
+        const edgeUp = alphaAt(x, y - 1) === 0;
+        const edgeLeft = alphaAt(x - 1, y) === 0;
+
+        if (doShade && (edgeDown || edgeRight) && !(edgeUp && edgeLeft)) {
+          if (entries.length > 0) {
+            const darker = pickHueShiftedDarker(baseLab, entries, 0.16, 0.06);
+            if (darker) {
+              setPx(buf, w, h, x, y, darker);
+              changed = true;
+            }
+          } else {
+            buf[i] = Math.round(buf[i]! * 0.72);
+            buf[i + 1] = Math.round(buf[i + 1]! * 0.72);
+            buf[i + 2] = Math.round(buf[i + 2]! * 0.72);
+            changed = true;
+          }
+        } else if (doHighlight && (edgeUp || edgeLeft) && !(edgeDown || edgeRight) && entries.length > 0) {
+          const lighter = pickHueShiftedLighter(baseLab, entries, 0.14, 0.06);
+          if (lighter) {
+            setPx(buf, w, h, x, y, lighter);
+            changed = true;
+          }
+        }
+      }
+    }
+  }
+
+  return changed;
+}

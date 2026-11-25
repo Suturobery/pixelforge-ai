@@ -21,6 +21,7 @@ import {
   stampBrush,
 } from '../pixels/ops';
 import { drawEllipsePixels } from '../pixels/ellipse';
+import { drawPolygonPixels } from '../pixels/craft';
 import {
   clampRect,
   flipRegionHInPlace,
@@ -59,6 +60,12 @@ export type PixelOp =
       filled?: boolean;
       mirrorX?: boolean;
     }
+  | {
+      op: 'polygon';
+      points: PixelPoint[];
+      filled?: boolean;
+      mirrorX?: boolean;
+    }
   | ({ op: 'fill' } & PixelPoint & { mirrorX?: boolean })
   | { op: 'shift'; dx: number; dy: number }
   | { op: 'clear' }
@@ -88,7 +95,7 @@ export interface ApplyPixelOpsPayload {
   ops: PixelOp[];
 }
 
-const OPS_NEEDING_COLOR: ReadonlySet<string> = new Set(['stamp', 'line', 'rect', 'ellipse', 'fill']);
+const OPS_NEEDING_COLOR: ReadonlySet<string> = new Set(['stamp', 'line', 'rect', 'ellipse', 'polygon', 'fill']);
 
 function validateRect(rect: unknown, what: string): void {
   if (!rect || typeof rect !== 'object') fail(`${what} requires a rect object`);
@@ -129,6 +136,21 @@ function validateOp(op: PixelOp, hasColor: boolean, ctx: CommandContext, i: numb
         getOptionalBool(op as unknown as Record<string, unknown>, 'filled', what);
       }
       break;
+    case 'polygon': {
+      const pts = (op as { points?: unknown }).points;
+      if (!Array.isArray(pts) || pts.length < 2 || pts.length > 64) {
+        fail(`${what} requires 2–64 {x, y} points`);
+      }
+      for (let k = 0; k < pts.length; k++) {
+        const pt = pts[k];
+        if (!pt || typeof pt !== 'object') fail(`${what} points[${k}] must be an object`);
+        getInt(pt as Record<string, unknown>, 'x', `${what} points[${k}]`);
+        getInt(pt as Record<string, unknown>, 'y', `${what} points[${k}]`);
+      }
+      getOptionalBool(op as unknown as Record<string, unknown>, 'filled', what);
+      getOptionalBool(op as unknown as Record<string, unknown>, 'mirrorX', what);
+      break;
+    }
     case 'flipH':
     case 'flipV':
     case 'rotateCW':
@@ -227,6 +249,9 @@ export const applyPixelOpsCommand: CommandDefinition<ApplyPixelOpsPayload> = {
           break;
         case 'ellipse':
           drawEllipsePixels(base, width, height, op.from.x, op.from.y, op.to.x, op.to.y, op.size ?? 1, c, op.filled ?? false, op.mirrorX ?? false);
+          break;
+        case 'polygon':
+          drawPolygonPixels(base, width, height, op.points, c, op.filled ?? true, op.mirrorX ?? false);
           break;
         case 'fill':
           floodFill(base, width, height, op.x, op.y, c, op.mirrorX ?? false);

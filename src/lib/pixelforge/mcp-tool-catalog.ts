@@ -45,8 +45,8 @@ export const MCP_TOOLS: McpToolInfo[] = [
   {
     name: 'get_frame_png',
     tier: 'L0',
-    description: 'Render one frame (composited) as a base64 PNG; optional scale 0.5/0.25.',
-    example: { scale: 1 },
+    description: 'Render one frame (composited) as a base64 PNG; supports nearest-neighbor scale 0.25–8 and optional pixel grid overlay (showGrid).',
+    example: { scale: 8, showGrid: true },
   },
   {
     name: 'get_palette',
@@ -59,6 +59,12 @@ export const MCP_TOOLS: McpToolInfo[] = [
     tier: 'L0',
     description: 'Run deterministic canvas, palette, alpha, and margin checks on a frame before review.',
     example: { allowEdgeTouch: false },
+  },
+  {
+    name: 'analyze_pixel_craft',
+    tier: 'L0',
+    description: 'Deterministic pixel-art craft linter: reports exact (x, y) coordinates of outline doubles, orphan speckles, jaggies, and pillow shading with a 0–100 score.',
+    example: {},
   },
   {
     name: 'list_vfx',
@@ -185,6 +191,30 @@ export const MCP_TOOLS: McpToolInfo[] = [
     tier: 'L1',
     description: 'Filled (default) or outlined rectangle between two corners.',
     example: { from: { x: 2, y: 2 }, to: { x: 10, y: 8 }, color: '#22d3ee' },
+  },
+  {
+    name: 'draw_line',
+    tier: 'L1',
+    description: 'Crisp Bresenham pixel line between two points.',
+    example: { from: { x: 4, y: 4 }, to: { x: 20, y: 12 }, color: '#1a1c2c', size: 1 },
+  },
+  {
+    name: 'draw_ellipse',
+    tier: 'L1',
+    description: 'Filled (default) or outlined pixel-art ellipse inside a bounding box — ideal for organic silhouettes.',
+    example: { from: { x: 8, y: 4 }, to: { x: 22, y: 16 }, color: '#38b764', filled: true },
+  },
+  {
+    name: 'draw_polygon',
+    tier: 'L1',
+    description: 'Filled (default) or outlined polygon from 2–64 vertices — ideal for capes, blades, and tapered shapes.',
+    example: { points: [{ x: 6, y: 14 }, { x: 12, y: 12 }, { x: 10, y: 24 }, { x: 4, y: 22 }], color: '#b13e53', filled: true },
+  },
+  {
+    name: 'flood_fill',
+    tier: 'L1',
+    description: 'Scanline flood-fill a contiguous region starting at (x, y).',
+    example: { x: 14, y: 14, color: '#38b764' },
   },
   {
     name: 'replace_color',
@@ -315,8 +345,8 @@ export const MCP_TOOLS: McpToolInfo[] = [
     {
     name: 'beautify_layer',
     tier: 'L1',
-    description: 'One-call polish: 1px outline around the active layer + directional shading on bottom/right edges (light from top-left). Undoable.',
-    example: { outline: '#1a1c2c', shade: true },
+    description: 'Palette-locked pixel polish: OKLab hue-shifted sel-out outlines (selOut=true), directional bottom/right shade + warm top/left rim highlight, and automatic L-corner double cleanup. Undoable.',
+    example: { selOut: true, shade: true, highlight: true, cleanDoubles: true, paletteLock: true },
   },
   {
     name: 'harvest_palette',

@@ -170,6 +170,18 @@ export {
   type EllipsePoint,
 } from './pixels/ellipse';
 export {
+  analyzePixelCraft,
+  drawPolygonPixels,
+  polishLayerPixelArt,
+  renderInspectionRgba,
+  type CraftDefect,
+  type CraftPoint,
+  type InspectionScale,
+  type PixelCraftInput,
+  type PixelCraftReport,
+  type PolishPixelArtOptions,
+} from './pixels/craft';
+export {
   clampRect,
   clearRegionInPlace,
   extractRegion,

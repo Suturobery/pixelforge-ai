@@ -22,6 +22,7 @@
 // (L1, deterministic composer through the SAME bus command as the UI).
 
 import {
+  analyzePixelCraft,
   beautifyLayer,
   CommandError,
   buildPlaybackCycle,
@@ -31,12 +32,15 @@ import {
   createProject as coreCreateProject,
   defaultStyleProfile,
   parseStyleProfile,
+  polishLayerPixelArt,
+  renderInspectionRgba,
   styleProfilePromptTags,
   decodePng,
   encodePng,
   harvestPalette,
   uid,
   validateStyleCandidate,
+  type InspectionScale,
   type StyleCheck,
   type BlendMode,
   type SheetLayout,
@@ -398,17 +402,23 @@ function clipDetail(clip: Clip): Record<string, unknown> {
 // entries die automatically on the next edit (no explicit invalidation).
 const framePngCache = new WeakMap<Project, Map<string, string>>()
 
-async function framePng(project: Project, clip: Clip, frame: Frame, scale: 0.25 | 0.5 | 1): Promise<string> {
+async function framePng(
+  project: Project,
+  clip: Clip,
+  frame: Frame,
+  scale: InspectionScale,
+  showGrid = false,
+): Promise<string> {
   let cache = framePngCache.get(project)
   if (!cache) {
     cache = new Map()
     framePngCache.set(project, cache)
   }
-  const key = `${clip.id}:${frame.id}:${scale}`
+  const key = `${clip.id}:${frame.id}:${scale}:${showGrid ? 1 : 0}`
   const hit = cache.get(key)
   if (hit) return hit
   const composed = composeFrameRgba(project, clip, frame)
-  const scaled = nnScale(composed, project.width, project.height, scale)
+  const scaled = renderInspectionRgba(composed, project.width, project.height, scale, showGrid)
   const url = await pngDataUrl(scaled.w, scaled.h, scaled.rgba)
   if (cache.size > 256) cache.clear()
   cache.set(key, url)
@@ -480,14 +490,24 @@ const handlers: Record<string, ToolHandler> = {
     const clip = resolveClipRef(project, args)
     const { frame } = resolveFrameRef(clip, args)
     const raw = args.scale
-    const scale = raw === undefined ? 1 : (raw === 0.5 || raw === 0.25 ? raw : asInt(raw, 'scale', 0.25, 1))
-    const dataUrl = await framePng(project, clip, frame, scale as 0.25 | 0.5 | 1)
+    const ALLOWED_SCALES: ReadonlySet<number> = new Set([0.25, 0.5, 1, 2, 4, 8])
+    const scale: InspectionScale =
+      raw === undefined
+        ? 1
+        : typeof raw === 'number' && ALLOWED_SCALES.has(raw)
+          ? (raw as InspectionScale)
+          : (() => {
+              throw new CommandError('VALIDATION_FAILED', 'scale must be one of 0.25, 0.5, 1, 2, 4, 8')
+            })()
+    const showGrid = args.showGrid === true
+    const dataUrl = await framePng(project, clip, frame, scale, showGrid)
     return withStateHash({
       clipId: clip.id,
       frameId: frame.id,
-      width: Math.max(1, Math.floor(project.width * (scale as number))),
-      height: Math.max(1, Math.floor(project.height * (scale as number))),
+      width: Math.max(1, Math.floor(project.width * scale)),
+      height: Math.max(1, Math.floor(project.height * scale)),
       scale,
+      showGrid,
       png: dataUrl,
     })
   },
@@ -534,6 +554,26 @@ const handlers: Record<string, ToolHandler> = {
           ? `Style checks pass for "${clip.name}" frame ${frame.id}`
           : `${warnings} style warning(s) on "${clip.name}" frame ${frame.id} — fix before candidate review`,
       },
+    )
+  },
+
+  async analyze_pixel_craft(args) {
+    const project = getBus().getProject()
+    const clip = resolveClipRef(project, args)
+    const { frame } = resolveFrameRef(clip, args)
+    const report = analyzePixelCraft({
+      buffer: composeFrameRgba(project, clip, frame),
+      width: project.width,
+      height: project.height,
+      lighting: project.settings.styleProfile?.lighting ?? 'top-left',
+    })
+    return withStateHash(
+      {
+        clipId: clip.id,
+        frameId: frame.id,
+        ...report,
+      },
+      { summary: report.summary },
     )
   },
 
@@ -958,6 +998,108 @@ const handlers: Record<string, ToolHandler> = {
     )
   },
 
+  async draw_line(args) {
+    const project = getBus().getProject()
+    const clip = resolveClipRef(project, args)
+    const { frame } = resolveFrameRef(clip, args)
+    const layer = resolveLayerRef(clip, args)
+    if (!isRecord(args.from) || !isRecord(args.to)) throw new CommandError('VALIDATION_FAILED', 'from/to must be {x, y} points')
+    const from = { x: asCoord(args.from.x, 'from.x', -100000, 100000), y: asCoord(args.from.y, 'from.y', -100000, 100000) }
+    const to = { x: asCoord(args.to.x, 'to.x', -100000, 100000), y: asCoord(args.to.y, 'to.y', -100000, 100000) }
+    const hex = asHex(args.color, 'color')
+    const size = args.size === undefined ? 1 : asInt(args.size, 'size', 1, 8)
+    const mirrorX = args.mirrorX === true
+    execCommand('pixels.applyOp', {
+      clipId: clip.id,
+      frameId: frame.id,
+      layerId: layer.id,
+      color: asRgba(hex),
+      ops: [{ op: 'line' as const, from, to, size, mirrorX }],
+    })
+    return withStateHash(
+      { clipId: clip.id, frameId: frame.id, layerId: layer.id, from, to, size, mirrorX },
+      { undoable: true, summary: `Drew line in "${clip.name}" / "${layer.name}"` }
+    )
+  },
+
+  async draw_ellipse(args) {
+    const project = getBus().getProject()
+    const clip = resolveClipRef(project, args)
+    const { frame } = resolveFrameRef(clip, args)
+    const layer = resolveLayerRef(clip, args)
+    if (!isRecord(args.from) || !isRecord(args.to)) throw new CommandError('VALIDATION_FAILED', 'from/to must be {x, y} points')
+    const from = { x: asCoord(args.from.x, 'from.x', -100000, 100000), y: asCoord(args.from.y, 'from.y', -100000, 100000) }
+    const to = { x: asCoord(args.to.x, 'to.x', -100000, 100000), y: asCoord(args.to.y, 'to.y', -100000, 100000) }
+    const hex = asHex(args.color, 'color')
+    const filled = args.filled === undefined ? true : args.filled === true
+    const size = args.size === undefined ? 1 : asInt(args.size, 'size', 1, 8)
+    const mirrorX = args.mirrorX === true
+    execCommand('pixels.applyOp', {
+      clipId: clip.id,
+      frameId: frame.id,
+      layerId: layer.id,
+      color: asRgba(hex),
+      ops: [{ op: 'ellipse' as const, from, to, filled, size, mirrorX }],
+    })
+    return withStateHash(
+      { clipId: clip.id, frameId: frame.id, layerId: layer.id, from, to, filled, size, mirrorX },
+      { undoable: true, summary: `${filled ? 'Filled' : 'Outlined'} ellipse in "${clip.name}" / "${layer.name}"` }
+    )
+  },
+
+  async draw_polygon(args) {
+    const project = getBus().getProject()
+    const clip = resolveClipRef(project, args)
+    const { frame } = resolveFrameRef(clip, args)
+    const layer = resolveLayerRef(clip, args)
+    if (!Array.isArray(args.points) || args.points.length < 2 || args.points.length > 64) {
+      throw new CommandError('VALIDATION_FAILED', 'points must be an array of 2–64 {x, y} vertices')
+    }
+    const points = args.points.map((pt, i) => {
+      if (!isRecord(pt)) throw new CommandError('VALIDATION_FAILED', `points[${i}] must be {x, y}`)
+      return {
+        x: asCoord(pt.x, `points[${i}].x`, -100000, 100000),
+        y: asCoord(pt.y, `points[${i}].y`, -100000, 100000),
+      }
+    })
+    const hex = asHex(args.color, 'color')
+    const filled = args.filled === undefined ? true : args.filled === true
+    const mirrorX = args.mirrorX === true
+    execCommand('pixels.applyOp', {
+      clipId: clip.id,
+      frameId: frame.id,
+      layerId: layer.id,
+      color: asRgba(hex),
+      ops: [{ op: 'polygon' as const, points, filled, mirrorX }],
+    })
+    return withStateHash(
+      { clipId: clip.id, frameId: frame.id, layerId: layer.id, vertexCount: points.length, filled, mirrorX },
+      { undoable: true, summary: `${filled ? 'Filled' : 'Outlined'} ${points.length}-pt polygon in "${clip.name}" / "${layer.name}"` }
+    )
+  },
+
+  async flood_fill(args) {
+    const project = getBus().getProject()
+    const clip = resolveClipRef(project, args)
+    const { frame } = resolveFrameRef(clip, args)
+    const layer = resolveLayerRef(clip, args)
+    const x = asCoord(args.x, 'x', 0, project.width - 1)
+    const y = asCoord(args.y, 'y', 0, project.height - 1)
+    const hex = asHex(args.color, 'color')
+    const mirrorX = args.mirrorX === true
+    execCommand('pixels.applyOp', {
+      clipId: clip.id,
+      frameId: frame.id,
+      layerId: layer.id,
+      color: asRgba(hex),
+      ops: [{ op: 'fill' as const, x, y, mirrorX }],
+    })
+    return withStateHash(
+      { clipId: clip.id, frameId: frame.id, layerId: layer.id, x, y, mirrorX },
+      { undoable: true, summary: `Flood-filled at (${x}, ${y}) in "${clip.name}" / "${layer.name}"` }
+    )
+  },
+
   async replace_color(args) {
     const project = getBus().getProject()
     const clip = resolveClipRef(project, args)
@@ -1360,25 +1502,40 @@ const handlers: Record<string, ToolHandler> = {
     const clip = resolveClipRef(project, args)
     const { frame } = resolveFrameRef(clip, args)
     const layer = resolveLayerRef(clip, args)
+    const existingCel = frame.cels[layer.id]
+    if (!existingCel) throw new CommandError('VALIDATION_FAILED', 'nothing to beautify — the layer is empty')
     const outline =
       args.outline === null ? null
       : args.outline !== undefined ? hexToRgba(asString(args.outline, 'outline', 9))
       : ([26, 28, 44, 255] as RGBA)
+    const selOut = args.selOut === true
     const shade = args.shade !== false
-    execTransaction(`Beautify layer "${layer.name}"`, () => {
-      getBus().execute(
-        'pixels.applyOp',
-        { clipId: clip.id, frameId: frame.id, layerId: layer.id, ops: [{ op: 'setBuffer', buffer: new Uint8ClampedArray(frame.cels[layer.id].buffer) }] },
-        'mcp',
-      )
-      const live = getBus().getProject().clips.find((c) => c.id === clip.id)!
-        .frames.find((f) => f.id === frame.id)!.cels[layer.id].buffer
-      const changed = beautifyLayer(live, project.width, project.height, { outline, shade })
-      if (!changed) throw new CommandError('VALIDATION_FAILED', 'nothing to beautify — the layer is empty')
-    })
+    const highlight = args.highlight === true
+    const cleanDoubles = args.cleanDoubles !== false
+    const paletteLock = args.paletteLock !== false
+    const working = new Uint8ClampedArray(existingCel.buffer)
+    const changed = paletteLock || selOut || highlight || cleanDoubles
+      ? polishLayerPixelArt(working, project.width, project.height, {
+          palette: paletteLock ? project.palette : undefined,
+          outline,
+          selOut,
+          shade,
+          highlight,
+          cleanDoubles,
+        })
+      : beautifyLayer(working, project.width, project.height, { outline, shade })
+    if (!changed) throw new CommandError('VALIDATION_FAILED', 'nothing to beautify — the layer is empty or unchanged')
+    execCommand(
+      'pixels.applyOp',
+      { clipId: clip.id, frameId: frame.id, layerId: layer.id, ops: [{ op: 'setBuffer', buffer: working }] },
+      `Beautify layer "${layer.name}"`,
+    )
     return withStateHash(
-      { clipId: clip.id, frameId: frame.id, layerId: layer.id },
-      { undoable: true, summary: `Beautified "${layer.name}" — outline ${outline ? 'on' : 'off'}, shade ${shade ? 'on' : 'off'}` },
+      { clipId: clip.id, frameId: frame.id, layerId: layer.id, selOut, shade, highlight, cleanDoubles, paletteLock },
+      {
+        undoable: true,
+        summary: `Polished "${layer.name}" — ${selOut ? 'sel-out' : outline ? 'outline' : 'no outline'}, shade ${shade ? 'on' : 'off'}${highlight ? ', highlight on' : ''}${cleanDoubles ? ', doubles cleaned' : ''}`,
+      },
     )
   },
 
@@ -1686,7 +1843,20 @@ async function runCelTransform(
 export const EXECUTOR_TOOL_NAMES = Object.keys(handlers).sort()
 
 // These handlers apply their edit synchronously before computing the result hash.
-const REVIEW_TOOLS = new Set(['set_pixels', 'fill_rect', 'replace_color', 'flip_frame', 'rotate_frame', 'shift_frame', 'beautify_layer', 'resize_canvas'])
+const REVIEW_TOOLS = new Set([
+  'set_pixels',
+  'fill_rect',
+  'draw_line',
+  'draw_ellipse',
+  'draw_polygon',
+  'flood_fill',
+  'replace_color',
+  'flip_frame',
+  'rotate_frame',
+  'shift_frame',
+  'beautify_layer',
+  'resize_canvas',
+])
 
 function reviewFrame(project: Project, clip: Clip, frame: Frame, layerId?: string): ReviewFrame {
   const { width, height } = project
