@@ -23,17 +23,24 @@ import {
   CommandError,
   clearRegionInPlace,
   clampRect,
+  collectUniqueOpaqueColors,
   composeFrameRgba,
   computeCenterShift,
+  computeTrimBounds,
   createProject as coreCreateProject,
   locateCel,
   pasteRegionInPlace,
   polishLayerPixelArt,
+  remapBufferToPalette,
+  replaceColorInBuffer,
+  sortPaletteColors,
   writeExportPlan,
   type CommandOrigin,
   type CustomBrush,
   type ClipTag,
   type MotionApplyPayload,
+  type PaletteRemapMode,
+  type PaletteSortBy,
   type PartRect,
   type PolishPixelArtOptions,
   type Project,
@@ -41,6 +48,7 @@ import {
   type StyleProfile,
   type StrokeHandle as CoreStrokeHandle,
 } from '@pixelforge/core'
+import { hexToRgba } from './color'
 import { DEFAULT_PALETTE } from './palettes'
 import { useAppSettings } from './settings'
 
@@ -299,6 +307,8 @@ export interface EditorState {
   motionPreviewIssues: QAIssue[]
   /** Live draft parts from MotionPanel so CanvasStage renders part overlays in real time. */
   motionDraftParts: MotionPartDraft[]
+  /** Live Craft Check defect pins rendered directly over the canvas stage. */
+  craftPins: Array<{ kind: 'doubles' | 'orphans' | 'jaggies'; x: number; y: number }>
   paletteOpen: boolean
   rightOpen: boolean
   rightWidth: number
@@ -352,6 +362,17 @@ export interface EditorState {
   ) => boolean
   /** Center opaque artwork on the canvas (active layer or all visible unlocked layers on active frame). */
   centerContent: (scope?: 'layer' | 'frame') => boolean
+  /** Auto-trim empty canvas margins across the project with optional padding (0–16px). */
+  autoTrimCanvas: (padding?: number) => { width: number; height: number; dx: number; dy: number } | null
+  /** Sort document palette in OKLab space (undoable). */
+  sortPalette: (by: PaletteSortBy) => void
+  /** Replace exact RGBA pixels matching fromHex with toHex across layer/frame/clip (undoable). */
+  replaceColor: (fromHex: string, toHex: string, scope?: 'layer' | 'frame' | 'clip') => number
+  /** Remap artwork onto a target palette (OKLab luminance ramp or nearest) in one undoable transaction. */
+  remapToPalette: (
+    targetPalette: string[],
+    opts?: { scope?: 'layer' | 'frame' | 'clip'; mode?: PaletteRemapMode; updatePalette?: boolean; label?: string }
+  ) => number
   addClip: (name: string) => void
   deleteClip: (clipId: string) => void
   setClipTags: (tags: ClipTag[]) => void
@@ -448,6 +469,7 @@ export interface EditorState {
   setRightTab: (t: RightTab) => void
   setMotionPreviewIssues: (issues: QAIssue[]) => void
   setMotionDraftParts: (parts: MotionPartDraft[]) => void
+  setCraftPins: (pins: EditorState['craftPins']) => void
   setPaletteOpen: (v: boolean) => void
   setRightOpen: (v: boolean) => void
   setRightWidth: (w: number) => void
@@ -521,6 +543,7 @@ export const useEditor = create<EditorState>()((set, get) => ({
   projectId: null,
   motionPreviewIssues: [],
   motionDraftParts: [],
+  craftPins: [],
   activeClipId: initialDoc.clips[0]?.id ?? '',
   activeFrameIndex: 0,
   activeLayerId: initialDoc.clips[0]?.layers[0]?.id ?? '',
@@ -1315,6 +1338,206 @@ export const useEditor = create<EditorState>()((set, get) => ({
     }
   },
 
+  autoTrimCanvas: (padding = 1) => {
+    const project = bus.getProject()
+    const seenCels = new Set<Uint8ClampedArray>()
+    const celRefs: Array<{ clipId: string; frameId: string; layerId: string; buffer: Uint8ClampedArray }> = []
+    for (const clip of project.clips) {
+      for (const frame of clip.frames) {
+        for (const layer of clip.layers) {
+          const cel = frame.cels[layer.id]
+          if (!cel || seenCels.has(cel.buffer)) continue
+          seenCels.add(cel.buffer)
+          celRefs.push({ clipId: clip.id, frameId: frame.id, layerId: layer.id, buffer: cel.buffer })
+        }
+      }
+    }
+    const trim = computeTrimBounds(
+      celRefs.map((c) => c.buffer),
+      project.width,
+      project.height,
+      padding,
+    )
+    if (!trim) {
+      toast({ title: 'Canvas is empty', description: 'Draw artwork before auto-trimming.' })
+      return null
+    }
+    if (
+      trim.width === project.width &&
+      trim.height === project.height &&
+      trim.dx === 0 &&
+      trim.dy === 0
+    ) {
+      toast({ title: 'Already trimmed', description: `Canvas is already tight at ${project.width}×${project.height}.` })
+      return null
+    }
+    try {
+      bus.transaction('Auto-trim canvas', ORIGIN, () => {
+        const growW = Math.max(project.width, trim.width)
+        const growH = Math.max(project.height, trim.height)
+        if (growW > project.width || growH > project.height) {
+          bus.execute('canvas.resize', { width: growW, height: growH, anchor: 'top-left' }, ORIGIN)
+        }
+        if (trim.dx !== 0 || trim.dy !== 0) {
+          for (const ref of celRefs) {
+            bus.execute(
+              'pixels.applyOp',
+              {
+                clipId: ref.clipId,
+                frameId: ref.frameId,
+                layerId: ref.layerId,
+                ops: [{ op: 'shift', dx: trim.dx, dy: trim.dy }],
+              },
+              ORIGIN,
+            )
+          }
+        }
+        const cur = bus.getProject()
+        if (cur.width !== trim.width || cur.height !== trim.height) {
+          bus.execute('canvas.resize', { width: trim.width, height: trim.height, anchor: 'top-left' }, ORIGIN)
+        }
+      })
+      set({ selection: null })
+      return { width: trim.width, height: trim.height, dx: trim.dx, dy: trim.dy }
+    } catch (err) {
+      toast({ title: 'Auto-trim failed', description: friendlyError(err), variant: 'destructive' })
+      return null
+    }
+  },
+
+  sortPalette: (by) => {
+    const current = bus.getProject().palette
+    if (current.length <= 1) return
+    const sorted = sortPaletteColors(current, by)
+    if (sorted.length === current.length && sorted.every((c, i) => c.toLowerCase() === current[i]?.toLowerCase())) {
+      toast({ title: 'Already sorted', description: `Palette is already ordered by ${by}.` })
+      return
+    }
+    try {
+      bus.execute(
+        'palette.replaceAll',
+        { colors: sorted },
+        ORIGIN,
+        { label: by === 'lightness' ? 'Sort palette (lightness)' : 'Sort palette (hue)' },
+      )
+    } catch {
+      /* ignore */
+    }
+  },
+
+  replaceColor: (fromHex, toHex, scope = 'layer') => {
+    const refs = activeRefs(get())
+    if (!refs) return 0
+    const from = hexToRgba(fromHex)
+    const to = hexToRgba(toHex)
+    if (from[0] === to[0] && from[1] === to[1] && from[2] === to[2] && from[3] === to[3]) {
+      toast({ title: 'Same color', description: 'Pick different primary and secondary colors to replace.' })
+      return 0
+    }
+    const project = bus.getProject()
+    const clip = project.clips.find((c) => c.id === refs.clipId)
+    if (!clip) return 0
+
+    const seen = new Set<Uint8ClampedArray>()
+    const targets: Array<{ frameId: string; layerId: string; working: Uint8ClampedArray; count: number }> = []
+    const frames = scope === 'clip' ? clip.frames : [clip.frames[refs.frameIndex]].filter((f): f is NonNullable<typeof f> => !!f)
+
+    for (const frame of frames) {
+      const layers = scope === 'layer'
+        ? clip.layers.filter((l) => l.id === refs.layerId && !l.locked)
+        : clip.layers.filter((l) => l.visible && !l.locked)
+      for (const layer of layers) {
+        const cel = frame.cels[layer.id]
+        if (!cel || seen.has(cel.buffer)) continue
+        seen.add(cel.buffer)
+        const working = new Uint8ClampedArray(cel.buffer)
+        const count = replaceColorInBuffer(working, from, to)
+        if (count > 0) targets.push({ frameId: frame.id, layerId: layer.id, working, count })
+      }
+    }
+
+    if (targets.length === 0) {
+      toast({ title: 'No matching pixels', description: `No pixels of ${fromHex} found in this ${scope}.` })
+      return 0
+    }
+    const total = targets.reduce((sum, t) => sum + t.count, 0)
+    try {
+      bus.transaction(`Replace color (${scope})`, ORIGIN, () => {
+        for (const t of targets) {
+          bus.execute(
+            'pixels.applyOp',
+            { clipId: clip.id, frameId: t.frameId, layerId: t.layerId, ops: [{ op: 'setBuffer', buffer: t.working }] },
+            ORIGIN,
+          )
+        }
+      })
+      return total
+    } catch (err) {
+      toast({ title: 'Replace color failed', description: friendlyError(err), variant: 'destructive' })
+      return 0
+    }
+  },
+
+  remapToPalette: (targetPalette, opts = {}) => {
+    const refs = activeRefs(get())
+    if (!refs || targetPalette.length === 0) return 0
+    const scope = opts.scope ?? 'clip'
+    const mode = opts.mode ?? 'ramp'
+    const updatePalette = opts.updatePalette !== false
+    const project = bus.getProject()
+    const clip = project.clips.find((c) => c.id === refs.clipId)
+    if (!clip) return 0
+
+    const seen = new Set<Uint8ClampedArray>()
+    const celList: Array<{ frameId: string; layerId: string; buffer: Uint8ClampedArray }> = []
+    const frames = scope === 'clip' ? clip.frames : [clip.frames[refs.frameIndex]].filter((f): f is NonNullable<typeof f> => !!f)
+
+    for (const frame of frames) {
+      const layers = scope === 'layer'
+        ? clip.layers.filter((l) => l.id === refs.layerId && !l.locked)
+        : clip.layers.filter((l) => l.visible && !l.locked)
+      for (const layer of layers) {
+        const cel = frame.cels[layer.id]
+        if (!cel || seen.has(cel.buffer)) continue
+        seen.add(cel.buffer)
+        celList.push({ frameId: frame.id, layerId: layer.id, buffer: cel.buffer })
+      }
+    }
+
+    const sourceColors = collectUniqueOpaqueColors(celList.map((c) => c.buffer))
+    const updates: Array<{ frameId: string; layerId: string; working: Uint8ClampedArray; count: number }> = []
+    for (const c of celList) {
+      const working = new Uint8ClampedArray(c.buffer)
+      const count = remapBufferToPalette(working, targetPalette, { mode, sourceColors })
+      if (count > 0) updates.push({ frameId: c.frameId, layerId: c.layerId, working, count })
+    }
+
+    const total = updates.reduce((s, u) => s + u.count, 0)
+    if (total === 0 && !updatePalette) {
+      toast({ title: 'No pixels changed', description: 'Artwork already matches the target palette.' })
+      return 0
+    }
+
+    try {
+      bus.transaction(opts.label ?? 'Remap palette', ORIGIN, () => {
+        if (updatePalette) {
+          bus.execute('palette.replaceAll', { colors: targetPalette }, ORIGIN)
+        }
+        for (const u of updates) {
+          bus.execute(
+            'pixels.applyOp',
+            { clipId: clip.id, frameId: u.frameId, layerId: u.layerId, ops: [{ op: 'setBuffer', buffer: u.working }] },
+            ORIGIN,
+          )
+        }
+      })
+      return total
+    } catch (err) {
+      toast({ title: 'Palette remap failed', description: friendlyError(err), variant: 'destructive' })
+      return 0
+    }
+  },
+
   setClipTags: (tags) => {
     const refs = activeRefs(get())
     if (!refs) return
@@ -1553,6 +1776,7 @@ export const useEditor = create<EditorState>()((set, get) => ({
   setRightTab: (t) => set({ rightTab: t }),
   setMotionPreviewIssues: (issues) => set({ motionPreviewIssues: issues }),
   setMotionDraftParts: (parts) => set({ motionDraftParts: parts }),
+  setCraftPins: (pins) => set({ craftPins: pins }),
   setPaletteOpen: (v) => set({ paletteOpen: v }),
   setRightOpen: (v) => set({ rightOpen: v }),
   setRightDrawerOpen: (v) => set({ rightDrawerOpen: v }),

@@ -625,6 +625,38 @@ export const TOOL_CATALOG: ToolDef[] = [
     },
   },
   {
+    name: 'remap_palette',
+    title: 'Remap artwork to palette (skin swap)',
+    description:
+      'Remap pixels on a layer, frame, or entire clip onto a target palette in one undoable transaction. ' +
+      'Mode "ramp" (default) preserves OKLab dark→mid→bright shading contrast for clean skin/color variants; ' +
+      'mode "nearest" quantizes to the closest OKLab palette colors. Omit palette to remap onto the active project palette.',
+    tier: 'L1',
+    relay: true,
+    inputSchema: {
+      ...clipRef,
+      ...frameRef,
+      ...layerRef,
+      palette: z.array(hexColor).min(1).max(256).optional().describe('Target hex color palette. Defaults to the current project palette.'),
+      mode: z.enum(['ramp', 'nearest']).optional().describe('"ramp" (default) preserves lightness-rank contrast for skin swaps; "nearest" matches closest OKLab color.'),
+      scope: z.enum(['layer', 'frame', 'clip']).optional().describe('Which cels to remap. Default "clip".'),
+      updateProjectPalette: z.boolean().optional().describe('Also replace the project palette with `palette`. Default true when `palette` is supplied, false otherwise.'),
+      ...staleGuard,
+    },
+  },
+  {
+    name: 'auto_trim',
+    title: 'Auto-trim canvas to artwork',
+    description:
+      'Crop excess transparent borders around the combined opaque bounding box across all clips and frames, with optional uniform padding (0–16px, clamped to 16–256px). One undoable step.',
+    tier: 'L2',
+    relay: true,
+    inputSchema: {
+      padding: z.number().int().min(0).max(16).optional().describe('Transparent border padding in pixels around the tight bounding box. Default 1.'),
+      ...staleGuard,
+    },
+  },
+  {
     name: 'add_clip',
     title: 'Add clip',
     description: 'Create a new animation clip with 1..64 empty frames and its own layer stack.',

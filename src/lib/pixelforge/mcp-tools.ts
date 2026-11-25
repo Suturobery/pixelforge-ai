@@ -26,14 +26,17 @@ import {
   beautifyLayer,
   CommandError,
   buildPlaybackCycle,
+  collectUniqueOpaqueColors,
   composeFrameRgba,
   composeSheetRgba,
   computeCenterShift,
+  computeTrimBounds,
   crc32,
   createProject as coreCreateProject,
   defaultStyleProfile,
   parseStyleProfile,
   polishLayerPixelArt,
+  remapBufferToPalette,
   renderInspectionRgba,
   styleProfilePromptTags,
   decodePng,
@@ -881,6 +884,77 @@ const handlers: Record<string, ToolHandler> = {
     )
   },
 
+  async auto_trim(args) {
+    const bus = getBus()
+    const project = bus.getProject()
+    const padding = optInt(args.padding, 'padding', 0, 16) ?? 1
+    const seenCels = new Set<Uint8ClampedArray>()
+    const celRefs: Array<{ clipId: string; frameId: string; layerId: string; buffer: Uint8ClampedArray }> = []
+    for (const clip of project.clips) {
+      for (const frame of clip.frames) {
+        for (const layer of clip.layers) {
+          const cel = frame.cels[layer.id]
+          if (!cel || seenCels.has(cel.buffer)) continue
+          seenCels.add(cel.buffer)
+          celRefs.push({ clipId: clip.id, frameId: frame.id, layerId: layer.id, buffer: cel.buffer })
+        }
+      }
+    }
+    const trim = computeTrimBounds(
+      celRefs.map((c) => c.buffer),
+      project.width,
+      project.height,
+      padding,
+    )
+    if (!trim) {
+      return withStateHash(
+        { trimmed: false, width: project.width, height: project.height, dx: 0, dy: 0, bbox: null },
+        { undoable: false, summary: 'Canvas has no visible pixels to trim' },
+      )
+    }
+    if (
+      trim.width === project.width &&
+      trim.height === project.height &&
+      trim.dx === 0 &&
+      trim.dy === 0
+    ) {
+      return withStateHash(
+        { trimmed: false, width: project.width, height: project.height, dx: 0, dy: 0, bbox: trim.bbox },
+        { undoable: false, summary: `Canvas is already trimmed at ${project.width}×${project.height}` },
+      )
+    }
+    execTransaction('Auto-trim canvas', () => {
+      const growW = Math.max(project.width, trim.width)
+      const growH = Math.max(project.height, trim.height)
+      if (growW > project.width || growH > project.height) {
+        bus.execute('canvas.resize', { width: growW, height: growH, anchor: 'top-left' }, 'mcp')
+      }
+      if (trim.dx !== 0 || trim.dy !== 0) {
+        for (const ref of celRefs) {
+          bus.execute(
+            'pixels.applyOp',
+            {
+              clipId: ref.clipId,
+              frameId: ref.frameId,
+              layerId: ref.layerId,
+              ops: [{ op: 'shift' as const, dx: trim.dx, dy: trim.dy }],
+            },
+            'mcp',
+          )
+        }
+      }
+      const cur = bus.getProject()
+      if (cur.width !== trim.width || cur.height !== trim.height) {
+        bus.execute('canvas.resize', { width: trim.width, height: trim.height, anchor: 'top-left' }, 'mcp')
+      }
+    })
+    const p = bus.getProject()
+    return withStateHash(
+      { trimmed: true, width: p.width, height: p.height, dx: trim.dx, dy: trim.dy, padding, bbox: trim.bbox },
+      { undoable: true, summary: `Auto-trimmed canvas to ${p.width}×${p.height} (padding ${padding}px)` },
+    )
+  },
+
   async export_sheet(args) {
     const project = getBus().getProject()
     const clip = resolveClipRef(project, args)
@@ -1245,6 +1319,79 @@ const handlers: Record<string, ToolHandler> = {
     return withStateHash(
       { clipId: clip.id, frameId: frame.id, layerId: layer.id, centered: true, dx: res.dx, dy: res.dy, bbox: res.bbox },
       { undoable: true, summary: `Centered "${layer.name}" by (${res.dx}, ${res.dy}) in "${clip.name}"` },
+    )
+  },
+
+  async remap_palette(args) {
+    const project = getBus().getProject()
+    const clip = resolveClipRef(project, args)
+    const { frame } = resolveFrameRef(clip, args)
+    const scope = args.scope === 'layer' || args.scope === 'frame' || args.scope === 'clip' ? args.scope : 'clip'
+    const mode = args.mode === 'nearest' ? 'nearest' : 'ramp'
+    let targetPalette: string[]
+    if (args.palette !== undefined) {
+      if (!Array.isArray(args.palette) || args.palette.length === 0 || args.palette.length > 256) {
+        throw new CommandError('VALIDATION_FAILED', 'palette must be a 1–256 hex color array')
+      }
+      targetPalette = args.palette.map((c) => asHex(c, 'palette color'))
+    } else {
+      targetPalette = [...project.palette]
+    }
+    const updateProjectPalette =
+      args.updateProjectPalette !== undefined ? args.updateProjectPalette === true : args.palette !== undefined
+
+    const frames = scope === 'clip' ? clip.frames : [frame]
+    const singleLayer = scope === 'layer' ? resolveLayerRef(clip, args) : null
+    const seen = new Set<Uint8ClampedArray>()
+    const celList: Array<{ frameId: string; layerId: string; buffer: Uint8ClampedArray }> = []
+    for (const f of frames) {
+      const layers = singleLayer ? [singleLayer] : clip.layers.filter((l) => l.visible && !l.locked)
+      for (const l of layers) {
+        if (l.locked) continue
+        const cel = f.cels[l.id]
+        if (!cel || seen.has(cel.buffer)) continue
+        seen.add(cel.buffer)
+        celList.push({ frameId: f.id, layerId: l.id, buffer: cel.buffer })
+      }
+    }
+
+    const sourceColors = collectUniqueOpaqueColors(celList.map((c) => c.buffer))
+    const updates: Array<{ frameId: string; layerId: string; working: Uint8ClampedArray; count: number }> = []
+    for (const c of celList) {
+      const working = new Uint8ClampedArray(c.buffer)
+      const count = remapBufferToPalette(working, targetPalette, { mode, sourceColors })
+      if (count > 0) updates.push({ frameId: c.frameId, layerId: c.layerId, working, count })
+    }
+    const remappedPixels = updates.reduce((sum, u) => sum + u.count, 0)
+    if (remappedPixels === 0 && !updateProjectPalette) {
+      return withStateHash(
+        { clipId: clip.id, scope, mode, remappedPixels: 0, updatedCels: 0, updatedPalette: false },
+        { undoable: false, summary: `No pixels changed when remapping "${clip.name}"` },
+      )
+    }
+    execTransaction(`Remap palette (${scope})`, () => {
+      if (updateProjectPalette) {
+        getBus().execute('palette.replaceAll', { colors: targetPalette }, 'mcp')
+      }
+      for (const u of updates) {
+        getBus().execute(
+          'pixels.applyOp',
+          { clipId: clip.id, frameId: u.frameId, layerId: u.layerId, ops: [{ op: 'setBuffer' as const, buffer: u.working }] },
+          'mcp',
+        )
+      }
+    })
+    return withStateHash(
+      {
+        clipId: clip.id,
+        scope,
+        mode,
+        remappedPixels,
+        updatedCels: updates.length,
+        updatedPalette: updateProjectPalette,
+        paletteSize: targetPalette.length,
+      },
+      { undoable: true, summary: `Remapped ${remappedPixels} px across ${updates.length} cel(s) in "${clip.name}" via OKLab ${mode}` },
     )
   },
 
@@ -1947,8 +2094,10 @@ const REVIEW_TOOLS = new Set([
   'rotate_frame',
   'shift_frame',
   'center_content',
+  'remap_palette',
   'beautify_layer',
   'resize_canvas',
+  'auto_trim',
 ])
 
 function reviewFrame(project: Project, clip: Clip, frame: Frame, layerId?: string): ReviewFrame {
@@ -1962,11 +2111,14 @@ function reviewFrame(project: Project, clip: Clip, frame: Frame, layerId?: strin
 function captureToolReview(tool: string, args: Record<string, unknown>) {
   const project = getBus().getProject()
   const { loadEpoch } = useEditor.getState()
-  const targetArgs = tool === 'resize_canvas' ? {} : args
+  const isCanvasOp = tool === 'resize_canvas' || tool === 'auto_trim'
+  const targetArgs = isCanvasOp ? {} : args
   const clip = resolveClipRef(project, targetArgs)
   const { frame, index } = resolveFrameRef(clip, targetArgs)
   const layer =
-    tool === 'resize_canvas' || (tool === 'center_content' && args.allLayers === true)
+    isCanvasOp ||
+    (tool === 'center_content' && args.allLayers === true) ||
+    (tool === 'remap_palette' && args.scope !== 'layer')
       ? undefined
       : resolveLayerRef(clip, targetArgs)
   return {

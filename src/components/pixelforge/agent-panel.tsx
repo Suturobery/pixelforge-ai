@@ -61,7 +61,9 @@ const PIXEL_MUTATION_TOOLS = new Set([
   'rotate_frame',
   'shift_frame',
   'center_content',
+  'remap_palette',
   'beautify_layer',
+  'auto_trim',
 ])
 
 function isDocumentMutation(name: string): boolean {

@@ -12,6 +12,7 @@
  */
 
 import type { RGBA } from '../types/document';
+import { CANVAS_MAX, CANVAS_MIN } from '../types/document';
 import {
   oklabDistance2,
   parseHexColor,
@@ -1144,5 +1145,232 @@ export function computeCenterShift(
     dx: targetX - minX,
     dy: targetY - minY,
     bbox: { x: minX, y: minY, w: bw, h: bh },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 6. Tier 1 Studio Pack: Palette Sort, Color Replace, Skin Remap & Auto-Trim
+// ---------------------------------------------------------------------------
+
+export type PaletteSortBy = 'lightness' | 'hue';
+export type PaletteRemapMode = 'ramp' | 'nearest';
+
+/**
+ * Sort hex palette colors deterministically in OKLab space.
+ *   - `'lightness'`: dark → bright by OKLab L (ties broken by chroma, then hue).
+ *   - `'hue'`: neutral/achromatic ramp first (sorted by L), followed by chromatic
+ *     colors sorted smoothly around the OKLab hue wheel (red → yellow → green → cyan → blue → violet).
+ */
+export function sortPaletteColors(palette: readonly string[], by: PaletteSortBy = 'lightness'): string[] {
+  const seen = new Set<string>();
+  const items: Array<{ hex: string; lab: Oklab; chroma: number; hue: number }> = [];
+  for (const raw of palette) {
+    const key = raw.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const rgb = parseHexColor(raw);
+    if (!rgb) continue;
+    const lab = rgbToOklab(rgb[0], rgb[1], rgb[2]);
+    const chroma = Math.hypot(lab.a, lab.b);
+    let hue = Math.atan2(lab.b, lab.a);
+    if (hue < 0) hue += Math.PI * 2;
+    items.push({ hex: raw, lab, chroma, hue });
+  }
+
+  if (by === 'lightness') {
+    items.sort((p, q) => p.lab.L - q.lab.L || p.chroma - q.chroma || p.hue - q.hue);
+  } else {
+    const isNeutral = (item: { lab: Oklab; chroma: number }): boolean =>
+      item.chroma < 0.045 || (item.lab.L < 0.25 && item.chroma < 0.06);
+    items.sort((p, q) => {
+      const pGray = isNeutral(p);
+      const qGray = isNeutral(q);
+      if (pGray !== qGray) return pGray ? -1 : 1;
+      if (pGray && qGray) return p.lab.L - q.lab.L;
+      // Quantize hue slightly into 18° buckets so same-hue ramps group dark→bright cleanly
+      const pBucket = Math.floor((p.hue / (Math.PI * 2)) * 20);
+      const qBucket = Math.floor((q.hue / (Math.PI * 2)) * 20);
+      if (pBucket !== qBucket) return pBucket - qBucket;
+      return p.lab.L - q.lab.L || p.hue - q.hue;
+    });
+  }
+
+  return items.map((it) => it.hex);
+}
+
+/**
+ * Replace every pixel matching `from` (exact RGBA) with `to` in-place.
+ * Returns the number of pixels replaced.
+ */
+export function replaceColorInBuffer(buf: Uint8ClampedArray, from: RGBA, to: RGBA): number {
+  if (from[0] === to[0] && from[1] === to[1] && from[2] === to[2] && from[3] === to[3]) {
+    return 0;
+  }
+  let replaced = 0;
+  for (let i = 0; i < buf.length; i += 4) {
+    if (
+      buf[i] === from[0] &&
+      buf[i + 1] === from[1] &&
+      buf[i + 2] === from[2] &&
+      buf[i + 3] === from[3]
+    ) {
+      buf[i] = to[0];
+      buf[i + 1] = to[1];
+      buf[i + 2] = to[2];
+      buf[i + 3] = to[3];
+      replaced++;
+    }
+  }
+  return replaced;
+}
+
+/** Collect all unique opaque RGB colors across one or more RGBA buffers. */
+export function collectUniqueOpaqueColors(buffers: readonly Uint8ClampedArray[]): RGBA[] {
+  const seen = new Map<number, RGBA>();
+  for (const buf of buffers) {
+    for (let i = 0; i < buf.length; i += 4) {
+      if (buf[i + 3]! === 0) continue;
+      const r = buf[i]!;
+      const g = buf[i + 1]!;
+      const b = buf[i + 2]!;
+      const key = (r << 16) | (g << 8) | b;
+      if (!seen.has(key)) seen.set(key, [r, g, b, 255]);
+    }
+  }
+  return Array.from(seen.values());
+}
+
+/**
+ * Remap an RGBA buffer onto `targetPalette` in-place (preserving alpha).
+ *   - `'ramp'` (default — Skin Variant Swapper): sorts unique source colors and
+ *     target palette colors by OKLab lightness `L` and maps dark→dark, mid→mid,
+ *     bright→bright so shading contrast stays crisp across completely different palettes.
+ *   - `'nearest'`: maps every opaque pixel to its closest OKLab color in `targetPalette`.
+ * Pass `sourceColors` (from `collectUniqueOpaqueColors`) when remapping multiple cels
+ * of a frame/clip so every frame shares the exact same color table.
+ */
+export function remapBufferToPalette(
+  buf: Uint8ClampedArray,
+  targetPalette: readonly string[],
+  opts: { mode?: PaletteRemapMode; sourceColors?: readonly RGBA[] } = {},
+): number {
+  const entries = buildPaletteEntries(targetPalette);
+  if (entries.length === 0) return 0;
+
+  const mode = opts.mode ?? 'ramp';
+  const lut = new Map<number, RGBA>();
+
+  if (mode === 'ramp') {
+    const srcColors = opts.sourceColors && opts.sourceColors.length > 0
+      ? [...opts.sourceColors]
+      : collectUniqueOpaqueColors([buf]);
+    if (srcColors.length === 0) return 0;
+
+    const srcRanked = srcColors
+      .map((rgba) => ({
+        key: (rgba[0] << 16) | (rgba[1] << 8) | rgba[2],
+        lab: rgbToOklab(rgba[0], rgba[1], rgba[2]),
+      }))
+      .sort((a, b) => a.lab.L - b.lab.L || a.lab.a - b.lab.a || a.lab.b - b.lab.b);
+
+    const dstRanked = [...entries].sort(
+      (a, b) => a.lab.L - b.lab.L || a.lab.a - b.lab.a || a.lab.b - b.lab.b,
+    );
+
+    const m = srcRanked.length;
+    const n = dstRanked.length;
+    for (let i = 0; i < m; i++) {
+      const t = m === 1 ? 0.5 : i / (m - 1);
+      const dstIdx = Math.min(n - 1, Math.max(0, Math.round(t * (n - 1))));
+      lut.set(srcRanked[i]!.key, dstRanked[dstIdx]!.rgba);
+    }
+  }
+
+  let changed = 0;
+  for (let i = 0; i < buf.length; i += 4) {
+    if (buf[i + 3]! === 0) continue;
+    const r = buf[i]!;
+    const g = buf[i + 1]!;
+    const b = buf[i + 2]!;
+    const key = (r << 16) | (g << 8) | b;
+    let mapped = lut.get(key);
+    if (!mapped) {
+      // Nearest OKLab lookup (used for mode='nearest' or any fallback key)
+      const lab = rgbToOklab(r, g, b);
+      let best = entries[0]!;
+      let bestD = oklabDistance2(lab, best.lab);
+      for (let j = 1; j < entries.length; j++) {
+        const d = oklabDistance2(lab, entries[j]!.lab);
+        if (d < bestD) {
+          bestD = d;
+          best = entries[j]!;
+        }
+      }
+      mapped = best.rgba;
+      lut.set(key, mapped);
+    }
+    if (mapped[0] !== r || mapped[1] !== g || mapped[2] !== b) {
+      buf[i] = mapped[0];
+      buf[i + 1] = mapped[1];
+      buf[i + 2] = mapped[2];
+      changed++;
+    }
+  }
+  return changed;
+}
+
+export interface TrimBoundsResult {
+  bbox: { x: number; y: number; w: number; h: number };
+  width: number;
+  height: number;
+  dx: number;
+  dy: number;
+}
+
+/**
+ * Compute target canvas dimensions and integer cel shift `(dx, dy)` to trim
+ * empty margins around the combined opaque bounding box of `buffers`, with
+ * optional uniform padding clamped to `[minSize, maxSize]`.
+ */
+export function computeTrimBounds(
+  buffers: readonly Uint8ClampedArray[],
+  w: number,
+  h: number,
+  padding = 0,
+  minSize = CANVAS_MIN,
+  maxSize = CANVAS_MAX,
+): TrimBoundsResult | null {
+  let minX = w;
+  let minY = h;
+  let maxX = -1;
+  let maxY = -1;
+
+  for (const buf of buffers) {
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (buf[(y * w + x) * 4 + 3]! > 0) {
+          if (x < minX) minX = x;
+          if (y < minY) minY = y;
+          if (x > maxX) maxX = x;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+  }
+
+  if (maxX < minX || maxY < minY) return null;
+  const pad = Math.max(0, Math.min(16, Math.round(padding)));
+  const bw = maxX - minX + 1;
+  const bh = maxY - minY + 1;
+  const width = Math.max(minSize, Math.min(maxSize, bw + pad * 2));
+  const height = Math.max(minSize, Math.min(maxSize, bh + pad * 2));
+  const dx = Math.floor((width - bw) / 2) - minX;
+  const dy = Math.floor((height - bh) / 2) - minY;
+  return {
+    bbox: { x: minX, y: minY, w: bw, h: bh },
+    width,
+    height,
+    dx,
+    dy,
   };
 }

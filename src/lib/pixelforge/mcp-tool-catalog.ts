@@ -169,6 +169,12 @@ export const MCP_TOOLS: McpToolInfo[] = [
     example: { width: 96, height: 64, anchor: 'center' },
   },
   {
+    name: 'auto_trim',
+    tier: 'L2',
+    description: 'Crop excess transparent borders around artwork across all clips/frames with optional padding (0–16px). One undoable step.',
+    example: { padding: 1 },
+  },
+  {
     name: 'export_sheet',
     tier: 'L2',
     description: 'Export a clip as ONE horizontal sprite-sheet PNG (native size, layers composited). Returns base64 data URL.',
@@ -245,6 +251,12 @@ export const MCP_TOOLS: McpToolInfo[] = [
     tier: 'L1',
     description: 'Center opaque artwork on the canvas (active layer or all visible unlocked layers with allLayers:true) in one undoable step.',
     example: { allLayers: true },
+  },
+  {
+    name: 'remap_palette',
+    tier: 'L1',
+    description: 'Remap a layer, frame, or clip onto a target palette via OKLab lightness-ramp (skin swap) or nearest color in one undoable step.',
+    example: { palette: ['#0f380f', '#306230', '#8bac0f', '#9bbc0f'], mode: 'ramp', scope: 'clip' },
   },
   {
     name: 'add_clip',

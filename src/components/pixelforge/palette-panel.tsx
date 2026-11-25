@@ -31,7 +31,7 @@ import {
 } from '@/components/ui/command'
 import { Input } from '@/components/ui/input'
 import { loadLibrary, type PalettePreset } from '@/lib/pixelforge/palettes'
-import { ArrowLeftRight, Check, ChevronDown, EyeOff, Minus, Palette, Plus, Share2 } from 'lucide-react'
+import { ArrowLeftRight, ArrowUpDown, Check, ChevronDown, EyeOff, Minus, Palette, Plus, Replace, Share2, Sparkles } from 'lucide-react'
 import { copyText } from '@/lib/pixelforge/desktop-bridge'
 import { encodePaletteCode, decodePaletteCode } from '@/lib/pixelforge/palette-share'
 import { PALETTES } from '@/lib/pixelforge/palettes'
@@ -79,6 +79,9 @@ export function PalettePanel() {
   const addPaletteColor = useEditor((s) => s.addPaletteColor)
   const removePaletteColor = useEditor((s) => s.removePaletteColor)
   const setPalette = useEditor((s) => s.setPalette)
+  const sortPalette = useEditor((s) => s.sortPalette)
+  const replaceColor = useEditor((s) => s.replaceColor)
+  const remapToPalette = useEditor((s) => s.remapToPalette)
   const floatBtnSize = useAppSettings((s) => s.floatBtnSize)
 
   // visibility lives in the editor store so the P shortcut can toggle it
@@ -92,8 +95,14 @@ export function PalettePanel() {
   // share codes: paste-a-code popover (encode lives behind "Share…" copy)
   const [shareOpen, setShareOpen] = useState(false)
   const [pasteValue, setPasteValue] = useState('')
+  // palette sort & color replace popovers
+  const [sortOpen, setSortOpen] = useState(false)
+  const [replaceOpen, setReplaceOpen] = useState(false)
+  const [replaceScope, setReplaceScope] = useState<'layer' | 'frame' | 'clip'>('frame')
   // unified palette selector / browser popover: lazily loaded library (~2k named palettes)
   const [browserOpen, setBrowserOpen] = useState(false)
+  const [remapOnPick, setRemapOnPick] = useState(false)
+  const [remapMode, setRemapMode] = useState<'ramp' | 'nearest'>('ramp')
   const [searchQuery, setSearchQuery] = useState('')
   const [filterSize, setFilterSize] = useState<'all' | '8' | '16' | '32'>('all')
   const [library, setLibrary] = useState<PalettePreset[] | null>(null)
@@ -491,6 +500,118 @@ export function PalettePanel() {
               </TooltipTrigger>
               <TooltipContent side="top">Remove the primary color from the palette</TooltipContent>
             </Tooltip>
+
+            {/* OKLab Palette Auto-Sort */}
+            <Popover open={sortOpen} onOpenChange={setSortOpen}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <PopoverTrigger asChild>
+                    <button
+                      type="button"
+                      className="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+                      disabled={palette.length <= 1}
+                      aria-label="Sort palette colors"
+                    >
+                      <ArrowUpDown className="h-3.5 w-3.5" />
+                    </button>
+                  </PopoverTrigger>
+                </TooltipTrigger>
+                <TooltipContent side="top">Sort palette (lightness / hue)</TooltipContent>
+              </Tooltip>
+              <PopoverContent side="top" align="start" className="w-44 space-y-1 border-zinc-800 bg-zinc-950 p-2">
+                <p className="px-1 font-mono text-[9px] uppercase tracking-wider text-zinc-500">Sort Palette (OKLab)</p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    sortPalette('lightness')
+                    setSortOpen(false)
+                  }}
+                  className="w-full rounded px-2 py-1 text-left font-mono text-[10px] text-zinc-200 hover:bg-zinc-800"
+                >
+                  Lightness (dark → bright)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    sortPalette('hue')
+                    setSortOpen(false)
+                  }}
+                  className="w-full rounded px-2 py-1 text-left font-mono text-[10px] text-zinc-200 hover:bg-zinc-800"
+                >
+                  Hue wheel (grouped)
+                </button>
+              </PopoverContent>
+            </Popover>
+
+            {/* 1-Click Color Replace (Primary -> Secondary) */}
+            <Popover open={replaceOpen} onOpenChange={setReplaceOpen}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <PopoverTrigger asChild>
+                    <button
+                      type="button"
+                      className="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+                      aria-label="Replace color in artwork"
+                    >
+                      <Replace className="h-3.5 w-3.5" />
+                    </button>
+                  </PopoverTrigger>
+                </TooltipTrigger>
+                <TooltipContent side="top">Replace Primary → Secondary in artwork</TooltipContent>
+              </Tooltip>
+              <PopoverContent side="top" align="start" className="w-56 space-y-2 border-zinc-800 bg-zinc-950 p-2.5">
+                <p className="font-mono text-[10px] font-semibold uppercase tracking-wider text-zinc-300">
+                  Replace Color
+                </p>
+                <div className="flex items-center justify-center gap-2 rounded border border-zinc-800 bg-zinc-900/70 py-1.5 font-mono text-[10px] text-zinc-300">
+                  <span className="flex items-center gap-1.5">
+                    <span className="h-4 w-4 rounded border border-zinc-600" style={{ background: primary }} />
+                    {primary}
+                  </span>
+                  <span className="text-zinc-500">→</span>
+                  <span className="flex items-center gap-1.5">
+                    <span className="h-4 w-4 rounded border border-zinc-600" style={{ background: secondary }} />
+                    {secondary}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="font-mono text-[10px] text-zinc-400">Scope</span>
+                  <div className="flex items-center gap-0.5" role="group" aria-label="Replace scope">
+                    {(['layer', 'frame', 'clip'] as const).map((sc) => (
+                      <button
+                        key={sc}
+                        type="button"
+                        onClick={() => setReplaceScope(sc)}
+                        aria-pressed={replaceScope === sc}
+                        className={`rounded px-1.5 py-0.5 font-mono text-[10px] capitalize transition-colors ${
+                          replaceScope === sc
+                            ? 'bg-teal-500/20 text-teal-300 ring-1 ring-teal-500/40'
+                            : 'text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
+                        }`}
+                      >
+                        {sc}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  className="h-7 w-full bg-teal-600 font-mono text-[10px] text-white hover:bg-teal-500"
+                  onClick={() => {
+                    const count = replaceColor(primary, secondary, replaceScope)
+                    if (count > 0) {
+                      toast({
+                        title: `Replaced ${count} px`,
+                        description: `${primary} → ${secondary} on active ${replaceScope} (Ctrl+Z to undo).`,
+                      })
+                      setReplaceOpen(false)
+                    }
+                  }}
+                >
+                  <Replace className="mr-1 h-3 w-3" /> Replace in {replaceScope}
+                </Button>
+              </PopoverContent>
+            </Popover>
           </div>
 
           {/* compact share/paste code button */}
@@ -626,6 +747,66 @@ export function PalettePanel() {
                   {searchedPresets.length + searchedLibrary.length} found
                 </span>
               </div>
+              {/* Skin Variant Swap toggle: remap sprite pixels when picking any palette */}
+              <div className="flex items-center justify-between gap-2 border-b border-zinc-800/80 bg-zinc-900/40 px-2 py-1.5">
+                <label className="flex cursor-pointer items-center gap-1.5 font-mono text-[10px] text-zinc-300">
+                  <input
+                    type="checkbox"
+                    checked={remapOnPick}
+                    onChange={(e) => setRemapOnPick(e.target.checked)}
+                    className="accent-teal-500"
+                  />
+                  <Sparkles className="h-3 w-3 text-teal-400" />
+                  <span>Swap sprite skin on pick</span>
+                </label>
+                {remapOnPick ? (
+                  <div className="flex items-center gap-0.5" role="group" aria-label="Remap mode">
+                    {(['ramp', 'nearest'] as const).map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => setRemapMode(m)}
+                        aria-pressed={remapMode === m}
+                        className={`rounded px-1.5 py-0.5 font-mono text-[9px] capitalize ${
+                          remapMode === m
+                            ? 'bg-teal-500/20 text-teal-300 ring-1 ring-teal-500/40'
+                            : 'text-zinc-500 hover:text-zinc-300'
+                        }`}
+                        title={
+                          m === 'ramp'
+                            ? 'OKLab lightness-ramp swap (best for radical skin variants like Emerald → Lava/GameBoy)'
+                            : 'Nearest OKLab color match (best for quantizing to similar hues)'
+                        }
+                      >
+                        {m}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const count = remapToPalette(palette, {
+                        scope: 'clip',
+                        mode: 'ramp',
+                        updatePalette: false,
+                        label: `Remap clip to ${currentPaletteName}`,
+                      })
+                      if (count > 0) {
+                        toast({
+                          title: `Remapped ${count} px`,
+                          description: `Mapped active clip to ${currentPaletteName} (Ctrl+Z to undo).`,
+                        })
+                        setBrowserOpen(false)
+                      }
+                    }}
+                    className="rounded border border-zinc-800 px-1.5 py-0.5 font-mono text-[9px] text-zinc-400 hover:border-teal-500/40 hover:text-teal-300"
+                    title="Remap active clip pixels onto the current palette"
+                  >
+                    Remap current
+                  </button>
+                )}
+              </div>
               <CommandList className="max-h-72 overflow-y-auto">
                 <CommandEmpty>
                   {library === null
@@ -644,7 +825,20 @@ export function PalettePanel() {
                           key={p.id}
                           value={p.id}
                           onSelect={() => {
-                            setPalette(p.colors, `Palette: ${p.name}`)
+                            if (remapOnPick) {
+                              const count = remapToPalette(p.colors, {
+                                scope: 'clip',
+                                mode: remapMode,
+                                updatePalette: true,
+                                label: `Skin swap: ${p.name}`,
+                              })
+                              toast({
+                                title: `Skin swapped → ${p.name}`,
+                                description: `${count} px remapped via OKLab ${remapMode} (Ctrl+Z to undo).`,
+                              })
+                            } else {
+                              setPalette(p.colors, `Palette: ${p.name}`)
+                            }
                             setBrowserOpen(false)
                           }}
                           className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 hover:bg-zinc-800/80"
@@ -682,7 +876,20 @@ export function PalettePanel() {
                           key={p.id}
                           value={p.id}
                           onSelect={() => {
-                            setPalette(p.colors, `Palette: ${p.name}`)
+                            if (remapOnPick) {
+                              const count = remapToPalette(p.colors, {
+                                scope: 'clip',
+                                mode: remapMode,
+                                updatePalette: true,
+                                label: `Skin swap: ${p.name}`,
+                              })
+                              toast({
+                                title: `Skin swapped → ${p.name}`,
+                                description: `${count} px remapped via OKLab ${remapMode} (Ctrl+Z to undo).`,
+                              })
+                            } else {
+                              setPalette(p.colors, `Palette: ${p.name}`)
+                            }
                             setBrowserOpen(false)
                           }}
                           className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 hover:bg-zinc-800/80"

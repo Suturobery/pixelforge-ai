@@ -162,6 +162,7 @@ export function CanvasStage() {
   const mirrorY = useEditor((s) => s.mirrorY)
   const rightTab = useEditor((s) => s.rightTab)
   const motionDraftParts = useEditor((s) => s.motionDraftParts)
+  const craftPins = useEditor((s) => s.craftPins)
   const ellipseFilled = useEditor((s) => s.ellipseFilled)
   const selection = useEditor((s) => s.selection)
   const playing = useEditor((s) => s.playing)
@@ -424,6 +425,27 @@ export function CanvasStage() {
       ctx.restore()
     }
 
+    // Interactive Craft Check defect pins overlay (doubles = amber, orphans = red, jaggies = cyan)
+    if (craftPins.length > 0 && !playing) {
+      ctx.save()
+      const pinColor: Record<'doubles' | 'orphans' | 'jaggies', { stroke: string; fill: string }> = {
+        doubles: { stroke: 'rgba(251, 191, 36, 0.95)', fill: 'rgba(251, 191, 36, 0.28)' },
+        orphans: { stroke: 'rgba(248, 113, 113, 0.95)', fill: 'rgba(248, 113, 113, 0.32)' },
+        jaggies: { stroke: 'rgba(34, 211, 238, 0.95)', fill: 'rgba(34, 211, 238, 0.25)' },
+      }
+      ctx.lineWidth = Math.max(1.5, Math.min(2.5, zoom / 4))
+      for (const pin of craftPins) {
+        const col = pinColor[pin.kind]
+        const px = pin.x * zoom
+        const py = pin.y * zoom
+        ctx.fillStyle = col.fill
+        ctx.fillRect(px, py, zoom, zoom)
+        ctx.strokeStyle = col.stroke
+        ctx.strokeRect(px + 0.5, py + 0.5, Math.max(2, zoom - 1), Math.max(2, zoom - 1))
+      }
+      ctx.restore()
+    }
+
     // hover cursor (paint tools), grey like the frame-thumb hover border
     if (hover && !playing && tool !== 'eyedropper' && tool !== 'move' && tool !== 'marquee') {
       const size = tool === 'fill' ? 1 : brushSize
@@ -475,7 +497,7 @@ export function CanvasStage() {
     // NOTE: the onion values must be deps too — toggling the switch or changing
     // opacity/tints re-composites the offscreen buffer only; without these deps
     // the visible canvas keeps showing the pre-onion blit (stale ghosts).
-  }, [project, W, H, zoom, panX, panY, showGrid, tileSnap, tileSize, tiledWrap, mirrorX, mirrorY, rightTab, motionDraftParts, renderTick, hover, tool, brushSize, brushShape, customBrush, playing, activeFrameIndex, selection, scaleDraft, ellipseFilled, antsTick, onionSkin, onionOpacity, onionPrevTint, onionNextTint])
+  }, [project, W, H, zoom, panX, panY, showGrid, tileSnap, tileSize, tiledWrap, mirrorX, mirrorY, rightTab, motionDraftParts, craftPins, renderTick, hover, tool, brushSize, brushShape, customBrush, playing, activeFrameIndex, selection, scaleDraft, ellipseFilled, antsTick, onionSkin, onionOpacity, onionPrevTint, onionNextTint])
 
   // ------------------------------------------------------------ fit / zoom
   const fitView = useCallback(() => {

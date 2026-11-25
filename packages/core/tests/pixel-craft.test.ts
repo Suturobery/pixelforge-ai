@@ -3,13 +3,18 @@ import {
   analyzePixelCraft,
   applyShadeBrush,
   applyShadeLine,
+  collectUniqueOpaqueColors,
   computeCenterShift,
+  computeTrimBounds,
   createProject,
   CommandBus,
   drawPolygonPixels,
   polishLayerPixelArt,
+  remapBufferToPalette,
   renderInspectionRgba,
+  replaceColorInBuffer,
   shadePixelStep,
+  sortPaletteColors,
   stampBrushWrapped,
   getPixel,
   type RGBA,
@@ -225,5 +230,77 @@ describe('Pro Pixel Craft utilities', () => {
     setPx(bufB, 16, 6, 7, [255, 0, 0, 255]);
     const combined = computeCenterShift([bufA, bufB], 16, 16);
     expect(combined).toEqual({ dx: 4, dy: 3, bbox: { x: 1, y: 2, w: 6, h: 6 } });
+  });
+
+  test('sortPaletteColors orders by OKLab lightness and hue cleanly', () => {
+    const byL = sortPaletteColors(['#f4f4f4', '#1a1c2c', '#38b764'], 'lightness');
+    expect(byL[0]).toBe('#1a1c2c');
+    expect(byL[2]).toBe('#f4f4f4');
+
+    const byHue = sortPaletteColors(['#38b764', '#f4f4f4', '#b13e53', '#1a1c2c'], 'hue');
+    // Achromatic neutrals come first (dark -> light)
+    expect(byHue[0]).toBe('#1a1c2c');
+    expect(byHue[1]).toBe('#f4f4f4');
+    expect(byHue.length).toBe(4);
+  });
+
+  test('remapBufferToPalette preserves luminance ramp contrast and respects palette lock', () => {
+    const GAMEBOY = ['#0f380f', '#306230', '#8bac0f', '#9bbc0f'];
+    const buf = new Uint8ClampedArray(8 * 8 * 4);
+    // Dark outline, mid crimson, bright gold
+    setPx(buf, 8, 1, 1, [26, 28, 44, 255]);    // #1a1c2c (dark)
+    setPx(buf, 8, 2, 1, [177, 62, 83, 255]);   // #b13e53 (mid)
+    setPx(buf, 8, 3, 1, [255, 205, 117, 255]); // #ffcd75 (bright)
+
+    const sourceColors = collectUniqueOpaqueColors([buf]);
+    const changed = remapBufferToPalette(buf, GAMEBOY, { mode: 'ramp', sourceColors });
+    expect(changed).toBe(3);
+    // Dark -> darkest GB green, bright -> lightest GB green, mid -> distinct mid GB green
+    expect(hexOf(getPixel(buf, 8, 1, 1))).toBe('#0f380f');
+    expect(hexOf(getPixel(buf, 8, 3, 1))).toBe('#9bbc0f');
+    expect(GAMEBOY.includes(hexOf(getPixel(buf, 8, 2, 1)))).toBe(true);
+    expect(hexOf(getPixel(buf, 8, 2, 1))).not.toBe('#0f380f');
+    expect(hexOf(getPixel(buf, 8, 2, 1))).not.toBe('#9bbc0f');
+    // Transparent stays transparent
+    expect(getPixel(buf, 8, 0, 0)[3]).toBe(0);
+  });
+
+  test('replaceColorInBuffer replaces exact RGBA pixels and returns count', () => {
+    const buf = new Uint8ClampedArray(4 * 4 * 4);
+    setPx(buf, 4, 0, 0, [10, 20, 30, 255]);
+    setPx(buf, 4, 1, 1, [10, 20, 30, 255]);
+    setPx(buf, 4, 2, 2, [40, 50, 60, 255]);
+    const count = replaceColorInBuffer(buf, [10, 20, 30, 255], [200, 100, 50, 255]);
+    expect(count).toBe(2);
+    expect(getPixel(buf, 4, 0, 0)).toEqual([200, 100, 50, 255]);
+    expect(getPixel(buf, 4, 2, 2)).toEqual([40, 50, 60, 255]);
+  });
+
+  test('computeTrimBounds trims empty margins with padding and respects CANVAS_MIN', () => {
+    const buf = new Uint8ClampedArray(64 * 64 * 4);
+    // 20x18 sprite at x=12..31, y=20..37
+    for (let y = 20; y <= 37; y++) {
+      for (let x = 12; x <= 31; x++) setPx(buf, 64, x, y, [255, 255, 255, 255]);
+    }
+    const trim = computeTrimBounds([buf], 64, 64, 2);
+    expect(trim).toEqual({
+      bbox: { x: 12, y: 20, w: 20, h: 18 },
+      width: 24,
+      height: 22,
+      dx: -10,
+      dy: -18,
+    });
+    // Tiny 4x4 sprite clamps up to CANVAS_MIN (16x16) centered
+    const tiny = new Uint8ClampedArray(32 * 32 * 4);
+    setPx(tiny, 32, 20, 20, [255, 255, 255, 255]);
+    setPx(tiny, 32, 23, 23, [255, 255, 255, 255]);
+    const tinyTrim = computeTrimBounds([tiny], 32, 32, 0);
+    expect(tinyTrim).toEqual({
+      bbox: { x: 20, y: 20, w: 4, h: 4 },
+      width: 16,
+      height: 16,
+      dx: -14,
+      dy: -14,
+    });
   });
 });

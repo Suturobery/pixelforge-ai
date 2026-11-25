@@ -46,6 +46,8 @@ import {
   Sparkles,
   ScanSearch,
   Crosshair,
+  Crop,
+  Pin,
 } from 'lucide-react'
 
 function LayerThumb({
@@ -174,10 +176,12 @@ export function LayersPanel() {
   const setLayerLinked = useEditor((s) => s.setLayerLinked)
   const polishLayer = useEditor((s) => s.polishLayer)
   const centerContent = useEditor((s) => s.centerContent)
+  const autoTrimCanvas = useEditor((s) => s.autoTrimCanvas)
+  const setCraftPins = useEditor((s) => s.setCraftPins)
   const dragFrame = useEditor((s) => s.dragFrame)
   const { toast } = useToast()
   const [renaming, setRenaming] = useState<string | null>(null)
-  // Pro Pixel Craft UI popovers (Polish Layer + Craft Check)
+  // Pro Pixel Craft UI popovers (Polish Layer + Craft Check + Auto-Trim)
   const [polishOpen, setPolishOpen] = useState(false)
   const [polishSelOut, setPolishSelOut] = useState(true)
   const [polishShade, setPolishShade] = useState(true)
@@ -185,6 +189,9 @@ export function LayersPanel() {
   const [polishCleanDoubles, setPolishCleanDoubles] = useState(true)
   const [polishPaletteLock, setPolishPaletteLock] = useState(true)
   const [craftOpen, setCraftOpen] = useState(false)
+  const [craftPinned, setCraftPinned] = useState(false)
+  const [trimOpen, setTrimOpen] = useState(false)
+  const [trimPad, setTrimPad] = useState<0 | 1 | 2 | 4>(1)
   // frame drag-and-drop: source (clipId+index) + current drop insertion point
   const [dragSrc, setDragSrc] = useState<{ clipId: string; index: number } | null>(null)
   const [dropIdx, setDropIdx] = useState<number | null>(null)
@@ -197,14 +204,31 @@ export function LayersPanel() {
   const active = clip.layers.find((l) => l.id === activeLayerId) ?? clip.layers.at(-1)
 
   const craftReport = useMemo<PixelCraftReport | null>(() => {
-    if (!craftOpen) return null
+    if (!craftOpen && !craftPinned) return null
     return analyzePixelCraft({
       buffer: composeFrameRgba(project, clip, frame),
       width: project.width,
       height: project.height,
       lighting: project.settings.styleProfile?.lighting ?? 'top-left',
     })
-  }, [craftOpen, project, clip, frame, renderTick])
+  }, [craftOpen, craftPinned, project, clip, frame, renderTick])
+
+  // Sync live Craft Check defect locations directly onto the canvas stage
+  useEffect(() => {
+    if (!craftReport || (!craftOpen && !craftPinned)) {
+      setCraftPins([])
+      return
+    }
+    const pins: Array<{ kind: 'doubles' | 'orphans' | 'jaggies'; x: number; y: number }> = []
+    for (const d of craftReport.defects) {
+      if (d.kind === 'doubles' || d.kind === 'orphans' || d.kind === 'jaggies') {
+        for (const loc of d.locations) pins.push({ kind: d.kind, x: loc.x, y: loc.y })
+      }
+    }
+    setCraftPins(pins)
+  }, [craftReport, craftOpen, craftPinned, setCraftPins])
+
+  useEffect(() => () => setCraftPins([]), [setCraftPins])
 
   return (
     <TooltipProvider delayDuration={200}>
@@ -627,33 +651,49 @@ export function LayersPanel() {
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-7 w-7 text-zinc-400 hover:text-zinc-100"
+                          className={`h-7 w-7 ${craftPinned ? 'bg-amber-500/15 text-amber-300 ring-1 ring-amber-500/40' : 'text-zinc-400 hover:text-zinc-100'}`}
                           aria-label="Inspect pixel craft score & defects"
                         >
                           <ScanSearch className="h-3.5 w-3.5" />
                         </Button>
                       </PopoverTrigger>
                     </TooltipTrigger>
-                    <TooltipContent>Craft Check (doubles, orphans, jaggies, lighting)</TooltipContent>
+                    <TooltipContent>Craft Check (highlights doubles, orphans, jaggies on canvas)</TooltipContent>
                   </Tooltip>
                   <PopoverContent side="top" align="end" className="w-72 space-y-2 border-zinc-800 bg-zinc-950 p-3">
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between gap-2">
                       <span className="font-mono text-[10px] font-semibold uppercase tracking-wider text-zinc-300">
                         Pixel Craft Check
                       </span>
-                      {craftReport && (
-                        <span
-                          className={`rounded px-1.5 py-0.5 font-mono text-[10px] font-semibold ${
-                            craftReport.score >= 90
-                              ? 'bg-teal-500/20 text-teal-300'
-                              : craftReport.score >= 70
-                                ? 'bg-amber-500/20 text-amber-300'
-                                : 'bg-red-500/20 text-red-300'
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setCraftPinned((v) => !v)}
+                          aria-pressed={craftPinned}
+                          className={`flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[9px] transition-colors ${
+                            craftPinned
+                              ? 'bg-amber-500/20 text-amber-300 ring-1 ring-amber-500/40'
+                              : 'border border-zinc-800 text-zinc-400 hover:text-zinc-200'
                           }`}
+                          title="Keep defect markers visible on the canvas while you paint"
                         >
-                          {craftReport.score}/100
-                        </span>
-                      )}
+                          <Pin className="h-2.5 w-2.5" />
+                          {craftPinned ? 'Pinned' : 'Pin'}
+                        </button>
+                        {craftReport && (
+                          <span
+                            className={`rounded px-1.5 py-0.5 font-mono text-[10px] font-semibold ${
+                              craftReport.score >= 90
+                                ? 'bg-teal-500/20 text-teal-300'
+                                : craftReport.score >= 70
+                                  ? 'bg-amber-500/20 text-amber-300'
+                                  : 'bg-red-500/20 text-red-300'
+                            }`}
+                          >
+                            {craftReport.score}/100
+                          </span>
+                        )}
+                      </div>
                     </div>
                     {craftReport && (
                       <>
@@ -757,6 +797,74 @@ export function LayersPanel() {
                   </TooltipTrigger>
                   <TooltipContent>Center layer on canvas (Shift+click: whole frame)</TooltipContent>
                 </Tooltip>
+
+                {/* Auto-Trim Canvas to opaque content */}
+                <Popover open={trimOpen} onOpenChange={setTrimOpen}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <PopoverTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 text-zinc-400 hover:text-zinc-100"
+                          aria-label="Auto-trim canvas to content"
+                        >
+                          <Crop className="h-3.5 w-3.5" />
+                        </Button>
+                      </PopoverTrigger>
+                    </TooltipTrigger>
+                    <TooltipContent>Auto-trim canvas to content</TooltipContent>
+                  </Tooltip>
+                  <PopoverContent side="top" align="end" className="w-56 space-y-2.5 border-zinc-800 bg-zinc-950 p-3">
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono text-[10px] font-semibold uppercase tracking-wider text-zinc-300">
+                        Auto-Trim Canvas
+                      </span>
+                      <span className="font-mono text-[10px] text-zinc-500">
+                        {project.width}×{project.height}
+                      </span>
+                    </div>
+                    <p className="font-mono text-[9px] leading-snug text-zinc-400">
+                      Crops empty borders around artwork across all frames/clips (min 16×16, Ctrl+Z to undo).
+                    </p>
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono text-[10px] text-zinc-300">Padding</span>
+                      <div className="flex items-center gap-1" role="group" aria-label="Trim padding">
+                        {([0, 1, 2, 4] as const).map((p) => (
+                          <button
+                            key={p}
+                            type="button"
+                            onClick={() => setTrimPad(p)}
+                            aria-pressed={trimPad === p}
+                            className={`h-6 min-w-6 rounded px-1.5 font-mono text-[10px] transition-colors ${
+                              trimPad === p
+                                ? 'bg-teal-500/20 text-teal-300 ring-1 ring-teal-500/40'
+                                : 'text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
+                            }`}
+                          >
+                            {p}px
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <Button
+                      size="sm"
+                      className="h-7 w-full bg-teal-600 font-mono text-[10px] text-white hover:bg-teal-500"
+                      onClick={() => {
+                        const res = autoTrimCanvas(trimPad)
+                        if (res) {
+                          toast({
+                            title: `Trimmed to ${res.width}×${res.height}`,
+                            description: `Removed excess transparent margin with ${trimPad}px padding (Ctrl+Z to undo).`,
+                          })
+                          setTrimOpen(false)
+                        }
+                      }}
+                    >
+                      <Crop className="mr-1 h-3 w-3" /> Trim to content
+                    </Button>
+                  </PopoverContent>
+                </Popover>
               </div>
             </div>
           </div>
