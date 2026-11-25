@@ -27,12 +27,14 @@ import {
   createProject as coreCreateProject,
   locateCel,
   pasteRegionInPlace,
+  polishLayerPixelArt,
   writeExportPlan,
   type CommandOrigin,
   type CustomBrush,
   type ClipTag,
   type MotionApplyPayload,
   type PartRect,
+  type PolishPixelArtOptions,
   type Project,
   type QAIssue,
   type StyleProfile,
@@ -341,6 +343,10 @@ export interface EditorState {
   reorderLayer: (layerId: string, toIndex: number) => void
   setLayerProp: (layerId: string, patch: Partial<Pick<{ name: string; visible: boolean; opacity: number; locked: boolean; blend: string }, 'name' | 'visible' | 'opacity' | 'locked' | 'blend'>>) => void
   setLayerLinked: (layerId: string, linked: boolean) => void
+  polishLayer: (
+    layerId: string,
+    opts?: Omit<PolishPixelArtOptions, 'palette'> & { paletteLock?: boolean }
+  ) => boolean
   addClip: (name: string) => void
   deleteClip: (clipId: string) => void
   setClipTags: (tags: ClipTag[]) => void
@@ -1191,6 +1197,43 @@ export const useEditor = create<EditorState>()((set, get) => ({
       bus.execute('layer.setLinked', { clipId: refs.clipId, layerId, linked }, ORIGIN)
     } catch (err) {
       toast({ title: 'Could not change layer link', description: friendlyError(err), variant: 'destructive' })
+    }
+  },
+
+  polishLayer: (layerId, opts = {}) => {
+    const refs = activeRefs(get())
+    if (!refs) return false
+    if (layerIsLocked(refs.clipId, layerId)) {
+      toast({ title: 'Layer is locked', description: 'Unlock it in the Layers panel to polish.', variant: 'destructive' })
+      return false
+    }
+    const project = bus.getProject()
+    const loc = locateCel(project, refs.clipId, refs.frameId, layerId)
+    if (!loc?.cel) {
+      toast({ title: 'Layer is empty', description: 'Draw on this layer before polishing.' })
+      return false
+    }
+    const paletteLock = opts.paletteLock !== false
+    const working = new Uint8ClampedArray(loc.cel.buffer)
+    const changed = polishLayerPixelArt(working, project.width, project.height, {
+      ...opts,
+      palette: paletteLock ? project.palette : undefined,
+    })
+    if (!changed) {
+      toast({ title: 'Already polished', description: 'No pixels needed changes with these options.' })
+      return false
+    }
+    try {
+      bus.execute(
+        'pixels.applyOp',
+        { clipId: refs.clipId, frameId: refs.frameId, layerId, ops: [{ op: 'setBuffer', buffer: working }] },
+        ORIGIN,
+        { label: opts.selOut ? 'Polish layer (sel-out)' : 'Polish layer' },
+      )
+      return true
+    } catch (err) {
+      toast({ title: 'Could not polish layer', description: friendlyError(err), variant: 'destructive' })
+      return false
     }
   },
 

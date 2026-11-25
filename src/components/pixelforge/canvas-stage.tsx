@@ -4,7 +4,7 @@
 
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { ONION_MAX, floodFillDither, pixelPerfectStroke, type PixelPerfectState } from '@pixelforge/core'
 import { useEditor, getActiveClip, MIN_ZOOM, MAX_ZOOM } from '@/lib/pixelforge/store'
 import { useToast } from '@/hooks/use-toast'
@@ -34,6 +34,14 @@ import { ViewToolbar } from '@/components/pixelforge/view-toolbar'
 import { ToolOptionsBar } from '@/components/pixelforge/tool-options-bar'
 import { PalettePanel } from '@/components/pixelforge/palette-panel'
 import { ReferenceOverlay } from '@/components/pixelforge/reference-overlay'
+
+// Memoized floating overlays: CanvasStage re-renders on pixel hover moves,
+// so wrapping these prevents hover from reconciling 5 unrelated UI panels.
+const MemoPreviewOverlay = memo(PreviewOverlay)
+const MemoPalettePanel = memo(PalettePanel)
+const MemoReferenceOverlay = memo(ReferenceOverlay)
+const MemoViewToolbar = memo(ViewToolbar)
+const MemoToolOptionsBar = memo(ToolOptionsBar)
 
 // --------------------------------------------------------- free-scale handles
 // The marquee selection gets 8 handles (corners + edge midpoints). The dots
@@ -1130,19 +1138,19 @@ export function CanvasStage() {
       </div>
 
       {/* floating animation preview — lives on the edit area itself */}
-      <PreviewOverlay />
+      <MemoPreviewOverlay />
 
       {/* floating palette — draggable + hideable (same pattern as preview) */}
-      <PalettePanel />
+      <MemoPalettePanel />
 
       {/* floating reference image — draw "under" a semi-transparent picture */}
-      <ReferenceOverlay />
+      <MemoReferenceOverlay />
 
       {/* floating view controls — draggable + hideable (persisted) */}
-      <ViewToolbar onZoomBy={zoomBy} onFit={fitView} />
+      <MemoViewToolbar onZoomBy={zoomBy} onFit={fitView} />
 
       {/* contextual tool options (ellipse fill toggle, tilemap toggle, selection actions) */}
-      <ToolOptionsBar />
+      <MemoToolOptionsBar />
 
       {/* empty-frame hint — makes it explicit that pixels were NOT lost when
           the playhead sits on a blank frame (e.g. right after Add frame) */}

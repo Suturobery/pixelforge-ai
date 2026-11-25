@@ -140,16 +140,31 @@ const MAX_EXPORT_BYTES = 12 * 1024 * 1024 // base64 data-URL response cap
 
 // ---------------------------------------------------------------------------
 // state hash — deterministic document fingerprint for staleness detection
+// Cached per immutable Project reference and per copy-on-write cel buffer so
+// reads are O(1) and writes only CRC the single modified cel buffer.
 // ---------------------------------------------------------------------------
+
+const celCrcCache = new WeakMap<Uint8ClampedArray, number>()
+const projectHashCache = new WeakMap<Project, string>()
+
+function cachedCelCrc(buf: Uint8ClampedArray): number {
+  const hit = celCrcCache.get(buf)
+  if (hit !== undefined) return hit
+  const crc = crc32(buf as unknown as Uint8Array)
+  celCrcCache.set(buf, crc)
+  return crc
+}
 
 export async function computeStateHash(): Promise<string> {
   const p = getBus().getProject()
+  const cached = projectHashCache.get(p)
+  if (cached) return cached
   const parts: unknown[] = [p.id, p.name, p.width, p.height, p.palette, p.settings]
   for (const clip of p.clips) {
     const celCrcs: Record<string, number> = {}
     for (const frame of clip.frames) {
       for (const [layerId, cel] of Object.entries(frame.cels)) {
-        celCrcs[`${frame.id}:${layerId}`] = crc32(cel.buffer as unknown as Uint8Array)
+        celCrcs[`${frame.id}:${layerId}`] = cachedCelCrc(cel.buffer)
       }
     }
     parts.push({
@@ -167,7 +182,9 @@ export async function computeStateHash(): Promise<string> {
   }
   parts.push(p.trash.map((t) => t.id))
   const bytes = new TextEncoder().encode(JSON.stringify(parts))
-  return (await sha256Hex(bytes)).slice(0, 32)
+  const hash = (await sha256Hex(bytes)).slice(0, 32)
+  projectHashCache.set(p, hash)
+  return hash
 }
 
 // ---------------------------------------------------------------------------

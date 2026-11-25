@@ -2,11 +2,12 @@
 
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { analyzePixelCraft, composeFrameRgba, type PixelCraftReport } from '@pixelforge/core'
 import { useEditor, getActiveFrame, getActiveClip } from '@/lib/pixelforge/store'
 import { useToast } from '@/hooks/use-toast'
 import type { Cel, Clip, Frame, Layer } from '@/lib/pixelforge/types'
-import { drawCelBuffer, renderFrameScaled } from '@/lib/pixelforge/render'
+import { renderCelScaled, renderFrameScaled } from '@/lib/pixelforge/render'
 import { Button } from '@/components/ui/button'
 import { Slider } from '@/components/ui/slider'
 import { Input } from '@/components/ui/input'
@@ -42,6 +43,8 @@ import {
   Link2,
   Unlink2,
   GripVertical,
+  Sparkles,
+  ScanSearch,
 } from 'lucide-react'
 
 function LayerThumb({
@@ -61,21 +64,7 @@ function LayerThumb({
   useEffect(() => {
     const canvas = ref.current
     if (!canvas) return
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-    ctx.imageSmoothingEnabled = false
-    ctx.clearRect(0, 0, 28, 28)
-    const scratch = document.createElement('canvas')
-    scratch.width = w
-    scratch.height = h
-    const sctx = scratch.getContext('2d')
-    if (!sctx) return
-    drawCelBuffer(sctx, layer, cel, w, h, 1)
-    // aspect-fit — non-square canvases were being stretched to 28×28
-    const s = Math.min(28 / w, 28 / h)
-    const dw = Math.max(1, Math.round(w * s))
-    const dh = Math.max(1, Math.round(h * s))
-    ctx.drawImage(scratch, (28 - dw) / 2, (28 - dh) / 2, dw, dh)
+    renderCelScaled(canvas, layer, cel, w, h)
   }, [layer, cel, w, h, tick])
   return (
     <canvas
@@ -182,9 +171,18 @@ export function LayersPanel() {
   const reorderLayer = useEditor((s) => s.reorderLayer)
   const setLayerProp = useEditor((s) => s.setLayerProp)
   const setLayerLinked = useEditor((s) => s.setLayerLinked)
+  const polishLayer = useEditor((s) => s.polishLayer)
   const dragFrame = useEditor((s) => s.dragFrame)
   const { toast } = useToast()
   const [renaming, setRenaming] = useState<string | null>(null)
+  // Pro Pixel Craft UI popovers (Polish Layer + Craft Check)
+  const [polishOpen, setPolishOpen] = useState(false)
+  const [polishSelOut, setPolishSelOut] = useState(true)
+  const [polishShade, setPolishShade] = useState(true)
+  const [polishHighlight, setPolishHighlight] = useState(false)
+  const [polishCleanDoubles, setPolishCleanDoubles] = useState(true)
+  const [polishPaletteLock, setPolishPaletteLock] = useState(true)
+  const [craftOpen, setCraftOpen] = useState(false)
   // frame drag-and-drop: source (clipId+index) + current drop insertion point
   const [dragSrc, setDragSrc] = useState<{ clipId: string; index: number } | null>(null)
   const [dropIdx, setDropIdx] = useState<number | null>(null)
@@ -195,6 +193,16 @@ export function LayersPanel() {
   const clip = getActiveClip(useEditor.getState())
   const layers = [...clip.layers].reverse() // top first
   const active = clip.layers.find((l) => l.id === activeLayerId) ?? clip.layers.at(-1)
+
+  const craftReport = useMemo<PixelCraftReport | null>(() => {
+    if (!craftOpen) return null
+    return analyzePixelCraft({
+      buffer: composeFrameRgba(project, clip, frame),
+      width: project.width,
+      height: project.height,
+      lighting: project.settings.styleProfile?.lighting ?? 'top-left',
+    })
+  }, [craftOpen, project, clip, frame, renderTick])
 
   return (
     <TooltipProvider delayDuration={200}>
@@ -508,6 +516,221 @@ export function LayersPanel() {
                 </TooltipTrigger>
                 <TooltipContent>Delete</TooltipContent>
               </Tooltip>
+
+              <div className="ml-auto flex items-center gap-1">
+                {/* 1-click OKLab Sel-Out & Polish Layer popover */}
+                <Popover open={polishOpen} onOpenChange={setPolishOpen}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <PopoverTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 text-teal-400 hover:bg-teal-500/10 hover:text-teal-300"
+                          aria-label="Polish layer (sel-out & shading)"
+                        >
+                          <Sparkles className="h-3.5 w-3.5" />
+                        </Button>
+                      </PopoverTrigger>
+                    </TooltipTrigger>
+                    <TooltipContent>Polish layer (sel-out, shade & clean doubles)</TooltipContent>
+                  </Tooltip>
+                  <PopoverContent side="top" align="end" className="w-60 space-y-2 border-zinc-800 bg-zinc-950 p-3">
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono text-[10px] font-semibold uppercase tracking-wider text-teal-300">
+                        Polish · {active.name}
+                      </span>
+                      <span className="font-mono text-[9px] text-zinc-500">undoable</span>
+                    </div>
+                    <div className="space-y-1.5 font-mono text-[10px] text-zinc-300">
+                      <label className="flex cursor-pointer items-center justify-between gap-2">
+                        <span>Sel-Out (colored outline)</span>
+                        <input
+                          type="checkbox"
+                          checked={polishSelOut}
+                          onChange={(e) => setPolishSelOut(e.target.checked)}
+                          className="accent-teal-500"
+                        />
+                      </label>
+                      <label className="flex cursor-pointer items-center justify-between gap-2">
+                        <span>Directional shade</span>
+                        <input
+                          type="checkbox"
+                          checked={polishShade}
+                          onChange={(e) => setPolishShade(e.target.checked)}
+                          className="accent-teal-500"
+                        />
+                      </label>
+                      <label className="flex cursor-pointer items-center justify-between gap-2">
+                        <span>Warm top-left rim</span>
+                        <input
+                          type="checkbox"
+                          checked={polishHighlight}
+                          onChange={(e) => setPolishHighlight(e.target.checked)}
+                          className="accent-teal-500"
+                        />
+                      </label>
+                      <label className="flex cursor-pointer items-center justify-between gap-2">
+                        <span>Clean outline doubles</span>
+                        <input
+                          type="checkbox"
+                          checked={polishCleanDoubles}
+                          onChange={(e) => setPolishCleanDoubles(e.target.checked)}
+                          className="accent-teal-500"
+                        />
+                      </label>
+                      <label className="flex cursor-pointer items-center justify-between gap-2">
+                        <span>Lock to project palette</span>
+                        <input
+                          type="checkbox"
+                          checked={polishPaletteLock}
+                          onChange={(e) => setPolishPaletteLock(e.target.checked)}
+                          className="accent-teal-500"
+                        />
+                      </label>
+                    </div>
+                    <Button
+                      size="sm"
+                      className="h-7 w-full bg-teal-600 font-mono text-[10px] text-white hover:bg-teal-500"
+                      onClick={() => {
+                        const ok = polishLayer(active.id, {
+                          selOut: polishSelOut,
+                          outline: polishSelOut ? undefined : null,
+                          shade: polishShade,
+                          highlight: polishHighlight,
+                          cleanDoubles: polishCleanDoubles,
+                          paletteLock: polishPaletteLock,
+                        })
+                        if (ok) {
+                          toast({
+                            title: `Polished "${active.name}"`,
+                            description: polishSelOut
+                              ? 'Applied OKLab hue-shifted sel-out & palette-locked polish (Ctrl+Z to undo).'
+                              : 'Applied layer polish (Ctrl+Z to undo).',
+                          })
+                          setPolishOpen(false)
+                        }
+                      }}
+                    >
+                      <Sparkles className="mr-1 h-3 w-3" /> Apply polish
+                    </Button>
+                  </PopoverContent>
+                </Popover>
+
+                {/* Live Pixel Craft Linter popover */}
+                <Popover open={craftOpen} onOpenChange={setCraftOpen}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <PopoverTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 text-zinc-400 hover:text-zinc-100"
+                          aria-label="Inspect pixel craft score & defects"
+                        >
+                          <ScanSearch className="h-3.5 w-3.5" />
+                        </Button>
+                      </PopoverTrigger>
+                    </TooltipTrigger>
+                    <TooltipContent>Craft Check (doubles, orphans, jaggies, lighting)</TooltipContent>
+                  </Tooltip>
+                  <PopoverContent side="top" align="end" className="w-72 space-y-2 border-zinc-800 bg-zinc-950 p-3">
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono text-[10px] font-semibold uppercase tracking-wider text-zinc-300">
+                        Pixel Craft Check
+                      </span>
+                      {craftReport && (
+                        <span
+                          className={`rounded px-1.5 py-0.5 font-mono text-[10px] font-semibold ${
+                            craftReport.score >= 90
+                              ? 'bg-teal-500/20 text-teal-300'
+                              : craftReport.score >= 70
+                                ? 'bg-amber-500/20 text-amber-300'
+                                : 'bg-red-500/20 text-red-300'
+                          }`}
+                        >
+                          {craftReport.score}/100
+                        </span>
+                      )}
+                    </div>
+                    {craftReport && (
+                      <>
+                        <div className="grid grid-cols-4 gap-1 rounded border border-zinc-800 bg-zinc-900/60 p-1.5 text-center font-mono text-[9px]">
+                          <div>
+                            <div className="text-zinc-500">Colors</div>
+                            <div className="text-zinc-200">{craftReport.metrics.uniqueColors}</div>
+                          </div>
+                          <div>
+                            <div className="text-zinc-500">Doubles</div>
+                            <div className={craftReport.metrics.doublesCount > 0 ? 'text-amber-300' : 'text-teal-300'}>
+                              {craftReport.metrics.doublesCount}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-zinc-500">Orphans</div>
+                            <div className={craftReport.metrics.orphansCount > 0 ? 'text-amber-300' : 'text-teal-300'}>
+                              {craftReport.metrics.orphansCount}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-zinc-500">Jaggies</div>
+                            <div className={craftReport.metrics.jaggiesCount > 0 ? 'text-amber-300' : 'text-teal-300'}>
+                              {craftReport.metrics.jaggiesCount}
+                            </div>
+                          </div>
+                        </div>
+                        {craftReport.defects.length === 0 ? (
+                          <p className="rounded border border-teal-500/30 bg-teal-950/20 px-2 py-1.5 font-mono text-[10px] text-teal-300">
+                            Clean craft — no doubles, orphans, jaggies, or pillow shading detected.
+                          </p>
+                        ) : (
+                          <div className="max-h-40 space-y-1.5 overflow-y-auto pr-0.5">
+                            {craftReport.defects.map((d) => (
+                              <div
+                                key={d.kind}
+                                className="rounded border border-zinc-800 bg-zinc-900/70 p-1.5 font-mono text-[9px]"
+                              >
+                                <p className={d.severity === 'warning' ? 'text-amber-300' : 'text-zinc-200'}>
+                                  {d.message}
+                                </p>
+                                {d.locations.length > 0 && (
+                                  <p className="mt-0.5 truncate text-zinc-500">
+                                    at {d.locations.slice(0, 6).map((pt) => `(${pt.x},${pt.y})`).join(' ')}
+                                    {d.locations.length > 6 ? ' …' : ''}
+                                  </p>
+                                )}
+                                <p className="mt-0.5 text-zinc-400">{d.hint}</p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {craftReport.metrics.doublesCount > 0 && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-6 w-full border-teal-500/40 font-mono text-[10px] text-teal-300 hover:bg-teal-500/10"
+                            onClick={() => {
+                              const ok = polishLayer(active.id, {
+                                outline: null,
+                                selOut: false,
+                                shade: false,
+                                highlight: false,
+                                cleanDoubles: true,
+                                paletteLock: true,
+                              })
+                              if (ok) {
+                                toast({ title: 'Cleaned outline doubles', description: `Removed outer L-corners on "${active.name}".` })
+                              }
+                            }}
+                          >
+                            Quick clean doubles on &ldquo;{active.name}&rdquo;
+                          </Button>
+                        )}
+                      </>
+                    )}
+                  </PopoverContent>
+                </Popover>
+              </div>
             </div>
           </div>
         )}

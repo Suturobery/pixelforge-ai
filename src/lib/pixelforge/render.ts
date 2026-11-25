@@ -6,9 +6,13 @@
 import type { Cel, Clip, Frame, Layer, Project } from './types'
 
 let scratchCanvas: HTMLCanvasElement | null = null
+let scratchImageData: ImageData | null = null
 // Second scratch for onion-skin ghosts: drawFrame's per-layer pass uses the
 // FIRST scratch as staging, so ghost compositing needs its own buffer.
 let ghostCanvas: HTMLCanvasElement | null = null
+// Third scratch for full-frame/thumbnail compositing (isolated from scratchCanvas
+// so drawCelBuffer never clobbers multi-layer composites, avoiding per-call DOM canvas creation).
+let compositeCanvas: HTMLCanvasElement | null = null
 
 function getScratch(w: number, h: number): CanvasRenderingContext2D {
   if (!scratchCanvas) scratchCanvas = document.createElement('canvas')
@@ -19,6 +23,22 @@ function getScratch(w: number, h: number): CanvasRenderingContext2D {
   const ctx = scratchCanvas.getContext('2d', { willReadFrequently: true })
   if (!ctx) throw new Error('2D context unavailable')
   return ctx
+}
+
+function getScratchImageData(w: number, h: number): ImageData {
+  if (!scratchImageData || scratchImageData.width !== w || scratchImageData.height !== h) {
+    scratchImageData = new ImageData(w, h)
+  }
+  return scratchImageData
+}
+
+function getCompositeCanvas(w: number, h: number): HTMLCanvasElement {
+  if (!compositeCanvas) compositeCanvas = document.createElement('canvas')
+  if (compositeCanvas.width !== w || compositeCanvas.height !== h) {
+    compositeCanvas.width = w
+    compositeCanvas.height = h
+  }
+  return compositeCanvas
 }
 
 function getGhostScratch(w: number, h: number): HTMLCanvasElement {
@@ -40,7 +60,6 @@ export function drawCelBuffer(
   alpha = 1
 ): void {
   if (!cel) return // absent cel = fully transparent (C2)
-  const img = new ImageData(new Uint8ClampedArray(cel.buffer), w, h)
   const prev = ctx.globalAlpha
   const prevOp = ctx.globalCompositeOperation
   ctx.globalAlpha = layer.visible ? layer.opacity * alpha : 0
@@ -49,7 +68,8 @@ export function drawCelBuffer(
     layer.blend && layer.blend !== 'normal' ? layer.blend : prevOp
   if (ctx.globalAlpha > 0) {
     const scratch = getScratch(w, h)
-    scratch.clearRect(0, 0, w, h)
+    const img = getScratchImageData(w, h)
+    img.data.set(cel.buffer)
     scratch.putImageData(img, 0, 0)
     ctx.drawImage(scratchCanvas as HTMLCanvasElement, 0, 0)
   }
@@ -119,19 +139,40 @@ export function drawFrame(
   for (const layer of clip.layers) drawCelBuffer(ctx, layer, frame.cels[layer.id], w, h, 1)
 }
 
-/** Render a frame into a fresh private canvas at native size (nearest neighbor). */
+/** Render a frame into the shared composite canvas at native size (nearest neighbor). */
 function compositeToCanvas(clip: Clip, frame: Frame, w: number, h: number): HTMLCanvasElement {
-  // Must be a PRIVATE canvas: drawFrame → drawCelBuffer reuses the shared
-  // getScratch() as its per-layer staging buffer and clears it each layer, so
-  // compositing INTO that scratch would keep only the top layer's pixels
-  // (multi-layer frames rendered blank in thumbnails/preview/exports).
-  const local = document.createElement('canvas')
-  local.width = w
-  local.height = h
+  // Uses a dedicated canvas separate from scratchCanvas: drawFrame → drawCelBuffer
+  // stages each layer into scratchCanvas, so compositing into compositeCanvas
+  // preserves all layers with zero per-call DOM canvas allocations.
+  const local = getCompositeCanvas(w, h)
   const ctx = local.getContext('2d')
   if (!ctx) throw new Error('2D context unavailable')
   drawFrame(ctx, clip, frame, w, h)
   return local
+}
+
+/** Render a single layer's cel aspect-fitted into a thumbnail canvas (zero DOM allocations). */
+export function renderCelScaled(
+  dest: HTMLCanvasElement,
+  layer: Layer,
+  cel: Cel | undefined,
+  w: number,
+  h: number
+): void {
+  const ctx = dest.getContext('2d')
+  if (!ctx) return
+  ctx.imageSmoothingEnabled = false
+  ctx.clearRect(0, 0, dest.width, dest.height)
+  if (!cel) return
+  const local = getCompositeCanvas(w, h)
+  const sctx = local.getContext('2d')
+  if (!sctx) return
+  sctx.clearRect(0, 0, w, h)
+  drawCelBuffer(sctx, layer, cel, w, h, 1)
+  const s = Math.min(dest.width / w, dest.height / h)
+  const dw = Math.max(1, Math.round(w * s))
+  const dh = Math.max(1, Math.round(h * s))
+  ctx.drawImage(local, 0, 0, w, h, (dest.width - dw) / 2, (dest.height - dh) / 2, dw, dh)
 }
 
 /** Render a frame into a destination canvas at an arbitrary square-ish size (nearest neighbor). */
@@ -158,8 +199,8 @@ export function frameToPng(clip: Clip, frame: Frame, w: number, h: number): stri
 /** Encode a single RGBA buffer as a PNG data URL (cel/DB-adapter helper). */
 export function celToPngDataUrl(buffer: Uint8ClampedArray, w: number, h: number): string {
   const scratch = getScratch(w, h)
-  scratch.clearRect(0, 0, w, h)
-  const img = new ImageData(new Uint8ClampedArray(buffer), w, h)
+  const img = getScratchImageData(w, h)
+  img.data.set(buffer)
   scratch.putImageData(img, 0, 0)
   return (scratchCanvas as HTMLCanvasElement).toDataURL('image/png')
 }
