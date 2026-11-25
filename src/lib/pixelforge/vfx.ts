@@ -320,6 +320,7 @@ export async function previewVfxFrames(
 /** Alpha-over helper for live composited previews (pure, non-mutating). */
 export function alphaOverRgba(bottom: Uint8ClampedArray, top: Uint8ClampedArray): Uint8ClampedArray {
   const out = new Uint8ClampedArray(bottom)
+  if (bottom.length !== top.length) return out
   for (let i = 0; i < out.length; i += 4) {
     const sa = top[i + 3]! / 255
     if (sa <= 0) continue

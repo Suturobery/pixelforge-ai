@@ -202,36 +202,47 @@ export function VfxPanel() {
   // When target === 'current_clip', composite the real sprite frame sandwiched
   // between Back VFX and Front VFX so what you see is byte-identical to Apply!
   useEffect(() => {
+    if (rightTab !== 'vfx') return
     const canvas = previewCanvasRef.current
     if (!canvas || !sequence || sequence.combinedFrames.length === 0) return
     const w = project.width
     const h = project.height
+    const expectedBytes = w * h * 4
+    const idx = frameIdx % sequence.combinedFrames.length
+    const comb = sequence.combinedFrames[idx]
+    const back = sequence.backFrames[idx]
+    const front = sequence.frontFrames[idx]
+    // Guard against stale sequence frames right after a canvas resize / New Project
+    // while the debounced preview re-render is still in flight.
+    if (!comb || !back || !front || comb.length !== expectedBytes) return
+
     canvas.width = w
     canvas.height = h
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
-    const idx = frameIdx % sequence.combinedFrames.length
     let display: Uint8ClampedArray
 
     if (target === 'current_clip' && clip.frames.length > 0) {
       const spriteFrame = clip.frames[idx % clip.frames.length]!
       const spriteRgba = composeFrameRgba(project, clip, spriteFrame)
+      if (spriteRgba.length !== expectedBytes) return
       if (depth === 'split') {
-        const withBack = alphaOverRgba(sequence.backFrames[idx]!, spriteRgba)
-        display = alphaOverRgba(withBack, sequence.frontFrames[idx]!)
+        const withBack = alphaOverRgba(back, spriteRgba)
+        display = alphaOverRgba(withBack, front)
       } else if (depth === 'back') {
-        display = alphaOverRgba(sequence.combinedFrames[idx]!, spriteRgba)
+        display = alphaOverRgba(comb, spriteRgba)
       } else {
-        display = alphaOverRgba(spriteRgba, sequence.combinedFrames[idx]!)
+        display = alphaOverRgba(spriteRgba, comb)
       }
     } else {
-      display = sequence.combinedFrames[idx]!
+      display = comb
     }
 
+    if (display.length !== expectedBytes) return
     ctx.clearRect(0, 0, w, h)
     ctx.putImageData(new ImageData(new Uint8ClampedArray(display), w, h), 0, 0)
-  }, [sequence, frameIdx, target, depth, project, clip, docVersion])
+  }, [rightTab, sequence, frameIdx, target, depth, project, clip, docVersion])
 
   const handleApply = async () => {
     if (!selectedId || applying) return
