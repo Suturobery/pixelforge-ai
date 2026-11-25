@@ -780,6 +780,37 @@ export const TOOL_CATALOG: ToolDef[] = [
     },
   },
   {
+    name: 'create_skin_variants',
+    title: 'Generate sprite skin variant clips',
+    description:
+      'Clone a source clip into 1–8 new palette-swapped skin variant clips (e.g. fire, ice, poison, shadow, gold, cyber, gameboy, stone, or custom hex palettes) ' +
+      'in one undoable transaction without modifying the original clip. Ready for batch spritesheet / Master Atlas export.',
+    tier: 'L1',
+    relay: true,
+    inputSchema: {
+      ...clipRef,
+      presets: z
+        .array(z.enum(['fire', 'ice', 'poison', 'shadow', 'gold', 'cyber', 'gameboy', 'stone']))
+        .min(1)
+        .max(8)
+        .optional()
+        .describe('Built-in elemental/RPG skin preset ids to generate (e.g. ["fire", "ice", "gold"]).'),
+      variants: z
+        .array(
+          z.object({
+            name: z.string().trim().min(1).max(60),
+            palette: z.array(hexColor).min(1).max(256),
+          }),
+        )
+        .min(1)
+        .max(8)
+        .optional()
+        .describe('Custom named skin variants with explicit hex palettes.'),
+      mode: z.enum(['ramp', 'nearest']).optional().describe('OKLab remap mode: "ramp" (default) or "nearest".'),
+      ...staleGuard,
+    },
+  },
+  {
     name: 'auto_trim',
     title: 'Auto-trim canvas to artwork',
     description:

@@ -153,9 +153,21 @@ export interface PixelForgeBridge {
   clipboard: {
     writeText(text: string): Promise<void>;
   };
-  /** Desktop-owned MCP endpoint. Unavailable when the bundled service failed. */
+  /** Desktop-owned MCP endpoint + 1-click IDE config installer. */
   mcp: {
     status(): Promise<{ ready: boolean; endpoint: string | null }>;
+    detectClients(): Promise<BridgeDetectedMcpClient[]>;
+    installClient(input: {
+      clientId: BridgeMcpClientId;
+      endpoint: string;
+      token: string;
+    }): Promise<BridgeInstallMcpClientResult>;
+    uninstallClient(input: { clientId: BridgeMcpClientId }): Promise<{
+      ok: boolean;
+      clientId: BridgeMcpClientId;
+      removed?: boolean;
+      error?: string;
+    }>;
   };
   dialog: {
     openFile(options?: BridgeDialogOpenOptions): Promise<BridgeDialogOpenResult>;
@@ -224,6 +236,25 @@ export interface PixelForgeBridge {
     install(): Promise<{ ok: boolean }>;
     onStatus(listener: (status: UpdateStatusView) => void): () => void;
   };
+}
+
+export type BridgeMcpClientId = 'cursor' | 'windsurf' | 'claude-code' | 'codex' | 'antigravity';
+
+export interface BridgeDetectedMcpClient {
+  id: BridgeMcpClientId;
+  name: string;
+  configPath: string;
+  detected: boolean;
+  configured: boolean;
+  format: 'json' | 'toml';
+}
+
+export interface BridgeInstallMcpClientResult {
+  ok: boolean;
+  clientId: BridgeMcpClientId;
+  configPath?: string;
+  backupPath?: string | null;
+  error?: string;
 }
 
 export interface UpdateStatusView {

@@ -28,7 +28,7 @@ import { getOrCreateEditorToken } from './editor-auth';
 import { EditorLink, type EditorSocket } from './editor-link';
 import { McpStore } from './store';
 import { McpHost, type RequestIdentity } from './server';
-import { extractBearer, newPendingPairing, sha256Hex } from './auth';
+import { extractBearer, generateClientId, generateClientToken, newPendingPairing, sha256Hex } from './auth';
 import {
   type CtrlRequest,
   type EditorInbound,
@@ -93,6 +93,45 @@ function handleCtrl(msg: EditorInbound, reply: (id: string, ok: boolean, data?: 
     case 'pair-cancel': {
       const ok = store.cancelPairing(sha256Hex(ctrl.token));
       reply(id, ok, ok ? { cancelled: true } : undefined, ok ? undefined : { code: 'not_found', message: 'Pairing code not found (or already used)' });
+      return;
+    }
+    case 'client-issue': {
+      // Trusted editor control plane (1-click desktop IDE setup): mints a real
+      // persistent client token directly so the desktop shell can write a
+      // ready-to-use config without a manual pair_client round-trip.
+      const name = typeof ctrl.name === 'string' ? ctrl.name.trim().slice(0, 64) : '';
+      if (!name) {
+        reply(id, false, undefined, { code: 'bad_request', message: 'Client name is required' });
+        return;
+      }
+      const tier: Tier = (['L1', 'L2', 'L3'] as string[]).includes(ctrl.tier as string)
+        ? (ctrl.tier as Tier)
+        : 'L0';
+      const token = generateClientToken();
+      const clientId = generateClientId();
+      const createdAt = new Date().toISOString();
+      store.putClient({
+        clientId,
+        name,
+        tier,
+        tokenHash: sha256Hex(token),
+        createdAt,
+        lastSeen: null,
+        revoked: false,
+      });
+      store.audit({
+        kind: 'pair',
+        clientId,
+        clientName: name,
+        tool: 'client_issue',
+        tier,
+        argsHash: null,
+        ok: true,
+        errorCode: null,
+        durationMs: 0,
+        summary: `1-click setup issued ${tier} token for ${name}`,
+      });
+      reply(id, true, { clientId, name, tier, token, createdAt });
       return;
     }
     case 'clients-list': {

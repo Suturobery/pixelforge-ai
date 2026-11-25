@@ -21,7 +21,9 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { importAseprite } from '@pixelforge/core'
 import { useEditor, type RightTab } from '@/lib/pixelforge/store'
+import { confirmDialog } from '@/components/ui/confirm-dialog'
 import {
   hydrateDesktopSettings,
   startDesktopSettingsSync,
@@ -296,12 +298,51 @@ export default function Home() {
   // refresh = new in-memory document — reopen the last saved project so a
   // reload continues where the artist left off (no-op when nothing saved yet)
   const { toast } = useToast()
+  const [aseDragOver, setAseDragOver] = useState(false)
   useEffect(() => {
     if (!mounted) return
     void restoreLastProject().then((name) => {
       if (name) toast({ title: 'Last project restored', description: name })
     })
   }, [mounted, toast])
+
+  const handleStudioDrop = useCallback(
+    async (e: React.DragEvent<HTMLDivElement>) => {
+      const files = Array.from(e.dataTransfer?.files ?? [])
+      const aseFile = files.find((f) => /\.(aseprite|ase)$/i.test(f.name))
+      setAseDragOver(false)
+      if (!aseFile) return
+      e.preventDefault()
+      if (
+        useEditor.getState().dirty &&
+        !(await confirmDialog({
+          title: 'Discard unsaved changes?',
+          message: `Import "${aseFile.name}"? Your current unsaved changes will be replaced.`,
+          confirmLabel: 'Discard & Import',
+          destructive: true,
+        }))
+      )
+        return
+      try {
+        const bytes = new Uint8Array(await aseFile.arrayBuffer())
+        const { project, stats, warnings } = await importAseprite(bytes, { name: aseFile.name })
+        useEditor.getState().loadProject(project, { filePath: null, projectId: null })
+        toast({
+          title: `Imported ${project.name}`,
+          description:
+            warnings[0] ??
+            `${stats.width}×${stats.height} · ${stats.layers} layer${stats.layers === 1 ? '' : 's'} · ${stats.frames} frame${stats.frames === 1 ? '' : 's'}`,
+        })
+      } catch (err) {
+        toast({
+          title: 'Aseprite import failed',
+          description: err instanceof Error ? err.message : String(err),
+          variant: 'destructive',
+        })
+      }
+    },
+    [toast],
+  )
 
   // pre-mount paint: plain dark canvas only (Screen A removed — the studio
   // mounts directly; settings rehydrate within the first frame)
@@ -310,7 +351,27 @@ export default function Home() {
   }
 
   return (
-    <div className={cn('pixelforge-studio flex h-dvh min-h-0 flex-col overflow-hidden bg-zinc-950 text-zinc-100', uiTextScale === 'large' && 'pixelforge-text-large')}>
+    <div
+      className={cn('pixelforge-studio relative flex h-dvh min-h-0 flex-col overflow-hidden bg-zinc-950 text-zinc-100', uiTextScale === 'large' && 'pixelforge-text-large')}
+      onDragOver={(e) => {
+        if (e.dataTransfer?.types?.includes('Files')) {
+          e.preventDefault()
+          if (!aseDragOver) setAseDragOver(true)
+        }
+      }}
+      onDragLeave={(e) => {
+        if (e.currentTarget === e.target) setAseDragOver(false)
+      }}
+      onDrop={(e) => void handleStudioDrop(e)}
+    >
+      {aseDragOver && (
+        <div className="pointer-events-none absolute inset-0 z-50 grid place-items-center bg-zinc-950/75 backdrop-blur-sm">
+          <div className="rounded-xl border border-teal-500/60 bg-zinc-900/95 px-6 py-4 text-center shadow-2xl">
+            <p className="font-mono text-sm font-medium text-teal-300">Drop Aseprite file (.ase / .aseprite)</p>
+            <p className="mt-1 font-mono text-xs text-zinc-400">Imports layers, frames, timings, tags, and palette</p>
+          </div>
+        </div>
+      )}
       <Header />
 
       <div className="relative flex min-h-0 flex-1">

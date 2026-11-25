@@ -27,6 +27,9 @@ const bridge: PixelForgeBridge = {
   },
   mcp: {
     status: () => ipcRenderer.invoke('pf:mcp-status'),
+    detectClients: () => ipcRenderer.invoke('pf:mcp-detect-clients'),
+    installClient: (input) => ipcRenderer.invoke('pf:mcp-install-client', input),
+    uninstallClient: (input) => ipcRenderer.invoke('pf:mcp-uninstall-client', input),
   },
   dialog: {
     openFile: (options) => ipcRenderer.invoke('pf:dialog-open', options ?? {}),

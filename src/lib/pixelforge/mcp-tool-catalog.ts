@@ -301,6 +301,12 @@ export const MCP_TOOLS: McpToolInfo[] = [
     example: { palette: ['#0f380f', '#306230', '#8bac0f', '#9bbc0f'], mode: 'ramp', scope: 'clip' },
   },
   {
+    name: 'create_skin_variants',
+    tier: 'L1',
+    description: 'Clone a clip into 1–8 palette-swapped skin variant clips (fire, ice, poison, shadow, gold, cyber, gameboy, stone, or custom palettes) without mutating the original.',
+    example: { presets: ['fire', 'ice', 'gold'], mode: 'ramp' },
+  },
+  {
     name: 'add_clip',
     tier: 'L1',
     description: 'Create a new clip with 1–64 empty frames.',

@@ -117,6 +117,7 @@ export type CtrlRequest =
   | { kind: 'status' }
   | { kind: 'pair-generate'; tier: Tier }
   | { kind: 'pair-cancel'; token: string }
+  | { kind: 'client-issue'; name: string; tier: Tier }
   | { kind: 'clients-list' }
   | { kind: 'client-revoke'; clientId: string }
   /** Remove a client record only after it has been revoked. */

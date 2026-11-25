@@ -13,7 +13,7 @@ import {
   type BridgeState,
 } from '@/lib/pixelforge/mcp-bridge'
 import { useAppSettings } from '@/lib/pixelforge/settings'
-import { copyText, desktopConfirm } from '@/lib/pixelforge/desktop-bridge'
+import { copyText, desktopConfirm, getBridge } from '@/lib/pixelforge/desktop-bridge'
 import { buildIdeGuide, tierSummary } from '@/lib/pixelforge/ide-guide'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
@@ -34,6 +34,7 @@ import {
   PlugZap,
   RefreshCw,
   ShieldCheck,
+  Sparkles,
   Trash2,
   Unlink,
 } from 'lucide-react'
@@ -116,6 +117,19 @@ export function McpConnections() {
     error?: string
   } | null>(null)
   const [copied, setCopied] = useState<'code' | 'endpoint' | 'guide' | null>(null)
+  const [detectedIdes, setDetectedIdes] = useState<PfDetectedMcpClient[]>([])
+  const [ideActionBusy, setIdeActionBusy] = useState<PfMcpClientId | null>(null)
+  const [showAllIdes, setShowAllIdes] = useState(false)
+
+  const refreshIdes = useCallback(async () => {
+    const fn = getBridge()?.mcp?.detectClients
+    if (!fn) return
+    try {
+      setDetectedIdes(await fn())
+    } catch {
+      // ignore detection failures
+    }
+  }, [])
 
   const refresh = useCallback(async () => {
     const [c, o] = await Promise.all([
@@ -128,9 +142,10 @@ export function McpConnections() {
 
   useEffect(() => {
     void refresh()
+    void refreshIdes()
     const t = setInterval(() => void refresh(), 8000)
     return () => clearInterval(t)
-  }, [refresh])
+  }, [refresh, refreshIdes])
 
   // expiry countdown for the displayed pairing code
   const [, forceTick] = useState(0)
@@ -219,6 +234,63 @@ export function McpConnections() {
       setConnectionCheck({ server: false, editor: false, paired: false, recentRead: false, error: 'Could not reach the MCP service.' })
     } finally {
       setChecking(false)
+    }
+  }
+
+  const connectIdeOneClick = async (ide: PfDetectedMcpClient) => {
+    const installer = getBridge()?.mcp?.installClient
+    const endpoint = bridge.server?.endpoint
+    if (!installer || !endpoint) {
+      toast({ title: 'MCP server not ready', description: 'Wait for the local MCP server to connect first.', variant: 'destructive' })
+      return
+    }
+    setIdeActionBusy(ide.id)
+    try {
+      const issued = await mcpCtrl<{ clientId: string; name: string; tier: string; token: string }>({
+        kind: 'client-issue',
+        name: ide.name,
+        tier: pairTier,
+      })
+      if (!issued.ok || !issued.data?.token) {
+        toast({ title: `Could not pair ${ide.name}`, description: issued.error?.message ?? 'MCP server did not issue a token.', variant: 'destructive' })
+        return
+      }
+      const res = await installer({ clientId: ide.id, endpoint, token: issued.data.token })
+      if (!res.ok) {
+        // Roll back the newly issued client so we never leave an orphaned token on write failure
+        await mcpCtrl({ kind: 'client-revoke', clientId: issued.data.clientId })
+        toast({ title: `Could not configure ${ide.name}`, description: res.error ?? 'Config write failed.', variant: 'destructive' })
+        return
+      }
+      toast({
+        title: `${ide.name} connected (${pairTier})`,
+        description: `Updated ${res.configPath ?? ide.configPath}. Reload MCP in ${ide.name} to start using PixelForge AI.`,
+      })
+      await Promise.all([refresh(), refreshIdes()])
+    } finally {
+      setIdeActionBusy(null)
+    }
+  }
+
+  const removeIdeOneClick = async (ide: PfDetectedMcpClient) => {
+    const uninstaller = getBridge()?.mcp?.uninstallClient
+    if (!uninstaller) return
+    const ok = await desktopConfirm(
+      `Remove PixelForge AI from ${ide.name}?`,
+      `Deletes the "pixelforge-ai" MCP entry from ${ide.configPath} (a backup is saved first).`,
+    )
+    if (!ok) return
+    setIdeActionBusy(ide.id)
+    try {
+      const res = await uninstaller({ clientId: ide.id })
+      if (res.ok) {
+        toast({ title: `Removed from ${ide.name}`, description: 'You can also revoke its token under Connected clients.' })
+        await refreshIdes()
+      } else {
+        toast({ title: `Could not update ${ide.name}`, description: res.error ?? 'Config update failed.', variant: 'destructive' })
+      }
+    } finally {
+      setIdeActionBusy(null)
     }
   }
 
@@ -319,6 +391,99 @@ export function McpConnections() {
           </Button>
         )}
       </div>
+
+      {/* -------------------------------------------- 1-click IDE setup (desktop) */}
+      {detectedIdes.length > 0 && (
+        <div className="min-w-0 overflow-hidden rounded-lg border border-teal-800/60 bg-teal-950/20 p-2.5">
+          <div className="flex min-w-0 items-center justify-between gap-2">
+            <div className="flex min-w-0 items-center gap-1.5">
+              <Sparkles className="h-3.5 w-3.5 shrink-0 text-teal-400" />
+              <p className="font-mono text-xs text-zinc-100">1-Click IDE Setup</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowAllIdes((v) => !v)}
+              className="shrink-0 font-mono text-[10px] text-zinc-400 hover:text-zinc-200"
+            >
+              {showAllIdes ? 'Detected only' : `Show all (${detectedIdes.length})`}
+            </button>
+          </div>
+          <p className="mt-1 break-words font-mono text-[10px] leading-tight text-zinc-400">
+            Automatically pairs and writes the PixelForge MCP config (with a <code className="text-zinc-300">.bak</code> backup) using tier <span className="text-teal-300">{pairTier}</span> — no manual JSON editing.
+          </p>
+          {(() => {
+            const visible = showAllIdes
+              ? detectedIdes
+              : detectedIdes.filter((ide) => ide.detected || ide.configured)
+            if (visible.length === 0) {
+              return (
+                <p className="mt-2 font-mono text-[10px] text-zinc-500">
+                  No supported AI IDEs detected yet. Click <span className="text-zinc-300">Show all</span> to pre-configure Cursor, Claude Code, Codex, Windsurf, or Antigravity.
+                </p>
+              )
+            }
+            return (
+              <ul className="mt-2 space-y-1.5">
+                {visible.map((ide) => {
+                  const busy = ideActionBusy === ide.id
+                  return (
+                    <li
+                      key={ide.id}
+                      className="flex min-w-0 flex-wrap items-center justify-between gap-2 rounded border border-zinc-800/80 bg-zinc-950/60 px-2 py-1.5"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="flex items-center gap-1.5 truncate font-mono text-[11px] text-zinc-100">
+                          <span>{ide.name}</span>
+                          {ide.configured && (
+                            <span className="rounded border border-teal-600/50 bg-teal-950/60 px-1 py-0.2 text-[9px] text-teal-300">
+                              ✓ configured
+                            </span>
+                          )}
+                          {!ide.detected && !ide.configured && (
+                            <span className="text-[9px] text-zinc-500">not detected</span>
+                          )}
+                        </p>
+                        <p className="truncate font-mono text-[9px] text-zinc-500" title={ide.configPath}>
+                          {ide.configPath}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <Button
+                          size="sm"
+                          variant={ide.configured ? 'outline' : 'default'}
+                          className={`h-6 px-2 font-mono text-[10px] ${
+                            ide.configured
+                              ? 'border-zinc-700 text-zinc-200 hover:bg-zinc-800'
+                              : 'bg-teal-600 text-white hover:bg-teal-500'
+                          }`}
+                          onClick={() => void connectIdeOneClick(ide)}
+                          disabled={busy || !serverReady}
+                        >
+                          {busy && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
+                          {ide.configured ? 'Reconnect' : 'Connect'}
+                        </Button>
+                        {ide.configured && (
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-6 w-6 text-zinc-500 hover:text-red-300"
+                            onClick={() => void removeIdeOneClick(ide)}
+                            disabled={busy}
+                            aria-label={`Remove PixelForge from ${ide.name}`}
+                            title={`Remove PixelForge from ${ide.name}`}
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
+                        )}
+                      </div>
+                    </li>
+                  )
+                })}
+              </ul>
+            )
+          })()}
+        </div>
+      )}
 
       {/* ------------------------------------------------ connect assistant */}
       <div className="min-w-0 overflow-hidden rounded-lg border border-frost-900/60 bg-frost-950/20 p-2.5">

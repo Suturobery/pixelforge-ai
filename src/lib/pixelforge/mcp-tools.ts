@@ -42,6 +42,7 @@ import {
   measureStyleAnchor,
   parseStyleProfile,
   polishLayerPixelArt,
+  getSkinPreset,
   remapBufferToPalette,
   renderInspectionRgba,
   renderSpriteTemplate,
@@ -69,6 +70,7 @@ import {
 } from '@pixelforge/core'
 import { generateGodot4AtlasTres, type ExportScale } from './export'
 import { reviewAssetSet } from './asset-set-review'
+import { materializeSkinVariants, type SkinVariantRequest } from './skin-variants'
 import { getBus, useEditor } from './store'
 import { MCP_TOOLS } from './mcp-tool-catalog'
 import { hexToRgba } from './color'
@@ -1674,6 +1676,47 @@ const handlers: Record<string, ToolHandler> = {
         paletteSize: targetPalette.length,
       },
       { undoable: true, summary: `Remapped ${remappedPixels} px across ${updates.length} cel(s) in "${clip.name}" via OKLab ${mode}` },
+    )
+  },
+
+  async create_skin_variants(args) {
+    const project = getBus().getProject()
+    const clip = resolveClipRef(project, args)
+    const mode = args.mode === 'nearest' ? 'nearest' : 'ramp'
+    const requests: SkinVariantRequest[] = []
+
+    if (Array.isArray(args.presets)) {
+      for (const raw of args.presets) {
+        if (typeof raw !== 'string') continue
+        const preset = getSkinPreset(raw)
+        if (!preset) {
+          throw new CommandError('VALIDATION_FAILED', `Unknown skin preset "${raw}"`)
+        }
+        requests.push({ name: `${clip.name}_${preset.suffix}`, palette: preset.palette })
+      }
+    }
+    if (Array.isArray(args.variants)) {
+      for (const item of args.variants as Array<{ name?: unknown; palette?: unknown }>) {
+        if (!item || typeof item.name !== 'string' || !item.name.trim()) {
+          throw new CommandError('VALIDATION_FAILED', 'Each custom variant requires a non-empty name')
+        }
+        if (!Array.isArray(item.palette) || item.palette.length === 0 || item.palette.length > 256) {
+          throw new CommandError('VALIDATION_FAILED', `Variant "${item.name}" palette must be 1–256 hex colors`)
+        }
+        requests.push({
+          name: item.name.trim().slice(0, 60),
+          palette: item.palette.map((c) => asHex(c, 'variant palette color')),
+        })
+      }
+    }
+    if (requests.length === 0 || requests.length > 8) {
+      throw new CommandError('VALIDATION_FAILED', 'Supply 1–8 skin presets or custom variants')
+    }
+
+    const created = materializeSkinVariants(getBus(), clip, requests, 'mcp', { mode })
+    return withStateHash(
+      { sourceClipId: clip.id, mode, created },
+      { undoable: true, summary: `Created ${created.length} skin variant clip(s) from "${clip.name}"` },
     )
   },
 

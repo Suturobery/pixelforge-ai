@@ -11,7 +11,11 @@ const path = require('node:path');
 const generic = process.env.PF_UPDATE_URL;
 const ghRepo = process.env.GH_REPO;
 
-const args = ['--win', '--config', 'electron-builder.yml'];
+const platformFlag =
+  process.env.PF_DIST_TARGET ||
+  (process.platform === 'darwin' ? '--mac' : process.platform === 'linux' ? '--linux' : '--win');
+
+const args = [platformFlag, '--config', 'electron-builder.yml'];
 if (generic) {
   args.push('-c.publish.provider=generic', `-c.publish.url=${generic}`);
   console.log(`[dist] update feed (generic): ${generic}`);

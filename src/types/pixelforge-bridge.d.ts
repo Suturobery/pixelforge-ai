@@ -119,6 +119,18 @@ interface PixelForgeBridge {
   };
   mcp: {
     status(): Promise<{ ready: boolean; endpoint: string | null }>;
+    detectClients?(): Promise<PfDetectedMcpClient[]>;
+    installClient?(input: {
+      clientId: PfMcpClientId;
+      endpoint: string;
+      token: string;
+    }): Promise<PfInstallMcpClientResult>;
+    uninstallClient?(input: { clientId: PfMcpClientId }): Promise<{
+      ok: boolean;
+      clientId: PfMcpClientId;
+      removed?: boolean;
+      error?: string;
+    }>;
   };
   dialog: {
     openFile(options?: PfDialogOpenOptions): Promise<PfDialogOpenResult>;
@@ -146,6 +158,25 @@ interface PixelForgeBridge {
     install(): Promise<{ ok: boolean }>;
     onStatus(listener: (status: PfUpdateStatus) => void): () => void;
   };
+}
+
+type PfMcpClientId = 'cursor' | 'windsurf' | 'claude-code' | 'codex' | 'antigravity';
+
+interface PfDetectedMcpClient {
+  id: PfMcpClientId;
+  name: string;
+  configPath: string;
+  detected: boolean;
+  configured: boolean;
+  format: 'json' | 'toml';
+}
+
+interface PfInstallMcpClientResult {
+  ok: boolean;
+  clientId: PfMcpClientId;
+  configPath?: string;
+  backupPath?: string | null;
+  error?: string;
 }
 
 interface PfUpdateStatus {

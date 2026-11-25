@@ -579,3 +579,16 @@ export {
   v1Importer,
   V1ProjectImporter,
 } from './compat/import-v1';
+export {
+  importAseprite,
+  type AsepriteImportResult,
+} from './persist/aseprite';
+export {
+  SKIN_VARIANT_PRESETS,
+  listSkinPresets,
+  getSkinPreset,
+  buildSkinVariantPlan,
+  type SkinVariantPreset,
+  type SkinVariantCelBuffer,
+  type SkinVariantPlan,
+} from './pixels/skin-variants';

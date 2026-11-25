@@ -58,6 +58,7 @@ import { DEFAULT_PALETTE } from './palettes'
 import { useAppSettings } from './settings'
 
 import { toast } from '@/hooks/use-toast'
+import { materializeSkinVariants, type CreatedSkinVariant, type SkinVariantRequest } from './skin-variants'
 import { friendlyError } from '@/lib/utils'
 import {
   composeSelectionMove,
@@ -391,6 +392,11 @@ export interface EditorState {
     targetPalette: string[],
     opts?: { scope?: 'layer' | 'frame' | 'clip'; mode?: PaletteRemapMode; updatePalette?: boolean; label?: string }
   ) => number
+  /** Clone the active clip into 1..N palette-swapped skin variant clips (original clip stays untouched). */
+  createSkinVariants: (
+    variants: readonly SkinVariantRequest[],
+    opts?: { mode?: PaletteRemapMode }
+  ) => CreatedSkinVariant[]
   addClip: (name: string) => void
   deleteClip: (clipId: string) => void
   /** Reverse frame order of the active clip in one undoable transaction. */
@@ -1674,6 +1680,31 @@ export const useEditor = create<EditorState>()((set, get) => ({
     } catch (err) {
       toast({ title: 'Palette remap failed', description: friendlyError(err), variant: 'destructive' })
       return 0
+    }
+  },
+
+  createSkinVariants: (variants, opts = {}) => {
+    const refs = activeRefs(get())
+    if (!refs || variants.length === 0) return []
+    const project = bus.getProject()
+    const clip = project.clips.find((c) => c.id === refs.clipId)
+    if (!clip) return []
+    try {
+      const created = materializeSkinVariants(bus, clip, variants, ORIGIN, { mode: opts.mode })
+      if (created.length > 0) {
+        const last = created[created.length - 1]!
+        const lastClip = bus.getProject().clips.find((c) => c.id === last.clipId)
+        set({
+          activeClipId: last.clipId,
+          activeFrameIndex: 0,
+          activeLayerId: lastClip?.layers[0]?.id ?? '',
+          playing: false,
+        })
+      }
+      return created
+    } catch (err) {
+      toast({ title: 'Could not generate skin variants', description: friendlyError(err), variant: 'destructive' })
+      return []
     }
   },
 

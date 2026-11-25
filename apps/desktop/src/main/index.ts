@@ -11,6 +11,7 @@ import { createLogger, type Logger } from '../logger';
 import { RenderServer } from '../render-server';
 import { McpSupervisor } from '../mcp/supervisor-core';
 import { createServiceLauncher, resolveServiceDir } from '../mcp/launcher';
+import { detectMcpClients, installMcpClient, uninstallMcpClient } from '../mcp/client-installer';
 import { installApplicationMenu } from './menu';
 import { runSmokeTest } from '../smoke';
 import { installSessionHardening } from '../security';
@@ -149,6 +150,21 @@ if (!gotLock) {
       const supervisorState = mcpSupervisor?.state.kind;
       const ready = supervisorState === 'running' || supervisorState === 'adopted';
       return { ready, endpoint: ready ? `http://127.0.0.1:${mcpPort}/mcp` : null };
+    });
+    ipcMain.handle('pf:mcp-detect-clients', () => detectMcpClients());
+    ipcMain.handle('pf:mcp-install-client', (_event, input: { clientId?: string; endpoint?: string; token?: string }) => {
+      const res = installMcpClient({
+        clientId: String(input?.clientId ?? ''),
+        endpoint: String(input?.endpoint ?? ''),
+        token: String(input?.token ?? ''),
+      });
+      logger.info('mcp.client.install', { clientId: input?.clientId, ok: res.ok, error: res.error });
+      return res;
+    });
+    ipcMain.handle('pf:mcp-uninstall-client', (_event, input: { clientId?: string }) => {
+      const res = uninstallMcpClient({ clientId: String(input?.clientId ?? '') });
+      logger.info('mcp.client.uninstall', { clientId: input?.clientId, ok: res.ok, removed: res.removed });
+      return res;
     });
     registerSettingsHandlers(settingsStore, logger);
     updateService.register();

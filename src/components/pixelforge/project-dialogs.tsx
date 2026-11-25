@@ -2,7 +2,8 @@
 
 'use client'
 
-import { Fragment, useCallback, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
+import { importAseprite } from '@pixelforge/core'
 import { useEditor, isUsableProject } from '@/lib/pixelforge/store'
 import { AGENT_FETCH_HEADERS } from '@/lib/pixelforge/agent-headers'
 import { describeApiErrorInline } from '@/lib/pixelforge/api-error'
@@ -37,7 +38,7 @@ import {
 } from '@/components/ui/select'
 import { useToast } from '@/hooks/use-toast'
 import { confirmDialog } from '@/components/ui/confirm-dialog'
-import { Loader2, Trash2, FolderOpen, X } from 'lucide-react'
+import { Loader2, Trash2, FolderOpen, Upload, X } from 'lucide-react'
 
 const SIZE_PRESETS = [16, 24, 32, 48, 64, 96, 128]
 
@@ -171,7 +172,42 @@ export function OpenProjectDialog({
   const [recentFiles, setRecentFiles] = useState<RecentProjectFile[]>([])
   const [loading, setLoading] = useState(false)
   const [loadingId, setLoadingId] = useState<string | null>(null)
+  const aseInputRef = useRef<HTMLInputElement>(null)
   const currentFilePath = useEditor((s) => s.filePath)
+
+  const handleImportAsepriteFile = async (file: File) => {
+    if (
+      useEditor.getState().dirty &&
+      !(await confirmDialog({
+        title: 'Discard unsaved changes?',
+        message: 'Importing an Aseprite file will replace your current unsaved project.',
+        confirmLabel: 'Discard & Import',
+        destructive: true,
+      }))
+    )
+      return
+    setLoadingId('aseprite')
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer())
+      const { project, stats, warnings } = await importAseprite(bytes, { name: file.name })
+      useEditor.getState().loadProject(project, { filePath: null, projectId: null })
+      onOpenChange(false)
+      toast({
+        title: `Imported ${project.name}`,
+        description:
+          warnings[0] ??
+          `${stats.width}×${stats.height} · ${stats.layers} layer${stats.layers === 1 ? '' : 's'} · ${stats.frames} frame${stats.frames === 1 ? '' : 's'} · ${stats.clips} clip${stats.clips === 1 ? '' : 's'}`,
+      })
+    } catch (err) {
+      toast({
+        title: 'Aseprite import failed',
+        description: friendlyError(err),
+        variant: 'destructive',
+      })
+    } finally {
+      setLoadingId(null)
+    }
+  }
 
   /** rolling backup snapshots for one project (fresh read each render) */
   const backupsFor = (pid: string) => listBackupSnapshots(pid)
@@ -358,17 +394,43 @@ export function OpenProjectDialog({
               : 'Saved projects live in the local database.'}
           </DialogDescription>
         </DialogHeader>
-        {isDesktop() && (
+        <div className="flex flex-col gap-1.5">
+          {isDesktop() && (
+            <Button
+              variant="outline"
+              className="h-8 w-full border-teal-700/60 font-mono text-xs text-teal-300 hover:bg-teal-900/30"
+              onClick={() => void (async () => {
+                if (await openProjectFileViaDialog()) onOpenChange(false)
+              })()}
+            >
+              <FolderOpen className="mr-1.5 h-3.5 w-3.5" /> From file (.pixelforgeproj)…
+            </Button>
+          )}
+          <input
+            ref={aseInputRef}
+            type="file"
+            accept=".ase,.aseprite"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              e.target.value = ''
+              if (file) void handleImportAsepriteFile(file)
+            }}
+          />
           <Button
             variant="outline"
-            className="h-8 w-full border-teal-700/60 font-mono text-xs text-teal-300 hover:bg-teal-900/30"
-            onClick={() => void (async () => {
-              if (await openProjectFileViaDialog()) onOpenChange(false)
-            })()}
+            className="h-8 w-full border-zinc-800 font-mono text-xs text-zinc-200 hover:bg-zinc-900"
+            onClick={() => aseInputRef.current?.click()}
+            disabled={loadingId !== null}
           >
-            <FolderOpen className="mr-1.5 h-3.5 w-3.5" /> From file (.pixelforgeproj)…
+            {loadingId === 'aseprite' ? (
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Upload className="mr-1.5 h-3.5 w-3.5" />
+            )}
+            Import Aseprite (.ase / .aseprite)…
           </Button>
-        )}
+        </div>
         <div className="pixelforge-scroll max-h-72 space-y-1.5 overflow-y-auto pr-1">
           {loading && (
             <div className="flex items-center justify-center py-8 text-zinc-400">

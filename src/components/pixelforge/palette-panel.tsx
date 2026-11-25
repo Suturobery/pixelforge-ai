@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useEditor } from '@/lib/pixelforge/store'
 import { useAppSettings } from '@/lib/pixelforge/settings'
-import { harvestPalette } from '@pixelforge/core'
+import { harvestPalette, listSkinPresets } from '@pixelforge/core'
 import { savePanelRaw, onPanelsHydrated, resetPanelLayoutsOnce } from '@/lib/pixelforge/panel-storage'
 import { useToast } from '@/hooks/use-toast'
 import { FloatPill } from '@/components/pixelforge/float-pill'
@@ -82,6 +82,8 @@ export function PalettePanel() {
   const sortPalette = useEditor((s) => s.sortPalette)
   const replaceColor = useEditor((s) => s.replaceColor)
   const remapToPalette = useEditor((s) => s.remapToPalette)
+  const createSkinVariants = useEditor((s) => s.createSkinVariants)
+  const activeClipName = useEditor((s) => s.project.clips.find((c) => c.id === s.activeClipId)?.name ?? 'clip')
   const floatBtnSize = useAppSettings((s) => s.floatBtnSize)
 
   // visibility lives in the editor store so the P shortcut can toggle it
@@ -103,6 +105,8 @@ export function PalettePanel() {
   const [browserOpen, setBrowserOpen] = useState(false)
   const [remapOnPick, setRemapOnPick] = useState(false)
   const [remapMode, setRemapMode] = useState<'ramp' | 'nearest'>('ramp')
+  const [skinsOpen, setSkinsOpen] = useState(false)
+  const [selectedSkins, setSelectedSkins] = useState<string[]>(['fire', 'ice'])
   const [searchQuery, setSearchQuery] = useState('')
   const [filterSize, setFilterSize] = useState<'all' | '8' | '16' | '32'>('all')
   const [library, setLibrary] = useState<PalettePreset[] | null>(null)
@@ -613,6 +617,98 @@ export function PalettePanel() {
               </PopoverContent>
             </Popover>
           </div>
+
+          {/* sprite skin variants generator (clones active clip into elemental/RPG skins) */}
+          <Popover open={skinsOpen} onOpenChange={setSkinsOpen}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <PopoverTrigger asChild>
+                  <button
+                    type="button"
+                    className="flex h-6 items-center gap-1 rounded border border-zinc-800 bg-zinc-950 px-1.5 font-mono text-[10px] text-zinc-400 hover:border-teal-500/60 hover:text-teal-300"
+                    aria-label="Generate sprite skin variants"
+                  >
+                    <Sparkles className="h-3 w-3 text-teal-400" aria-hidden />
+                    <span>Skins</span>
+                  </button>
+                </PopoverTrigger>
+              </TooltipTrigger>
+              <TooltipContent side="top">Generate palette-swapped skin variant clips</TooltipContent>
+            </Tooltip>
+            <PopoverContent side="top" align="end" className="w-72 space-y-2 border-zinc-800 bg-zinc-950 p-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <p className="font-mono text-[10px] font-semibold uppercase tracking-wider text-zinc-200">
+                  Sprite Skin Variants
+                </p>
+                <span className="font-mono text-[9px] text-zinc-500">
+                  from &ldquo;{activeClipName}&rdquo;
+                </span>
+              </div>
+              <p className="font-mono text-[9px] leading-tight text-zinc-400">
+                Clones the active clip into new palette-swapped clips (original stays intact) — ready for batch spritesheet or Master Atlas export.
+              </p>
+              <div className="pixelforge-scroll max-h-48 space-y-1 overflow-y-auto pr-0.5">
+                {listSkinPresets().map((preset) => {
+                  const active = selectedSkins.includes(preset.id)
+                  return (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      aria-pressed={active}
+                      onClick={() =>
+                        setSelectedSkins((prev) =>
+                          prev.includes(preset.id) ? prev.filter((id) => id !== preset.id) : [...prev, preset.id],
+                        )
+                      }
+                      className={`flex w-full items-center justify-between gap-2 rounded border px-2 py-1.5 text-left transition-colors ${
+                        active
+                          ? 'border-teal-500/50 bg-teal-950/30 text-zinc-100'
+                          : 'border-zinc-800/80 bg-zinc-900/40 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
+                      }`}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate font-mono text-[10px] font-medium">{preset.name}</p>
+                        <p className="truncate font-mono text-[8px] text-zinc-500">
+                          {activeClipName}_{preset.suffix}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-0.5">
+                        {preset.palette.slice(0, 6).map((hex) => (
+                          <span
+                            key={hex}
+                            className="h-3 w-2.5 rounded-[2px] border border-black/40"
+                            style={{ background: hex }}
+                          />
+                        ))}
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+              <Button
+                size="sm"
+                className="h-7 w-full bg-teal-600 font-mono text-[10px] text-white hover:bg-teal-500"
+                disabled={selectedSkins.length === 0}
+                onClick={() => {
+                  const presets = listSkinPresets().filter((p) => selectedSkins.includes(p.id))
+                  const created = createSkinVariants(
+                    presets.map((p) => ({ name: `${activeClipName}_${p.suffix}`, palette: p.palette })),
+                    { mode: 'ramp' },
+                  )
+                  if (created.length > 0) {
+                    toast({
+                      title: `Created ${created.length} skin clip${created.length === 1 ? '' : 's'}`,
+                      description: `${created.map((c) => c.name).join(', ')} (Ctrl+Z to undo).`,
+                    })
+                    setSkinsOpen(false)
+                  }
+                }}
+              >
+                <Sparkles className="mr-1 h-3 w-3" />
+                Generate {selectedSkins.length} Skin Clip{selectedSkins.length === 1 ? '' : 's'}
+              </Button>
+            </PopoverContent>
+          </Popover>
 
           {/* compact share/paste code button */}
           <Popover open={shareOpen} onOpenChange={setShareOpen}>
