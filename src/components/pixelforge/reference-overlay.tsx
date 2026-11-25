@@ -36,7 +36,7 @@ const MAX_W = 900
 export function ReferenceOverlay() {
   const palette = useEditor((s) => s.project.palette)
   const [imgSrc, setImgSrc] = useState<string | null>(null)
-  const [quantizedSrc, setQuantizedSrc] = useState<string | null>(null)
+  const [quantized, setQuantized] = useState<{ key: string; src: string } | null>(null)
   const [quantizeToPalette, setQuantizeToPalette] = useState(false)
   const [hidden, setHidden] = useState(false)
   const [opacity, setOpacity] = useState(0.5)
@@ -135,12 +135,12 @@ export function ReferenceOverlay() {
     setResizing(false)
   }
 
+  const quantizeKey = imgSrc && quantizeToPalette && palette.length > 0 ? `${imgSrc}::${palette.join(',')}` : ''
+  const quantizedSrc = quantized && quantized.key === quantizeKey ? quantized.src : null
+
   // Re-quantize the reference image live to the active project palette via OKLab
   useEffect(() => {
-    if (!imgSrc || !quantizeToPalette || palette.length === 0) {
-      setQuantizedSrc(null)
-      return
-    }
+    if (!quantizeKey || !imgSrc) return
     let alive = true
     const im = new Image()
     im.onload = () => {
@@ -159,19 +159,19 @@ export function ReferenceOverlay() {
       const imgData = ctx.getImageData(0, 0, rw, rh)
       remapBufferToPalette(imgData.data, palette, { mode: 'nearest' })
       ctx.putImageData(imgData, 0, 0)
-      if (alive) setQuantizedSrc(cv.toDataURL('image/png'))
+      if (alive) setQuantized({ key: quantizeKey, src: cv.toDataURL('image/png') })
     }
     im.src = imgSrc
     return () => {
       alive = false
     }
-  }, [imgSrc, quantizeToPalette, palette])
+  }, [quantizeKey, imgSrc, palette])
 
   const pickFile = (f: File | undefined) => {
     if (!f || !f.type.startsWith('image/')) return
     if (imgSrc) URL.revokeObjectURL(imgSrc)
     setImgSrc(URL.createObjectURL(f))
-    setQuantizedSrc(null)
+    setQuantized(null)
     setQuantizeToPalette(false)
     setHidden(false)
     setPos(null)

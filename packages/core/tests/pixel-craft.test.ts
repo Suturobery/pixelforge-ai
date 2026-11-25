@@ -64,7 +64,7 @@ describe('Pro Pixel Craft utilities', () => {
           filled: true,
         },
       ],
-    });
+    }, 'ui');
 
     const cel = bus.getProject().clips[0]!.frames[0]!.cels[layer.id]!;
     // Interior point (5, 9) must be filled; exterior point (14, 2) stays transparent
