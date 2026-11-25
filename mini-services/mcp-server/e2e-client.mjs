@@ -210,10 +210,16 @@ await withClient(clientToken, async (c) => {
   await client.connect(transport);
   let event = null;
   const { z } = await import('zod');
+  const ProjectChanged = z.object({
+    stateHash: z.string().nullable().optional(),
+    name: z.string().nullable().optional(),
+    dirty: z.boolean().nullable().optional(),
+  });
   client.setNotificationHandler(
-    z.object({ method: z.literal('notifications/pixelforge/projectChanged'), params: z.any().optional() }),
-    (n) => {
-      event = n.params ?? {};
+    'notifications/pixelforge/projectChanged',
+    { params: ProjectChanged },
+    (params) => {
+      event = params ?? {};
     }
   );
   // Give the streamable-HTTP session and notification handler a moment to
