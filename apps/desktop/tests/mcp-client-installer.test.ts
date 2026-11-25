@@ -121,6 +121,108 @@ describe('1-click MCP client installer', () => {
     }
   });
 
+  test('replaces existing pixelforge-ai sub-tables instead of creating duplicate keys (Codex)', () => {
+    const home = makeTempHome();
+    try {
+      const codexDir = path.join(home, '.codex');
+      const codexCfg = path.join(codexDir, 'config.toml');
+      fs.mkdirSync(codexDir, { recursive: true });
+      fs.writeFileSync(
+        codexCfg,
+        [
+          'model = "gpt-5"',
+          '',
+          '[mcp_servers.pixelforge-ai]',
+          'url = "http://127.0.0.1:3030/mcp"',
+          '',
+          '[mcp_servers.pixelforge-ai.http_headers]',
+          'Authorization = "Bearer pfm_OLDOLDOLDOLDOLDOLDOLD"',
+          '',
+          '[mcp_servers.pixelforge-ai-project-control]',
+          'url = "http://127.0.0.1:57980/mcp"',
+          '',
+          '[desktop]',
+          'x = 1',
+          '',
+        ].join('\r\n'),
+      );
+
+      expect(detectMcpClients({ homeDir: home }).find((c) => c.id === 'codex')!.configured).toBe(true);
+
+      const res = installMcpClient(
+        { clientId: 'codex', endpoint: VALID_ENDPOINT, token: VALID_TOKEN },
+        { homeDir: home },
+      );
+      expect(res.ok).toBe(true);
+      const text = fs.readFileSync(codexCfg, 'utf8');
+      expect(text).not.toContain('[mcp_servers.pixelforge-ai.http_headers]');
+      expect(text).not.toContain('pfm_OLDOLD');
+      expect(text.match(/http_headers/g)?.length).toBe(1);
+      expect(text.match(/^\[mcp_servers\.pixelforge-ai\]/gm)?.length).toBe(1);
+      expect(text).toContain(`Authorization = "Bearer ${VALID_TOKEN}"`);
+      expect(text).toContain('[mcp_servers.pixelforge-ai-project-control]');
+      expect(text).toContain('[desktop]\r\nx = 1');
+      expect(text).not.toMatch(/(?<!\r)\n/); // CRLF preserved
+
+      const removed = uninstallMcpClient({ clientId: 'codex' }, { homeDir: home });
+      expect(removed.removed).toBe(true);
+      const after = fs.readFileSync(codexCfg, 'utf8');
+      expect(after).not.toMatch(/^\[mcp_servers\.pixelforge-ai[\].]/m);
+      expect(after).toContain('[mcp_servers.pixelforge-ai-project-control]');
+      expect(after).toContain('[desktop]\r\nx = 1');
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test('ignores look-alikes, quoted stray sub-tables, and multi-line array elements in Codex TOML', () => {
+    const home = makeTempHome();
+    try {
+      const codexDir = path.join(home, '.codex');
+      const codexCfg = path.join(codexDir, 'config.toml');
+      fs.mkdirSync(codexDir, { recursive: true });
+      fs.writeFileSync(
+        codexCfg,
+        [
+          'matrix = [',
+          '  ["a"],',
+          '  ["b"]',
+          ']',
+          '',
+          '[mcp_servers.pixel-forge-ai] # look-alike',
+          'url = "http://127.0.0.1:4444/mcp"',
+          '',
+          '[mcp_servers."pixelforge-ai"] # primary',
+          'url = "http://127.0.0.1:3030/mcp"',
+          '',
+          '[desktop]',
+          'keep = true',
+          '',
+          "[mcp_servers.'pixelforge-ai'.env]",
+          'FOO = "bar"',
+          '',
+        ].join('\n'),
+      );
+
+      const res = installMcpClient(
+        { clientId: 'codex', endpoint: VALID_ENDPOINT, token: VALID_TOKEN },
+        { homeDir: home },
+      );
+      expect(res.ok).toBe(true);
+      const text = fs.readFileSync(codexCfg, 'utf8');
+      expect(text).toContain('  ["a"],\n  ["b"]\n]');
+      expect(text).toContain('[mcp_servers.pixel-forge-ai] # look-alike');
+      expect(text).toContain('[desktop]\nkeep = true');
+      expect(text).not.toContain("[mcp_servers.'pixelforge-ai'.env]");
+      expect(text).not.toContain('FOO = "bar"');
+      expect(text.match(/^\[mcp_servers\.pixelforge-ai\]/gm)?.length).toBe(1);
+      expect(text).toContain(`Authorization = "Bearer ${VALID_TOKEN}"`);
+      expect(text).not.toMatch(/\n{3,}/);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   test('rejects unknown client IDs, non-loopback URLs, and invalid tokens', () => {
     const home = makeTempHome();
     try {

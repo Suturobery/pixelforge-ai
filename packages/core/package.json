@@ -1,6 +1,6 @@
 {
   "name": "@pixelforge/core",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "private": true,
   "description": "Pure, framework-free PixelForge editor core: document model v2, command bus, tile-diff history, pixel ops, .pixelforgeproj persistence (PNG codec, ZIP container, journal, backups), v1 importer, and schema validation. Zero DOM (v3.1 Plan §8.3). Normalize v2 / motion presets / exporters land with Tasks 5–12.",
   "main": "dist/index.js",

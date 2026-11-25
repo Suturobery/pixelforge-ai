@@ -136,41 +136,168 @@ function isValidToken(token: string): boolean {
 // ---------------------------------------------------------------------------
 
 const TOML_SECTION_HEADER = `[mcp_servers.${SERVER_KEY}]`;
-const TOML_SECTION_RE =
-  /(?:^|\r?\n)\[mcp_servers\.(?:"pixelforge-ai"|'pixelforge-ai'|pixelforge-ai)\][^\r\n]*(?:\r?\n(?!\[)[^\r\n]*)*/;
+
+/**
+ * Matches a strict TOML table (`[a.b]`) or array-of-tables (`[[a.b]]`) header.
+ * Key parts can be bare (`A-Za-z0-9_-`), `"double-quoted"`, or `'single-quoted'`.
+ * Trailing `#` comments are allowed; mismatched brackets (`[[a]` / `[a]]`) and
+ * array items (`["a"],`) are rejected.
+ */
+const TOML_KEY_PART = String.raw`(?:[A-Za-z0-9_-]+|"(?:\\.|[^"\\\r\n])*"|'[^'\r\n]*')`;
+const TOML_DOTTED_KEY = `${TOML_KEY_PART}(?:[ \\t]*\\.[ \\t]*${TOML_KEY_PART})*`;
+const TOML_HEADER_RE = new RegExp(
+  String.raw`^[ \t]*(?:\[\[[ \t]*(${TOML_DOTTED_KEY})[ \t]*\]\]|\[[ \t]*(${TOML_DOTTED_KEY})[ \t]*\])[ \t]*(?:#.*)?$`,
+);
+
+/**
+ * True for `[mcp_servers.pixelforge-ai]` AND any of its sub-tables such as
+ * `[mcp_servers.pixelforge-ai.http_headers]` / `.env`. Sub-tables must be
+ * owned too — leaving one behind while writing an inline `http_headers = {…}`
+ * produces a TOML "duplicate key" error that prevents Codex from starting.
+ * Never matches look-alikes like `pixelforge-ai-project-control` or `pixel-forge-ai`.
+ */
+function isOwnTomlTable(dottedKey: string): boolean {
+  const parts = Array.from(dottedKey.matchAll(new RegExp(TOML_KEY_PART, 'g')), (m) => {
+    const raw = m[0];
+    if (raw.startsWith('"') && raw.endsWith('"')) {
+      return raw.slice(1, -1).replace(/\\(["\\])/g, '$1');
+    }
+    if (raw.startsWith("'") && raw.endsWith("'")) {
+      return raw.slice(1, -1);
+    }
+    return raw;
+  });
+  return parts.length >= 2 && parts[0] === 'mcp_servers' && parts[1] === SERVER_KEY;
+}
+
+/** Update multi-line TOML bracket depth (`[ ... ]`) across a non-header line. */
+function updateArrayDepth(line: string, depth: number): number {
+  let d = depth;
+  let inDouble = false;
+  let inSingle = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]!;
+    if (inDouble) {
+      if (ch === '\\') {
+        i++;
+      } else if (ch === '"') {
+        inDouble = false;
+      }
+      continue;
+    }
+    if (inSingle) {
+      if (ch === "'") inSingle = false;
+      continue;
+    }
+    if (ch === '#') break;
+    if (ch === '"') {
+      inDouble = true;
+    } else if (ch === "'") {
+      inSingle = true;
+    } else if (ch === '[') {
+      d++;
+    } else if (ch === ']' && d > 0) {
+      d--;
+    }
+  }
+  return d;
+}
+
+/** Line ranges `[start, end)` covering every pixelforge-ai table (trailing blank lines excluded). */
+function findOwnTomlRanges(lines: string[]): Array<{ start: number; end: number }> {
+  const ranges: Array<{ start: number; end: number }> = [];
+  let current: number | null = null;
+  let arrayDepth = 0;
+
+  const close = (end: number) => {
+    if (current === null) return;
+    let e = end;
+    while (e > current + 1 && (lines[e - 1] ?? '').trim() === '') e--;
+    ranges.push({ start: current, end: e });
+    current = null;
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? '';
+    if (arrayDepth === 0) {
+      const m = TOML_HEADER_RE.exec(line);
+      const dotted = m ? (m[1] ?? m[2]) : undefined;
+      if (dotted !== undefined) {
+        const own = isOwnTomlTable(dotted);
+        if (own && current === null) current = i;
+        else if (!own) close(i);
+        continue;
+      }
+    }
+    arrayDepth = updateArrayDepth(line, arrayDepth);
+  }
+  close(lines.length);
+  return ranges;
+}
+
+function detectEol(raw: string): string {
+  return raw.includes('\r\n') ? '\r\n' : '\n';
+}
+
+function collapseBlankLines(text: string, eol: string): string {
+  return text.replace(/(?:[ \t]*\r?\n){3,}/g, `${eol}${eol}`);
+}
 
 function hasTomlServer(raw: string): boolean {
-  return TOML_SECTION_RE.test(raw);
+  return findOwnTomlRanges(raw.split(/\r?\n/)).length > 0;
 }
 
 function tomlEscape(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
-function buildTomlBlock(endpoint: string, token: string): string {
+function buildTomlBlock(endpoint: string, token: string): string[] {
   return [
     TOML_SECTION_HEADER,
     `url = "${tomlEscape(endpoint)}"`,
     `http_headers = { Authorization = "Bearer ${tomlEscape(token)}" }`,
-  ].join('\n');
+  ];
 }
 
 function upsertTomlServer(raw: string, endpoint: string, token: string): string {
+  const eol = detectEol(raw);
   const block = buildTomlBlock(endpoint, token);
-  if (TOML_SECTION_RE.test(raw)) {
-    return raw.replace(TOML_SECTION_RE, (match) => {
-      const prefix = match.startsWith('\r\n') ? '\r\n' : match.startsWith('\n') ? '\n' : '';
-      return `${prefix}${block}`;
-    });
+  const lines = raw.split(/\r?\n/);
+  const ranges = findOwnTomlRanges(lines);
+  if (ranges.length === 0) {
+    const trimmed = raw.trimEnd();
+    return trimmed.length > 0
+      ? `${trimmed}${eol}${eol}${block.join(eol)}${eol}`
+      : `${block.join(eol)}${eol}`;
   }
-  const trimmed = raw.trimEnd();
-  return trimmed.length > 0 ? `${trimmed}\n\n${block}\n` : `${block}\n`;
+  // Replace the first pixelforge-ai table (and all its sub-tables) with the new
+  // block; drop any other stray pixelforge-ai tables elsewhere in the file.
+  const out: string[] = [];
+  let idx = 0;
+  ranges.forEach((r, n) => {
+    out.push(...lines.slice(idx, r.start));
+    if (n === 0) out.push(...block);
+    idx = r.end;
+  });
+  out.push(...lines.slice(idx));
+  const next = collapseBlankLines(out.join(eol), eol);
+  return next.length > 0 && !next.endsWith('\n') ? `${next}${eol}` : next;
 }
 
 function removeTomlServer(raw: string): { next: string; removed: boolean } {
-  if (!TOML_SECTION_RE.test(raw)) return { next: raw, removed: false };
-  const next = raw.replace(TOML_SECTION_RE, '').replace(/\n{3,}/g, '\n\n').trimStart();
-  return { next: next.length > 0 && !next.endsWith('\n') ? `${next}\n` : next, removed: true };
+  const eol = detectEol(raw);
+  const lines = raw.split(/\r?\n/);
+  const ranges = findOwnTomlRanges(lines);
+  if (ranges.length === 0) return { next: raw, removed: false };
+  const out: string[] = [];
+  let idx = 0;
+  for (const r of ranges) {
+    out.push(...lines.slice(idx, r.start));
+    idx = r.end;
+  }
+  out.push(...lines.slice(idx));
+  const next = collapseBlankLines(out.join(eol), eol).trimStart();
+  return { next: next.length > 0 && !next.endsWith('\n') ? `${next}${eol}` : next, removed: true };
 }
 
 // ---------------------------------------------------------------------------
