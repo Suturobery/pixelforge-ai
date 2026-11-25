@@ -107,6 +107,7 @@ export function ExportDialog({
   const [scope, setScope] = useState<ExportScope>('clip')
   const [format, setFormat] = useState<ExportFormat | 'atlas' | 'gif'>('sheet')
   const [exportScale, setExportScale] = useState<ExportScale>(1)
+  const [scaleAutoSetForGif, setScaleAutoSetForGif] = useState(false)
   const [gifBg, setGifBg] = useState('#101014')
   const [layoutMode, setLayoutMode] = useState<'horizontal' | 'grid'>('grid')
   const [columns, setColumns] = useState(4)
@@ -309,7 +310,10 @@ export function ExportDialog({
         const durations = clip.frames.map((f) => f.durationMs > 0 ? f.durationMs : Math.round(1000 / clip.fps))
         const gifScale = exportScale
         await exportGif(frames, durations, `${effectiveBase}-${slugify(clip.name)}.gif`, { scale: gifScale, checker: false, bg: gifBg })
-        toast({ title: 'Export complete', description: `1 file → browser downloads (GIF, ${clip.frames.length} frames, ${gifScale}×)` })
+        toast({
+          title: 'Export complete',
+          description: `1 file → ${isDesktop() ? 'desktop save dialog' : 'browser downloads'} (GIF, ${clip.frames.length} frames, ${st.project.width * gifScale}×${st.project.height * gifScale} px · ${gifScale}×)`,
+        })
         return
       }
       if (format === 'atlas') {
@@ -405,7 +409,7 @@ export function ExportDialog({
             </div>
             <p className="break-words font-mono text-[10px] text-zinc-400">
               {previewDims
-                ? `Output ${previewDims.w * exportScale}×${previewDims.h * exportScale} px · ${exportScale}× scale · transparent background`
+                ? `Output ${previewDims.w * exportScale}×${previewDims.h * exportScale} px · ${exportScale}× nearest-neighbor · ${format === 'gif' ? (gifBg === 'transparent' ? 'transparent GIF' : `solid ${gifBg}`) : 'transparent background'}`
                 : 'Preview unavailable'}
             </p>
             <div className="mt-3 rounded-md border border-zinc-800 bg-zinc-950/50 p-2.5">
@@ -488,7 +492,18 @@ export function ExportDialog({
                 className="grid-cols-2"
                 ariaLabel="Export format"
                 value={format}
-                onChange={setFormat}
+                onChange={(next) => {
+                  setFormat(next)
+                  if (next === 'gif' && exportScale === 1) {
+                    const maxDim = Math.max(project.width, project.height)
+                    const recommended: ExportScale = maxDim <= 16 ? 16 : maxDim <= 64 ? 8 : maxDim <= 128 ? 4 : 2
+                    setExportScale(recommended)
+                    setScaleAutoSetForGif(true)
+                  } else if (next !== 'gif' && scaleAutoSetForGif) {
+                    setExportScale(1)
+                    setScaleAutoSetForGif(false)
+                  }
+                }}
                 options={[
                   { value: 'png-frames', label: 'PNG frames' },
                   { value: 'sheet', label: 'Sprite sheet' },
@@ -503,17 +518,24 @@ export function ExportDialog({
           <div className="space-y-1">
             <span className="font-mono text-[10px] uppercase tracking-wide text-zinc-400">Scale (nearest-neighbor)</span>
             <Segmented
-              className="grid-cols-4"
+              className="grid-cols-5"
               ariaLabel="Export scale"
-              value={String(exportScale) as '1' | '2' | '4' | '8'}
-              onChange={(v) => setExportScale(Number(v) as ExportScale)}
+              value={String(exportScale) as '1' | '2' | '4' | '8' | '16'}
+              onChange={(v) => {
+                setExportScale(Number(v) as ExportScale)
+                setScaleAutoSetForGif(false)
+              }}
               options={[
-                { value: '1', label: '1× (native)' },
+                { value: '1', label: '1×' },
                 { value: '2', label: '2×' },
                 { value: '4', label: '4×' },
                 { value: '8', label: '8×' },
+                { value: '16', label: '16×' },
               ]}
             />
+            <p className="font-mono text-[10px] text-zinc-500">
+              Game engines (Godot/Unity): 1× · GIF / Viewing / Social: 4×–16× for razor-sharp pixels.
+            </p>
           </div>
 
           {(format === 'sheet' || format === 'atlas') && (

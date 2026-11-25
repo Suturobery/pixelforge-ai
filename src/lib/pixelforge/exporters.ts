@@ -1,4 +1,5 @@
 export {
+  encodeGifBytes,
   exportGif,
   generateGodot4AtlasTres,
   generateGodot4SpriteFramesTres,

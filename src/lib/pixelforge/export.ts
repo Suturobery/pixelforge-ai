@@ -28,7 +28,7 @@ import {
 import { getBridge, isDesktop, makeBridgeFs } from './desktop-bridge'
 
 export type { ExportRequest } from '@pixelforge/core'
-export type ExportScale = 1 | 2 | 4 | 8
+export type ExportScale = 1 | 2 | 4 | 8 | 16
 export type ExportArtifactKind = 'png' | 'json' | 'tres'
 export type JsonMetadataFormat = 'pixelforge' | 'aseprite'
 
@@ -448,17 +448,18 @@ export function downloadData(blob: Blob, filename: string): void {
 }
 
 /**
- * Animated GIF export via gifenc.
- * Frames are composited RGBA byte arrays (e.g. from composeFrameRgba).
+ * Pure animated GIF encoder via gifenc.
+ * Uses an EXACT lossless RGB888 palette whenever a frame has ≤255 opaque colors
+ * (virtually all pixel art) so crisp pixel colors never suffer rgb565 truncation
+ * or banding, falling back to quantize only when >255 unique colors exist.
  */
-export async function exportGif(
+export async function encodeGifBytes(
   frames: { width: number; height: number; data: Uint8ClampedArray | Uint8Array }[],
   durations: number[],
-  filename: string,
   opts: { scale?: number; checker?: boolean; bg?: string } = {}
-): Promise<void> {
+): Promise<Uint8Array> {
   const { GIFEncoder, quantize, applyPalette } = await import('gifenc')
-  const scale = opts.scale ?? 1
+  const scale = Math.max(1, Math.round(opts.scale ?? 1))
   const bgHex = opts.bg && opts.bg !== 'transparent' ? opts.bg : '#101014'
   const bgR = parseInt(bgHex.slice(1, 3), 16) || 16
   const bgG = parseInt(bgHex.slice(3, 5), 16) || 16
@@ -493,6 +494,16 @@ export async function exportGif(
           rgba[di + 1] = f.data[si + 1]
           rgba[di + 2] = f.data[si + 2]
           rgba[di + 3] = a > t ? 255 : 0
+        } else if (a >= 1) {
+          rgba[di] = f.data[si]
+          rgba[di + 1] = f.data[si + 1]
+          rgba[di + 2] = f.data[si + 2]
+          rgba[di + 3] = 255
+        } else if (a <= 0) {
+          rgba[di] = bgR
+          rgba[di + 1] = bgG
+          rgba[di + 2] = bgB
+          rgba[di + 3] = 255
         } else {
           rgba[di] = Math.round(f.data[si] * a + bgR * (1 - a))
           rgba[di + 1] = Math.round(f.data[si + 1] * a + bgG * (1 - a))
@@ -502,31 +513,88 @@ export async function exportGif(
       }
     }
 
-    const palette = quantize(rgba, transparent ? 255 : 256, { format: 'rgb565' })
-    const indexed = applyPalette(rgba, palette, 'rgb565')
+    // Exact lossless palette fast-path for authentic pixel art (≤255/256 unique colors)
+    const maxColors = transparent ? 255 : 256
+    const colorToIndex = new Map<number, number>()
+    const exactPalette: number[][] = []
+    let overflow = false
+    for (let p = 0; p < rgba.length; p += 4) {
+      if (transparent && rgba[p + 3] === 0) continue
+      const key = (rgba[p]! << 16) | (rgba[p + 1]! << 8) | rgba[p + 2]!
+      if (!colorToIndex.has(key)) {
+        if (exactPalette.length >= maxColors) {
+          overflow = true
+          break
+        }
+        colorToIndex.set(key, exactPalette.length)
+        exactPalette.push([rgba[p]!, rgba[p + 1]!, rgba[p + 2]!])
+      }
+    }
+
+    let palette: number[][]
+    let indexed: Uint8Array
     const frameOpts: {
       palette: number[][]
       delay: number
       dispose: number
       transparent?: boolean
       transparentIndex?: number
-    } = { palette, delay: durations[i] || 125, dispose: 2 }
+    } = { palette: [], delay: durations[i] || 125, dispose: 2 }
 
-    if (transparent) {
-      palette.push([0, 0, 0])
-      const ti = palette.length - 1
-      for (let p = 0; p < rgba.length; p += 4) {
-        if (rgba[p + 3] === 0) indexed[p / 4] = ti
+    if (!overflow) {
+      // Ensure at least 2 entries for valid GIF color table
+      if (exactPalette.length === 0) exactPalette.push([bgR, bgG, bgB])
+      palette = exactPalette
+      let ti = 0
+      if (transparent) {
+        palette.push([0, 0, 0])
+        ti = palette.length - 1
+        frameOpts.transparent = true
+        frameOpts.transparentIndex = ti
       }
-      frameOpts.transparent = true
-      frameOpts.transparentIndex = ti
+      if (palette.length < 2) palette.push([0, 0, 0])
+      indexed = new Uint8Array(fw * fh)
+      for (let p = 0, px = 0; p < rgba.length; p += 4, px++) {
+        if (transparent && rgba[p + 3] === 0) {
+          indexed[px] = ti
+        } else {
+          const key = (rgba[p]! << 16) | (rgba[p + 1]! << 8) | rgba[p + 2]!
+          indexed[px] = colorToIndex.get(key) ?? 0
+        }
+      }
+    } else {
+      palette = quantize(rgba, maxColors, { format: 'rgb565' })
+      indexed = applyPalette(rgba, palette, 'rgb565')
+      if (transparent) {
+        palette.push([0, 0, 0])
+        const ti = palette.length - 1
+        for (let p = 0; p < rgba.length; p += 4) {
+          if (rgba[p + 3] === 0) indexed[p / 4] = ti
+        }
+        frameOpts.transparent = true
+        frameOpts.transparentIndex = ti
+      }
     }
 
+    frameOpts.palette = palette
     gif.writeFrame(indexed, fw, fh, frameOpts)
   }
 
   gif.finish()
-  const blob = new Blob([gif.bytes() as unknown as BlobPart], { type: 'image/gif' })
+  return gif.bytes()
+}
+
+/**
+ * Animated GIF export via gifenc (lossless RGB888 for pixel art + nearest-neighbor upscale).
+ */
+export async function exportGif(
+  frames: { width: number; height: number; data: Uint8ClampedArray | Uint8Array }[],
+  durations: number[],
+  filename: string,
+  opts: { scale?: number; checker?: boolean; bg?: string } = {}
+): Promise<void> {
+  const bytes = await encodeGifBytes(frames, durations, opts)
+  const blob = new Blob([bytes as unknown as BlobPart], { type: 'image/gif' })
   downloadData(blob, filename)
 }
 
