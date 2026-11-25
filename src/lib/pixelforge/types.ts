@@ -29,6 +29,7 @@ export type {
 export type ToolId =
   | 'pencil'
   | 'eraser'
+  | 'shade'
   | 'fill'
   | 'line'
   | 'rect'

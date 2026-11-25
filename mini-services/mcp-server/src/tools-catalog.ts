@@ -610,6 +610,21 @@ export const TOOL_CATALOG: ToolDef[] = [
     },
   },
   {
+    name: 'center_content',
+    title: 'Center artwork on canvas',
+    description:
+      'Compute the opaque bounding box of the target layer (or all visible unlocked layers on the frame when allLayers:true) and shift artwork cleanly to the exact canvas center in one undoable step.',
+    tier: 'L1',
+    relay: true,
+    inputSchema: {
+      ...clipRef,
+      ...frameRef,
+      ...layerRef,
+      allLayers: z.boolean().optional().describe('true = center all visible unlocked layers on the frame together by their combined bounding box. Default false (target layer only).'),
+      ...staleGuard,
+    },
+  },
+  {
     name: 'add_clip',
     title: 'Add clip',
     description: 'Create a new animation clip with 1..64 empty frames and its own layer stack.',

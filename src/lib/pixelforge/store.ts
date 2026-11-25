@@ -24,6 +24,7 @@ import {
   clearRegionInPlace,
   clampRect,
   composeFrameRgba,
+  computeCenterShift,
   createProject as coreCreateProject,
   locateCel,
   pasteRegionInPlace,
@@ -273,6 +274,8 @@ export interface EditorState {
   tileSize: 8 | 16 | 32
   tileSnap: boolean
   tileStamp: boolean
+  /** 3×3 live seamless tile preview + toroidal wrap painting (W shortcut) */
+  tiledWrap: boolean
   /** value-preview: render the whole document desaturated */
   grayscale: boolean
   onionSkin: boolean
@@ -347,6 +350,8 @@ export interface EditorState {
     layerId: string,
     opts?: Omit<PolishPixelArtOptions, 'palette'> & { paletteLock?: boolean }
   ) => boolean
+  /** Center opaque artwork on the canvas (active layer or all visible unlocked layers on active frame). */
+  centerContent: (scope?: 'layer' | 'frame') => boolean
   addClip: (name: string) => void
   deleteClip: (clipId: string) => void
   setClipTags: (tags: ClipTag[]) => void
@@ -435,6 +440,7 @@ export interface EditorState {
   setTileSize: (v: 8 | 16 | 32) => void
   setTileSnap: (v: boolean) => void
   setTileStamp: (v: boolean) => void
+  setTiledWrap: (v: boolean) => void
   setGrayscale: (v: boolean) => void
   setOnionSkin: (v: boolean) => void
   setHover: (h: { x: number; y: number } | null) => void
@@ -539,6 +545,7 @@ export const useEditor = create<EditorState>()((set, get) => ({
   tileSize: 16,
   tileSnap: false,
   tileStamp: false,
+  tiledWrap: false,
   grayscale: false,
   onionSkin: true,
   hover: null,
@@ -1237,6 +1244,77 @@ export const useEditor = create<EditorState>()((set, get) => ({
     }
   },
 
+  centerContent: (scope = 'layer') => {
+    const refs = activeRefs(get())
+    if (!refs) return false
+    const project = bus.getProject()
+    const clip = project.clips.find((c) => c.id === refs.clipId)
+    const frame = clip?.frames[refs.frameIndex]
+    if (!clip || !frame) return false
+
+    if (scope === 'layer') {
+      if (layerIsLocked(refs.clipId, refs.layerId)) {
+        toast({ title: 'Layer is locked', description: 'Unlock it in the Layers panel to center.', variant: 'destructive' })
+        return false
+      }
+      const cel = frame.cels[refs.layerId]
+      const res = cel ? computeCenterShift(cel.buffer, project.width, project.height) : null
+      if (!res) {
+        toast({ title: 'Layer is empty', description: 'Draw on this layer before centering.' })
+        return false
+      }
+      if (res.dx === 0 && res.dy === 0) {
+        toast({ title: 'Already centered', description: 'Active layer content is already centered on the canvas.' })
+        return false
+      }
+      try {
+        bus.execute(
+          'pixels.applyOp',
+          { clipId: refs.clipId, frameId: refs.frameId, layerId: refs.layerId, ops: [{ op: 'shift', dx: res.dx, dy: res.dy }] },
+          ORIGIN,
+          { label: 'Center layer' },
+        )
+        return true
+      } catch (err) {
+        toast({ title: 'Could not center layer', description: friendlyError(err), variant: 'destructive' })
+        return false
+      }
+    }
+
+    // Whole-frame centering: compute combined opaque bbox across visible unlocked layers
+    const targets = clip.layers
+      .filter((l) => l.visible && !l.locked && frame.cels[l.id])
+      .map((l) => ({ layerId: l.id, buffer: frame.cels[l.id]!.buffer }))
+    if (targets.length === 0) {
+      toast({ title: 'Frame is empty', description: 'No visible unlocked layers have pixels to center.' })
+      return false
+    }
+    const res = computeCenterShift(targets.map((t) => t.buffer), project.width, project.height)
+    if (!res) {
+      toast({ title: 'Frame is empty', description: 'No visible unlocked layers have pixels to center.' })
+      return false
+    }
+    if (res.dx === 0 && res.dy === 0) {
+      toast({ title: 'Already centered', description: 'Active frame artwork is already centered on the canvas.' })
+      return false
+    }
+    try {
+      bus.transaction('Center frame', ORIGIN, () => {
+        for (const t of targets) {
+          bus.execute(
+            'pixels.applyOp',
+            { clipId: refs.clipId, frameId: refs.frameId, layerId: t.layerId, ops: [{ op: 'shift', dx: res.dx, dy: res.dy }] },
+            ORIGIN,
+          )
+        }
+      })
+      return true
+    } catch (err) {
+      toast({ title: 'Could not center frame', description: friendlyError(err), variant: 'destructive' })
+      return false
+    }
+  },
+
   setClipTags: (tags) => {
     const refs = activeRefs(get())
     if (!refs) return
@@ -1462,6 +1540,7 @@ export const useEditor = create<EditorState>()((set, get) => ({
   setTileSize: (v) => set({ tileSize: v }),
   setTileSnap: (v) => set({ tileSnap: v }),
   setTileStamp: (v) => set({ tileStamp: v }),
+  setTiledWrap: (v) => set({ tiledWrap: v }),
   setGrayscale: (v) => set({ grayscale: v }),
   setOnionSkin: (v) => set({ onionSkin: v }),
   setHover: (h) =>

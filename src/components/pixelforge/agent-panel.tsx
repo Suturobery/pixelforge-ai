@@ -60,6 +60,7 @@ const PIXEL_MUTATION_TOOLS = new Set([
   'flip_frame',
   'rotate_frame',
   'shift_frame',
+  'center_content',
   'beautify_layer',
 ])
 

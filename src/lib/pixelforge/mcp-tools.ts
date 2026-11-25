@@ -28,6 +28,7 @@ import {
   buildPlaybackCycle,
   composeFrameRgba,
   composeSheetRgba,
+  computeCenterShift,
   crc32,
   createProject as coreCreateProject,
   defaultStyleProfile,
@@ -1173,6 +1174,80 @@ const handlers: Record<string, ToolHandler> = {
     return runCelTransform(args, () => ({ op: 'shift' as const, dx, dy }), 'Shift')
   },
 
+  async center_content(args) {
+    const project = getBus().getProject()
+    const clip = resolveClipRef(project, args)
+    const { frame } = resolveFrameRef(clip, args)
+    const allLayers = args.allLayers === true
+
+    if (allLayers) {
+      const targets = clip.layers
+        .filter((l) => l.visible && !l.locked && frame.cels[l.id])
+        .map((l) => ({ layerId: l.id, buffer: frame.cels[l.id]!.buffer }))
+      if (targets.length === 0) {
+        return withStateHash(
+          { clipId: clip.id, frameId: frame.id, allLayers: true, centered: false, dx: 0, dy: 0, bbox: null },
+          { undoable: false, summary: `No visible pixels to center in "${clip.name}"` },
+        )
+      }
+      const res = computeCenterShift(targets.map((t) => t.buffer), project.width, project.height)
+      if (!res || (res.dx === 0 && res.dy === 0)) {
+        return withStateHash(
+          { clipId: clip.id, frameId: frame.id, allLayers: true, centered: false, dx: 0, dy: 0, bbox: res?.bbox ?? null },
+          { undoable: false, summary: `Frame in "${clip.name}" is already centered` },
+        )
+      }
+      execTransaction('Center frame', () => {
+        for (const t of targets) {
+          getBus().execute(
+            'pixels.applyOp',
+            { clipId: clip.id, frameId: frame.id, layerId: t.layerId, ops: [{ op: 'shift' as const, dx: res.dx, dy: res.dy }] },
+            'mcp',
+          )
+        }
+      })
+      return withStateHash(
+        {
+          clipId: clip.id,
+          frameId: frame.id,
+          allLayers: true,
+          layerIds: targets.map((t) => t.layerId),
+          centered: true,
+          dx: res.dx,
+          dy: res.dy,
+          bbox: res.bbox,
+        },
+        { undoable: true, summary: `Centered ${targets.length} layer(s) by (${res.dx}, ${res.dy}) in "${clip.name}"` },
+      )
+    }
+
+    const layer = resolveLayerRef(clip, args)
+    const cel = frame.cels[layer.id]
+    const res = cel ? computeCenterShift(cel.buffer, project.width, project.height) : null
+    if (!res) {
+      return withStateHash(
+        { clipId: clip.id, frameId: frame.id, layerId: layer.id, centered: false, dx: 0, dy: 0, bbox: null },
+        { undoable: false, summary: `Layer "${layer.name}" is empty` },
+      )
+    }
+    if (res.dx === 0 && res.dy === 0) {
+      return withStateHash(
+        { clipId: clip.id, frameId: frame.id, layerId: layer.id, centered: false, dx: 0, dy: 0, bbox: res.bbox },
+        { undoable: false, summary: `Layer "${layer.name}" is already centered` },
+      )
+    }
+    execCommand('pixels.applyOp', {
+      clipId: clip.id,
+      frameId: frame.id,
+      layerId: layer.id,
+      ops: [{ op: 'shift' as const, dx: res.dx, dy: res.dy }],
+    })
+    return withStateHash(
+      { clipId: clip.id, frameId: frame.id, layerId: layer.id, centered: true, dx: res.dx, dy: res.dy, bbox: res.bbox },
+      { undoable: true, summary: `Centered "${layer.name}" by (${res.dx}, ${res.dy}) in "${clip.name}"` },
+    )
+  },
+
   async add_clip(args) {
     const name = asString(args.name, 'name', 60)
     const project = getBus().getProject()
@@ -1871,6 +1946,7 @@ const REVIEW_TOOLS = new Set([
   'flip_frame',
   'rotate_frame',
   'shift_frame',
+  'center_content',
   'beautify_layer',
   'resize_canvas',
 ])
@@ -1889,7 +1965,10 @@ function captureToolReview(tool: string, args: Record<string, unknown>) {
   const targetArgs = tool === 'resize_canvas' ? {} : args
   const clip = resolveClipRef(project, targetArgs)
   const { frame, index } = resolveFrameRef(clip, targetArgs)
-  const layer = tool === 'resize_canvas' ? undefined : resolveLayerRef(clip, targetArgs)
+  const layer =
+    tool === 'resize_canvas' || (tool === 'center_content' && args.allLayers === true)
+      ? undefined
+      : resolveLayerRef(clip, targetArgs)
   return {
     loadEpoch,
     clipId: clip.id,

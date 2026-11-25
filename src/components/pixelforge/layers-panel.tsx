@@ -45,6 +45,7 @@ import {
   GripVertical,
   Sparkles,
   ScanSearch,
+  Crosshair,
 } from 'lucide-react'
 
 function LayerThumb({
@@ -172,6 +173,7 @@ export function LayersPanel() {
   const setLayerProp = useEditor((s) => s.setLayerProp)
   const setLayerLinked = useEditor((s) => s.setLayerLinked)
   const polishLayer = useEditor((s) => s.polishLayer)
+  const centerContent = useEditor((s) => s.centerContent)
   const dragFrame = useEditor((s) => s.dragFrame)
   const { toast } = useToast()
   const [renaming, setRenaming] = useState<string | null>(null)
@@ -730,6 +732,31 @@ export function LayersPanel() {
                     )}
                   </PopoverContent>
                 </Popover>
+
+                {/* 1-Click Center Content (click = active layer, Shift+click = whole frame) */}
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-zinc-400 hover:text-zinc-100"
+                      onClick={(e) => {
+                        const scope = e.shiftKey ? 'frame' : 'layer'
+                        const ok = centerContent(scope)
+                        if (ok) {
+                          toast({
+                            title: scope === 'frame' ? 'Centered frame' : `Centered "${active.name}"`,
+                            description: 'Shifted opaque artwork to exact canvas center (Ctrl+Z to undo).',
+                          })
+                        }
+                      }}
+                      aria-label="Center content on canvas"
+                    >
+                      <Crosshair className="h-3.5 w-3.5" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Center layer on canvas (Shift+click: whole frame)</TooltipContent>
+                </Tooltip>
               </div>
             </div>
           </div>

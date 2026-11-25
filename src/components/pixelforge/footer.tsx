@@ -15,6 +15,7 @@ const RELEASE_VERSION = '0.3.0'
 const TOOL_LABEL: Record<ToolId, string> = {
   pencil: 'pencil',
   eraser: 'eraser',
+  shade: 'shade',
   fill: 'fill',
   line: 'line',
   rect: 'rect',

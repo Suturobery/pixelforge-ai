@@ -241,6 +241,12 @@ export const MCP_TOOLS: McpToolInfo[] = [
     example: { dx: 2, dy: 0 },
   },
   {
+    name: 'center_content',
+    tier: 'L1',
+    description: 'Center opaque artwork on the canvas (active layer or all visible unlocked layers with allLayers:true) in one undoable step.',
+    example: { allLayers: true },
+  },
+  {
     name: 'add_clip',
     tier: 'L1',
     description: 'Create a new clip with 1–64 empty frames.',

@@ -5,7 +5,18 @@
 'use client'
 
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
-import { ONION_MAX, floodFillDither, pixelPerfectStroke, type PixelPerfectState } from '@pixelforge/core'
+import {
+  ONION_MAX,
+  applyShadeBrush,
+  applyShadeLine,
+  drawLineWrapped,
+  floodFillDither,
+  pixelPerfectStroke,
+  stampBrushWrapped,
+  wrapCoord,
+  type PixelPerfectState,
+  type ShadeMode,
+} from '@pixelforge/core'
 import { useEditor, getActiveClip, MIN_ZOOM, MAX_ZOOM } from '@/lib/pixelforge/store'
 import { useToast } from '@/hooks/use-toast'
 import { friendlyError } from '@/lib/utils'
@@ -102,6 +113,9 @@ interface Interaction {
   btn?: number
   /** paint: pixel-perfect freehand state (pencil/eraser, 1px, no mirror) */
   pp?: PixelPerfectState
+  /** shade: visited pixel indices so one stroke steps each pixel at most once */
+  shadeVisited?: Set<number>
+  shadeMode?: ShadeMode
   panStart?: { cx: number; cy: number; panX: number; panY: number }
   /** marquee-create / sel-move / sel-scale */
   selectionStart?: SelectionRect
@@ -115,6 +129,7 @@ interface Interaction {
 export function CanvasStage() {
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const tileWrapRef = useRef<HTMLCanvasElement>(null)
   const boardRef = useRef<HTMLDivElement>(null)
   const offRef = useRef<HTMLCanvasElement | null>(null)
   const interactionRef = useRef<Interaction | null>(null)
@@ -130,6 +145,7 @@ export function CanvasStage() {
   const showGrid = useEditor((s) => s.showGrid)
   const tileSize = useEditor((s) => s.tileSize)
   const tileSnap = useEditor((s) => s.tileSnap)
+  const tiledWrap = useEditor((s) => s.tiledWrap)
   const onionSkin = useEditor((s) => s.onionSkin)
   const onionOpacity = useAppSettings((s) => s.onionOpacity)
   const onionPrevTint = useAppSettings((s) => s.onionPrevTint)
@@ -284,6 +300,32 @@ export function CanvasStage() {
     ctx.clearRect(0, 0, cw, ch)
     ctx.drawImage(offRef.current, 0, 0, cw, ch)
 
+    // 3×3 live seamless tile wrap preview (native 3W×3H backing store -> sharp at any zoom)
+    const wrapCanvas = tileWrapRef.current
+    if (tiledWrap && wrapCanvas) {
+      const tw = W * 3
+      const th = H * 3
+      if (wrapCanvas.width !== tw || wrapCanvas.height !== th) {
+        wrapCanvas.width = tw
+        wrapCanvas.height = th
+      }
+      wrapCanvas.style.width = `${cw * 3}px`
+      wrapCanvas.style.height = `${ch * 3}px`
+      wrapCanvas.style.left = `${-cw}px`
+      wrapCanvas.style.top = `${-ch}px`
+      const wctx = wrapCanvas.getContext('2d')
+      if (wctx) {
+        wctx.imageSmoothingEnabled = false
+        wctx.clearRect(0, 0, tw, th)
+        for (let ty = 0; ty < 3; ty++) {
+          for (let tx = 0; tx < 3; tx++) {
+            if (tx === 1 && ty === 1) continue
+            wctx.drawImage(offRef.current, tx * W, ty * H)
+          }
+        }
+      }
+    }
+
     // pixel grid
     // The grid used to wait for 500% zoom, which made the enabled Grid
     // control look broken at normal editing magnification. At 200% each
@@ -389,9 +431,9 @@ export function CanvasStage() {
       const hx = (hover.x - off2) * zoom
       const hy = (hover.y - off2) * zoom
       const hs = Math.max(1, size) * zoom
-      ctx.strokeStyle = 'rgba(113, 113, 122, 0.9)'
+      ctx.strokeStyle = tool === 'shade' ? 'rgba(251, 191, 36, 0.9)' : 'rgba(113, 113, 122, 0.9)'
       ctx.lineWidth = 1
-      if (customBrush) {
+      if (customBrush && tool !== 'shade') {
         ctx.strokeRect(
           (hover.x - Math.floor(customBrush.w / 2)) * zoom + 0.5,
           (hover.y - Math.floor(customBrush.h / 2)) * zoom + 0.5,
@@ -433,7 +475,7 @@ export function CanvasStage() {
     // NOTE: the onion values must be deps too — toggling the switch or changing
     // opacity/tints re-composites the offscreen buffer only; without these deps
     // the visible canvas keeps showing the pre-onion blit (stale ghosts).
-  }, [project, W, H, zoom, panX, panY, showGrid, tileSnap, tileSize, mirrorX, mirrorY, rightTab, motionDraftParts, renderTick, hover, tool, brushSize, brushShape, customBrush, playing, activeFrameIndex, selection, scaleDraft, ellipseFilled, antsTick, onionSkin, onionOpacity, onionPrevTint, onionNextTint])
+  }, [project, W, H, zoom, panX, panY, showGrid, tileSnap, tileSize, tiledWrap, mirrorX, mirrorY, rightTab, motionDraftParts, renderTick, hover, tool, brushSize, brushShape, customBrush, playing, activeFrameIndex, selection, scaleDraft, ellipseFilled, antsTick, onionSkin, onionOpacity, onionPrevTint, onionNextTint])
 
   // ------------------------------------------------------------ fit / zoom
   const fitView = useCallback(() => {
@@ -637,6 +679,8 @@ export function CanvasStage() {
           if (st.mirrorY) {
             stampCustomBuffer(handle.buffer, w, h, px.x, h - 1 - px.y, st.customBrush, st.mirrorX, st.tool === 'eraser')
           }
+        } else if (st.tiledWrap) {
+          stampBrushWrapped(handle.buffer, w, h, px.x, px.y, st.brushSize, c, st.mirrorX, st.mirrorY, st.brushShape)
         } else {
           stampBrush(handle.buffer, w, h, px.x, px.y, st.brushSize, c, st.mirrorX, st.brushShape)
           if (st.mirrorY) {
@@ -651,11 +695,41 @@ export function CanvasStage() {
           handle,
           changed: true,
           btn: e.button,
-          pp: st.brushSize === 1 && !st.customBrush && !st.mirrorX && !st.mirrorY && !st.dither
+          pp: st.brushSize === 1 && !st.customBrush && !st.mirrorX && !st.mirrorY && !st.dither && !st.tiledWrap
             ? { p2: null, p1: px, patch: new Map() }
             : undefined,
         }
         st.bump()
+        break
+      }
+      case 'shade': {
+        const handle = st.beginStroke()
+        if (!handle) return
+        const mode: ShadeMode = e.button === 2 || e.shiftKey ? 'lighten' : 'darken'
+        const visited = new Set<number>()
+        const changed = applyShadeBrush(
+          handle.buffer,
+          w,
+          h,
+          px.x,
+          px.y,
+          st.brushSize,
+          st.project.palette,
+          mode,
+          { mirrorX: st.mirrorX, mirrorY: st.mirrorY, wrap: st.tiledWrap, shape: st.brushShape, visited },
+        )
+        interactionRef.current = {
+          mode: 'paint',
+          tool: 'shade',
+          start: px,
+          last: px,
+          handle,
+          changed,
+          btn: e.button,
+          shadeVisited: visited,
+          shadeMode: mode,
+        }
+        if (changed) st.bump()
         break
       }
       case 'fill': {
@@ -842,6 +916,34 @@ export function CanvasStage() {
     const { width: w, height: h } = st.project
 
     if (it.mode === 'paint' && it.tool) {
+      if (it.tool === 'shade') {
+        const mode: ShadeMode = it.shadeMode ?? 'darken'
+        const stepChanged = applyShadeLine(
+          handle.buffer,
+          w,
+          h,
+          it.last.x,
+          it.last.y,
+          px.x,
+          px.y,
+          st.brushSize,
+          st.project.palette,
+          mode,
+          {
+            mirrorX: st.mirrorX,
+            mirrorY: st.mirrorY,
+            wrap: st.tiledWrap,
+            shape: st.brushShape,
+            visited: it.shadeVisited,
+          },
+        )
+        it.last = px
+        if (stepChanged) {
+          it.changed = true
+          st.bump()
+        }
+        return
+      }
       const c: [number, number, number, number] = it.tool === 'eraser'
         ? [0, 0, 0, 0]
         : hexToRgba(it.btn === 2 ? st.secondary : st.primary)
@@ -855,7 +957,9 @@ export function CanvasStage() {
         const sx = it.last.x < px.x ? 1 : -1, sy = it.last.y < px.y ? 1 : -1
         let err = dx - dy
         for (let i = 0; i <= dx + dy + 1; i++) {
-          if ((x + y) % 2 === 0) pts.push({ x, y })
+          const wx = st.tiledWrap ? wrapCoord(x, w) : x
+          const wy = st.tiledWrap ? wrapCoord(y, h) : y
+          if ((wx + wy) % 2 === 0) pts.push({ x: wx, y: wy })
           if (x === px.x && y === px.y) break
           const e2 = 2 * err
           if (e2 > -dy) { err -= dy; x += sx }
@@ -867,8 +971,8 @@ export function CanvasStage() {
         st.bump()
         return
       }
-      // pixel-perfect freehand: 1px pencil/eraser, no custom brush, no mirror
-      if (it.pp && !st.customBrush && !st.mirrorX && !st.mirrorY && st.brushSize === 1) {
+      // pixel-perfect freehand: 1px pencil/eraser, no custom brush, no mirror, no wrap
+      if (it.pp && !st.customBrush && !st.mirrorX && !st.mirrorY && !st.tiledWrap && st.brushSize === 1) {
         pixelPerfectStroke(it.pp, px, handle.buffer, w, h, c, st.brushShape)
         it.last = px
         it.changed = true
@@ -894,6 +998,9 @@ export function CanvasStage() {
             )
           }
         }
+      } else if (st.tiledWrap) {
+        const lineC: [number, number, number, number] = it.tool === 'eraser' ? [0, 0, 0, 0] : c
+        drawLineWrapped(handle.buffer, w, h, it.last.x, it.last.y, px.x, px.y, st.brushSize, lineC, st.mirrorX, st.mirrorY, st.brushShape)
       } else {
         const lineC: [number, number, number, number] = it.tool === 'eraser' ? [0, 0, 0, 0] : c
         drawLinePixels(handle.buffer, w, h, it.last.x, it.last.y, px.x, px.y, st.brushSize, lineC, st.mirrorX, st.brushShape)
@@ -977,7 +1084,15 @@ export function CanvasStage() {
     interactionRef.current = null
     if (!it || it.mode === 'pan') return
     if (it.mode === 'paint' && it.tool) {
-      st.endStroke(it.tool === 'eraser' ? 'Eraser' : 'Pencil', it.changed)
+      const label =
+        it.tool === 'eraser'
+          ? 'Eraser'
+          : it.tool === 'shade'
+            ? it.shadeMode === 'lighten'
+              ? 'Shade (lighten)'
+              : 'Shade (darken)'
+            : 'Pencil'
+      st.endStroke(label, it.changed)
     } else if (it.mode === 'shape' && it.tool) {
       st.endStroke(it.tool === 'line' ? 'Line' : it.tool === 'ellipse' ? 'Ellipse' : 'Rect', it.changed)
     } else if (it.mode === 'move') {
@@ -1104,8 +1219,19 @@ export function CanvasStage() {
       >
         <div
           ref={boardRef}
-          className="pixelforge-canvas-checker absolute left-0 top-0 rounded-md shadow-[0_0_0_1px_rgba(255,255,255,0.12),0_12px_40px_rgba(0,0,0,0.45)]"
+          className={`pixelforge-canvas-checker absolute left-0 top-0 rounded-md shadow-[0_0_0_1px_rgba(255,255,255,0.12),0_12px_40px_rgba(0,0,0,0.45)] ${
+            tiledWrap ? 'ring-1 ring-teal-400/75' : ''
+          }`}
         >
+          {/* 3×3 seamless tiled wrap preview: 8 live neighbor copies around the active tile */}
+          {tiledWrap && (
+            <canvas
+              ref={tileWrapRef}
+              className="pointer-events-none absolute select-none opacity-65"
+              style={{ imageRendering: 'pixelated', filter: grayscale ? 'grayscale(1)' : undefined }}
+              aria-hidden
+            />
+          )}
           {/* signature: soft focus halo hugging the board (system blue) */}
           <div className="pf-ticks pointer-events-none absolute inset-0 rounded-md" aria-hidden />
           <canvas

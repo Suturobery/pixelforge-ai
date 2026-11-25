@@ -171,15 +171,25 @@ export {
 } from './pixels/ellipse';
 export {
   analyzePixelCraft,
+  applyShadeBrush,
+  applyShadeLine,
+  computeCenterShift,
+  drawLineWrapped,
   drawPolygonPixels,
   polishLayerPixelArt,
   renderInspectionRgba,
+  shadePixelStep,
+  stampBrushWrapped,
+  wrapCoord,
+  type CenterShiftResult,
   type CraftDefect,
   type CraftPoint,
   type InspectionScale,
   type PixelCraftInput,
   type PixelCraftReport,
   type PolishPixelArtOptions,
+  type ShadeBrushOptions,
+  type ShadeMode,
 } from './pixels/craft';
 export {
   clampRect,

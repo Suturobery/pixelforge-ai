@@ -18,7 +18,7 @@ import {
   rgbToOklab,
   type Oklab,
 } from '../ai/oklab';
-import { drawLinePixels, inBounds } from './ops';
+import { drawLinePixels, inBounds, inBrushDisc, type BrushShape } from './ops';
 
 export interface CraftPoint {
   x: number;
@@ -833,4 +833,316 @@ export function polishLayerPixelArt(
   }
 
   return changed;
+}
+
+// ---------------------------------------------------------------------------
+// 5. Palette-Aware OKLab Shading Brush, Wrapped Tile Painting & Center Math
+// ---------------------------------------------------------------------------
+
+export type ShadeMode = 'darken' | 'lighten';
+
+/** Positive modulo wrap into [0, size). */
+export function wrapCoord(v: number, size: number): number {
+  if (size <= 0) return 0;
+  return ((v % size) + size) % size;
+}
+
+function shadePixelWithEntries(
+  rgba: RGBA,
+  entries: readonly PaletteEntry[],
+  mode: ShadeMode,
+): RGBA | null {
+  if (rgba[3] === 0) return null;
+
+  if (entries.length > 0) {
+    const base = rgbToOklab(rgba[0], rgba[1], rgba[2]);
+    let picked: RGBA | null = null;
+    if (mode === 'darken') {
+      picked = pickHueShiftedDarker(base, entries, 0.14, 0.04, 2.0);
+    } else {
+      picked = pickHueShiftedLighter(base, entries, 0.14, 0.04);
+    }
+    if (!picked) return null;
+    if (picked[0] === rgba[0] && picked[1] === rgba[1] && picked[2] === rgba[2] && picked[3] === rgba[3]) {
+      return null;
+    }
+    return [picked[0], picked[1], picked[2], rgba[3]];
+  }
+
+  // Fallback when palette is empty: subtle perceptual step
+  const r = mode === 'darken'
+    ? Math.max(0, Math.round(rgba[0] * 0.8))
+    : Math.min(255, Math.round(rgba[0] + (255 - rgba[0]) * 0.22));
+  const g = mode === 'darken'
+    ? Math.max(0, Math.round(rgba[1] * 0.8))
+    : Math.min(255, Math.round(rgba[1] + (255 - rgba[1]) * 0.22));
+  const b = mode === 'darken'
+    ? Math.max(0, Math.round(rgba[2] * 0.8))
+    : Math.min(255, Math.round(rgba[2] + (255 - rgba[2]) * 0.22));
+  if (r === rgba[0] && g === rgba[1] && b === rgba[2]) return null;
+  return [r, g, b, rgba[3]];
+}
+
+/**
+ * Step a single RGBA pixel one shade darker (cooler OKLab shadow) or lighter
+ * (warmer OKLab highlight), strictly locked to `palette` when non-empty.
+ * Returns `null` if the pixel is transparent or already at the ramp endpoint.
+ */
+export function shadePixelStep(
+  rgba: RGBA,
+  palette: readonly string[],
+  mode: ShadeMode,
+): RGBA | null {
+  const entries = palette.length > 0 ? buildPaletteEntries(palette) : [];
+  return shadePixelWithEntries(rgba, entries, mode);
+}
+
+export interface ShadeBrushOptions {
+  mirrorX?: boolean;
+  mirrorY?: boolean;
+  wrap?: boolean;
+  shape?: BrushShape;
+  /** Per-stroke visited pixel set so dragging over a pixel steps it once per stroke. */
+  visited?: Set<number>;
+}
+
+function applyShadeStampWithEntries(
+  buf: Uint8ClampedArray,
+  w: number,
+  h: number,
+  cx: number,
+  cy: number,
+  size: number,
+  entries: readonly PaletteEntry[],
+  mode: ShadeMode,
+  opts: ShadeBrushOptions,
+): boolean {
+  const s = Math.max(1, size);
+  const off = Math.floor((s - 1) / 2);
+  const shape = opts.shape ?? 'square';
+  const wrap = opts.wrap === true;
+  const mirrorX = opts.mirrorX === true;
+  const mirrorY = opts.mirrorY === true;
+  const visited = opts.visited;
+  let changed = false;
+
+  const shadeOne = (rawX: number, rawY: number): void => {
+    const x = wrap ? wrapCoord(rawX, w) : rawX;
+    const y = wrap ? wrapCoord(rawY, h) : rawY;
+    if (!inBounds(w, h, x, y)) return;
+    const idx = y * w + x;
+    if (visited?.has(idx)) return;
+    const o = idx * 4;
+    if (buf[o + 3] === 0) return;
+    const next = shadePixelWithEntries([buf[o]!, buf[o + 1]!, buf[o + 2]!, buf[o + 3]!], entries, mode);
+    visited?.add(idx);
+    if (!next) return;
+    buf[o] = next[0];
+    buf[o + 1] = next[1];
+    buf[o + 2] = next[2];
+    buf[o + 3] = next[3];
+    changed = true;
+  };
+
+  for (let dy = 0; dy < s; dy++) {
+    for (let dx = 0; dx < s; dx++) {
+      if (shape === 'circle' && !inBrushDisc(dx, dy, s)) continue;
+      const px = cx + dx - off;
+      const py = cy + dy - off;
+      shadeOne(px, py);
+      if (mirrorX) shadeOne(w - 1 - px, py);
+      if (mirrorY) shadeOne(px, h - 1 - py);
+      if (mirrorX && mirrorY) shadeOne(w - 1 - px, h - 1 - py);
+    }
+  }
+  return changed;
+}
+
+/**
+ * Stamp the palette-aware OKLab shading brush at `(cx, cy)`.
+ * Skips transparent pixels and respects `visited`, `mirrorX`, `mirrorY`, and `wrap`.
+ */
+export function applyShadeBrush(
+  buf: Uint8ClampedArray,
+  w: number,
+  h: number,
+  cx: number,
+  cy: number,
+  size: number,
+  palette: readonly string[],
+  mode: ShadeMode,
+  opts: ShadeBrushOptions = {},
+): boolean {
+  const entries = palette.length > 0 ? buildPaletteEntries(palette) : [];
+  return applyShadeStampWithEntries(buf, w, h, cx, cy, size, entries, mode, opts);
+}
+
+/**
+ * Interpolate the palette-aware shading brush along a Bresenham segment from
+ * `(x0, y0)` to `(x1, y1)` so fast pointer drags leave no gaps.
+ */
+export function applyShadeLine(
+  buf: Uint8ClampedArray,
+  w: number,
+  h: number,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  size: number,
+  palette: readonly string[],
+  mode: ShadeMode,
+  opts: ShadeBrushOptions = {},
+): boolean {
+  const entries = palette.length > 0 ? buildPaletteEntries(palette) : [];
+  let x = x0;
+  let y = y0;
+  const dx = Math.abs(x1 - x0);
+  const dy = Math.abs(y1 - y0);
+  const sx = x0 < x1 ? 1 : -1;
+  const sy = y0 < y1 ? 1 : -1;
+  let err = dx - dy;
+  let changed = false;
+  for (let i = 0; i <= dx + dy + 1; i++) {
+    if (applyShadeStampWithEntries(buf, w, h, x, y, size, entries, mode, opts)) {
+      changed = true;
+    }
+    if (x === x1 && y === y1) break;
+    const e2 = 2 * err;
+    if (e2 > -dy) {
+      err -= dy;
+      x += sx;
+    }
+    if (e2 < dx) {
+      err += dx;
+      y += sy;
+    }
+  }
+  return changed;
+}
+
+/**
+ * Stamp a brush with seamless toroidal modulo wrapping across canvas edges.
+ * Used by Tiled Wrap mode for seamless tilesets and repeating textures.
+ */
+export function stampBrushWrapped(
+  buf: Uint8ClampedArray,
+  w: number,
+  h: number,
+  cx: number,
+  cy: number,
+  size: number,
+  c: RGBA,
+  mirrorX = false,
+  mirrorY = false,
+  shape: BrushShape = 'square',
+): void {
+  const s = Math.max(1, size);
+  const off = Math.floor((s - 1) / 2);
+  const put = (rawX: number, rawY: number): void => {
+    const x = wrapCoord(rawX, w);
+    const y = wrapCoord(rawY, h);
+    const i = (y * w + x) * 4;
+    buf[i] = c[0];
+    buf[i + 1] = c[1];
+    buf[i + 2] = c[2];
+    buf[i + 3] = c[3];
+  };
+  for (let dy = 0; dy < s; dy++) {
+    for (let dx = 0; dx < s; dx++) {
+      if (shape === 'circle' && !inBrushDisc(dx, dy, s)) continue;
+      const px = cx + dx - off;
+      const py = cy + dy - off;
+      put(px, py);
+      if (mirrorX) put(w - 1 - px, py);
+      if (mirrorY) put(px, h - 1 - py);
+      if (mirrorX && mirrorY) put(w - 1 - px, h - 1 - py);
+    }
+  }
+}
+
+/**
+ * Bresenham line stamped with toroidal modulo wrapping across canvas edges.
+ */
+export function drawLineWrapped(
+  buf: Uint8ClampedArray,
+  w: number,
+  h: number,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  size: number,
+  c: RGBA,
+  mirrorX = false,
+  mirrorY = false,
+  shape: BrushShape = 'square',
+): void {
+  let x = x0;
+  let y = y0;
+  const dx = Math.abs(x1 - x0);
+  const dy = Math.abs(y1 - y0);
+  const sx = x0 < x1 ? 1 : -1;
+  const sy = y0 < y1 ? 1 : -1;
+  let err = dx - dy;
+  for (let i = 0; i <= dx + dy + 1; i++) {
+    stampBrushWrapped(buf, w, h, x, y, size, c, mirrorX, mirrorY, shape);
+    if (x === x1 && y === y1) break;
+    const e2 = 2 * err;
+    if (e2 > -dy) {
+      err -= dy;
+      x += sx;
+    }
+    if (e2 < dx) {
+      err += dx;
+      y += sy;
+    }
+  }
+}
+
+export interface CenterShiftResult {
+  dx: number;
+  dy: number;
+  bbox: { x: number; y: number; w: number; h: number };
+}
+
+/**
+ * Compute the integer `(dx, dy)` shift required to center the opaque bounding
+ * box of one or more RGBA buffers inside a `w × h` canvas.
+ * Returns `null` when every buffer is completely transparent.
+ */
+export function computeCenterShift(
+  buffers: Uint8ClampedArray | readonly Uint8ClampedArray[],
+  w: number,
+  h: number,
+): CenterShiftResult | null {
+  const list = buffers instanceof Uint8ClampedArray ? [buffers] : buffers;
+  let minX = w;
+  let minY = h;
+  let maxX = -1;
+  let maxY = -1;
+
+  for (const buf of list) {
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (buf[(y * w + x) * 4 + 3]! > 0) {
+          if (x < minX) minX = x;
+          if (y < minY) minY = y;
+          if (x > maxX) maxX = x;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+  }
+
+  if (maxX < minX || maxY < minY) return null;
+  const bw = maxX - minX + 1;
+  const bh = maxY - minY + 1;
+  const targetX = Math.floor((w - bw) / 2);
+  const targetY = Math.floor((h - bh) / 2);
+  return {
+    dx: targetX - minX,
+    dy: targetY - minY,
+    bbox: { x: minX, y: minY, w: bw, h: bh },
+  };
 }

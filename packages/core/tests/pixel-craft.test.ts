@@ -1,11 +1,16 @@
 import { describe, expect, test } from 'bun:test';
 import {
   analyzePixelCraft,
+  applyShadeBrush,
+  applyShadeLine,
+  computeCenterShift,
   createProject,
   CommandBus,
   drawPolygonPixels,
   polishLayerPixelArt,
   renderInspectionRgba,
+  shadePixelStep,
+  stampBrushWrapped,
   getPixel,
   type RGBA,
 } from '../src/index';
@@ -160,5 +165,65 @@ describe('Pro Pixel Craft utilities', () => {
     );
     expect(getPixel(buf, 16, 3, 3)[3]).toBe(255);
     expect(getPixel(buf, 16, 7, 7)[3]).toBe(0);
+  });
+
+  test('shadePixelStep & applyShadeBrush stay palette-locked, respect visited guard, and wrap seamlessly', () => {
+    const emerald: RGBA = [56, 183, 100, 255]; // #38b764
+    const darker = shadePixelStep(emerald, SWEETIE16, 'darken');
+    const lighter = shadePixelStep(emerald, SWEETIE16, 'lighten');
+    expect(darker).not.toBeNull();
+    expect(lighter).not.toBeNull();
+    expect(hexOf(darker!)).toBe('#257179'); // hue-shifted teal shadow
+    expect(hexOf(lighter!)).toBe('#a7f070'); // warm lime highlight
+    expect(shadePixelStep([0, 0, 0, 0], SWEETIE16, 'darken')).toBeNull();
+
+    // Dragging over the same pixel with a shared `visited` set only steps 1 shade
+    const buf = new Uint8ClampedArray(8 * 8 * 4);
+    setPx(buf, 8, 0, 0, emerald);
+    setPx(buf, 8, 7, 0, emerald);
+    const visited = new Set<number>();
+    const changed1 = applyShadeBrush(buf, 8, 8, 0, 0, 3, SWEETIE16, 'darken', { wrap: true, visited });
+    expect(changed1).toBe(true);
+    // Both (0,0) and wrapped neighbor (7,0) stepped once to #257179
+    expect(hexOf(getPixel(buf, 8, 0, 0))).toBe('#257179');
+    expect(hexOf(getPixel(buf, 8, 7, 0))).toBe('#257179');
+    // Second pass in the same stroke must be a no-op because of visited
+    const changed2 = applyShadeLine(buf, 8, 8, 0, 0, 7, 0, 1, SWEETIE16, 'darken', { wrap: true, visited });
+    expect(changed2).toBe(false);
+    expect(hexOf(getPixel(buf, 8, 0, 0))).toBe('#257179');
+    // Transparent pixels stay transparent
+    expect(getPixel(buf, 8, 3, 3)[3]).toBe(0);
+  });
+
+  test('stampBrushWrapped wraps multi-pixel brushes across canvas borders', () => {
+    const buf = new Uint8ClampedArray(8 * 8 * 4);
+    const red: RGBA = [177, 62, 83, 255];
+    stampBrushWrapped(buf, 8, 8, 0, 0, 3, red, false, false, 'square');
+    // 3x3 centered at (0,0) covers x in {-1,0,1} -> {7,0,1} and y in {-1,0,1} -> {7,0,1}
+    expect(getPixel(buf, 8, 7, 7)).toEqual(red);
+    expect(getPixel(buf, 8, 0, 7)).toEqual(red);
+    expect(getPixel(buf, 8, 7, 0)).toEqual(red);
+    expect(getPixel(buf, 8, 1, 1)).toEqual(red);
+    expect(getPixel(buf, 8, 4, 4)[3]).toBe(0);
+  });
+
+  test('computeCenterShift returns exact integer centering delta for single or multi-layer buffers', () => {
+    const empty = new Uint8ClampedArray(16 * 16 * 4);
+    expect(computeCenterShift(empty, 16, 16)).toBeNull();
+
+    const bufA = new Uint8ClampedArray(16 * 16 * 4);
+    // 4x4 block at x=1..4, y=2..5 -> center target is x=6..9, y=6..9 => dx=+5, dy=+4
+    for (let y = 2; y <= 5; y++) {
+      for (let x = 1; x <= 4; x++) setPx(bufA, 16, x, y, [255, 255, 255, 255]);
+    }
+    const single = computeCenterShift(bufA, 16, 16);
+    expect(single).toEqual({ dx: 5, dy: 4, bbox: { x: 1, y: 2, w: 4, h: 4 } });
+
+    // Multi-layer combined bbox: second layer extends to x=6, y=7 -> bbox 1..6 (w=6), 2..7 (h=6)
+    // Target x=(16-6)/2=5 -> dx=+4; target y=(16-6)/2=5 -> dy=+3
+    const bufB = new Uint8ClampedArray(16 * 16 * 4);
+    setPx(bufB, 16, 6, 7, [255, 0, 0, 255]);
+    const combined = computeCenterShift([bufA, bufB], 16, 16);
+    expect(combined).toEqual({ dx: 4, dy: 3, bbox: { x: 1, y: 2, w: 6, h: 6 } });
   });
 });

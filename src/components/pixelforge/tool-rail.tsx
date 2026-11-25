@@ -20,6 +20,7 @@ import {
 import {
   Pencil,
   Eraser,
+  Contrast,
   PaintBucket,
   Slash,
   Square,
@@ -31,6 +32,7 @@ import {
   FlipVertical2,
   LayoutGrid,
   Grid2x2,
+  Grid3x3,
   ArrowLeftRight,
   HelpCircle,
 } from 'lucide-react'
@@ -39,6 +41,7 @@ import { FeedbackDialog } from '@/components/pixelforge/feedback-dialog'
 const TOOLS: { id: ToolId; label: string; key?: string; icon: React.ReactNode }[] = [
   { id: 'pencil', label: 'Pencil', key: 'B', icon: <Pencil className="h-4 w-4" /> },
   { id: 'eraser', label: 'Eraser', key: 'E', icon: <Eraser className="h-4 w-4" /> },
+  { id: 'shade', label: 'Shade brush (L: darken · R: lighten)', key: 'H', icon: <Contrast className="h-4 w-4" /> },
   { id: 'fill', label: 'Fill', key: 'F', icon: <PaintBucket className="h-4 w-4" /> },
   { id: 'line', label: 'Line', key: 'L', icon: <Slash className="h-4 w-4" /> },
   { id: 'rect', label: 'Rectangle', key: 'R', icon: <Square className="h-4 w-4" /> },
@@ -71,6 +74,8 @@ export function ToolRail() {
   const setTileSize = useEditor((s) => s.setTileSize)
   const tileStamp = useEditor((s) => s.tileStamp)
   const setTileStamp = useEditor((s) => s.setTileStamp)
+  const tiledWrap = useEditor((s) => s.tiledWrap)
+  const setTiledWrap = useEditor((s) => s.setTiledWrap)
   // help & feedback + (coming soon) accounts — parked at the rail bottom so
   // testers always know where to report bugs, whatever panel state they're in
   const [feedbackOpen, setFeedbackOpen] = useState(false)
@@ -335,6 +340,29 @@ export function ToolRail() {
             )}
           </PopoverContent>
         </Popover>
+
+        {/* Tiled Wrap mode: 3×3 seamless tile preview + wrap painting (W shortcut) */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant={tiledWrap ? 'secondary' : 'ghost'}
+              size="icon"
+              className={`h-9 w-9 ${
+                tiledWrap
+                  ? 'bg-teal-500/15 text-teal-300 ring-1 ring-teal-500/40'
+                  : 'text-zinc-400'
+              }`}
+              onClick={() => setTiledWrap(!tiledWrap)}
+              aria-label="Tiled wrap (3×3 seamless)"
+              aria-pressed={tiledWrap}
+            >
+              <Grid3x3 className="h-4 w-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="right" className="font-mono text-xs">
+            Tiled wrap (3×3 seamless) <kbd className="ml-1 rounded bg-white/20 px-1 font-sans text-[10px] font-semibold text-white">W</kbd>
+          </TooltipContent>
+        </Tooltip>
 
         {/* bottom group: help & feedback + future account entry — mt-auto
             pins them below the tools regardless of rail height */}

@@ -13,6 +13,7 @@ import type { ToolId } from '@/lib/pixelforge/types'
 const TOOL_KEYS: Record<string, ToolId> = {
   b: 'pencil',
   e: 'eraser',
+  h: 'shade',
   f: 'fill',
   l: 'line',
   r: 'rect',
@@ -155,6 +156,10 @@ export function useKeyboardShortcuts(onSave: () => void) {
       }
       if (k === 'k') {
         st.setTileSnap(!st.tileSnap)
+        return
+      }
+      if (k === 'w') {
+        st.setTiledWrap(!st.tiledWrap)
         return
       }
       if (k >= '1' && k <= '8') {
