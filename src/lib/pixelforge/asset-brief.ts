@@ -221,6 +221,13 @@ export interface BriefProject {
       outline?: string
       transparentBackground?: boolean
       notes?: string
+      anchor?: {
+        label: string
+        spriteWidth: number
+        spriteHeight: number
+        bottomMargin: number
+        outlineStyle: string
+      }
     }
   }
 }
@@ -260,6 +267,9 @@ export function buildAssetBrief(
     : 'methodology'
   const short = (value: string, max = 180) => value.length > max ? `${value.slice(0, max - 1)}…` : value
 
+  const anchorLine = sp?.anchor
+    ? `Hero Style Anchor "${short(sp.anchor.label, 48)}": match ${sp.anchor.spriteWidth}x${sp.anchor.spriteHeight}px silhouette, ground margin ${sp.anchor.bottomMargin}px, ${sp.anchor.outlineStyle} outline.`
+    : ''
   const headerLines = [
     `PIXEL ART RECIPE - ${short(fields.assetType || 'unspecified asset', 100)}`,
     `Project "${short(project.name, 80)}" ${project.width}x${project.height}; project palette only (${project.palette.length} colors, limit ${fields.colorLimit}).`,
@@ -268,6 +278,7 @@ export function buildAssetBrief(
     `References: ${fields.references.length ? short(fields.references.join(', '), 120) : 'none; create fresh'}.`,
     `Must include: ${short(fields.requiredDetails || 'clear readable form', 140)}. Avoid: ${short(avoidItems.join('; ') || 'uncontrolled noise', 140)}.`,
     `Style Lock: ${short(styleLock, 180)}.`,
+    ...(anchorLine ? [anchorLine] : []),
   ]
   const contractLines = [
     'EXECUTION CONTRACT - actually draw in the active PixelForge project; do not only describe or return code. No image generation or imported generated PNG.',

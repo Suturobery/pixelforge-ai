@@ -37,10 +37,14 @@ import {
   crc32,
   createProject as coreCreateProject,
   defaultStyleProfile,
+  isSpriteTemplateId,
+  listSpriteTemplates,
+  measureStyleAnchor,
   parseStyleProfile,
   polishLayerPixelArt,
   remapBufferToPalette,
   renderInspectionRgba,
+  renderSpriteTemplate,
   slugify,
   styleProfilePromptTags,
   upscaleRgbaNearest,
@@ -463,6 +467,57 @@ async function withStateHash(data: unknown, opts: { undoable?: boolean; summary?
 
 type ToolHandler = (args: Record<string, unknown>, ctx: ToolExecContext) => Promise<ToolExecResult>;
 
+function buildCraftGate(clipId: string, frameId: string, layerId?: string) {
+  const project = getBus().getProject()
+  const clip = project.clips.find((c) => c.id === clipId)
+  const frame = clip?.frames.find((f) => f.id === frameId)
+  if (!clip || !frame) return null
+  const cel = layerId ? frame.cels[layerId] : undefined
+  const buffer = cel ? cel.buffer : composeFrameRgba(project, clip, frame)
+  const report = analyzePixelCraft({
+    buffer,
+    width: project.width,
+    height: project.height,
+    lighting: project.settings.styleProfile?.lighting ?? 'top-left',
+  })
+  const pillowDefect = report.defects.find((d) => d.kind === 'pillow_shading')
+  const counts = {
+    doubles: report.metrics.doublesCount,
+    orphans: report.metrics.orphansCount,
+    jaggies: report.metrics.jaggiesCount,
+    pillow: pillowDefect?.count ?? 0,
+  }
+  const topDefects: Array<{ kind: string; x: number; y: number }> = []
+  for (const defect of report.defects) {
+    if (defect.kind === 'empty') continue
+    for (const pt of defect.locations) {
+      topDefects.push({ kind: defect.kind, x: pt.x, y: pt.y })
+      if (topDefects.length >= 6) break
+    }
+    if (topDefects.length >= 6) break
+  }
+  const grade: 'clean' | 'polish' | 'needs_fix' =
+    report.score >= 90 ? 'clean' : report.score >= 70 ? 'polish' : 'needs_fix'
+  const hint =
+    grade === 'clean'
+      ? 'Craft looks clean.'
+      : counts.doubles > 0
+        ? 'Call beautify_layer(cleanDoubles:true) or thin L-corner doubles at topDefects.'
+        : counts.orphans > 0
+          ? 'Remove stray 1px orphan speckles at topDefects.'
+          : counts.jaggies > 0
+            ? 'Smooth uneven staircase jaggies at topDefects.'
+            : 'Shift highlights toward the light source to fix pillow shading.'
+  return {
+    score: report.score,
+    grade,
+    opaquePixels: report.metrics.opaquePixels,
+    counts,
+    topDefects,
+    hint,
+  }
+}
+
 const handlers: Record<string, ToolHandler> = {
   // ---------------------------------------------------------------- L0 read
   async get_project_state() {
@@ -482,6 +537,7 @@ const handlers: Record<string, ToolHandler> = {
         // profiles have none — show it as what it is (disabled until the
         // artist enables it), not as the enabled default
         styleProfile: project.settings.styleProfile ?? { ...defaultStyleProfile(), enabled: false },
+        styleAnchor: project.settings.styleProfile?.anchor ?? null,
         onion: { ...project.settings.onion },
       },
       trash: project.trash.map((t) => ({ id: t.id, label: t.label, kind: t.item.kind, deletedAt: t.deletedAt })),
@@ -602,6 +658,82 @@ const handlers: Record<string, ToolHandler> = {
         ...report,
       },
       { summary: report.summary },
+    )
+  },
+
+  async list_templates() {
+    const templates = listSpriteTemplates()
+    return withStateHash(
+      { count: templates.length, templates },
+      { summary: `${templates.length} starter sprite template(s) available — insert with generate_template (free, L1)` },
+    )
+  },
+
+  async generate_template(args, ctx) {
+    assertTaskProject(ctx)
+    const templateId = asString(args.template, 'template', 48)
+    if (!isSpriteTemplateId(templateId)) {
+      const valid = listSpriteTemplates().map((t) => t.id).join(', ')
+      throw new CommandError('VALIDATION_FAILED', `unknown template "${templateId}" — choose one of: ${valid}`)
+    }
+    const project = getBus().getProject()
+    const clip = resolveClipRef(project, args)
+    const { frame } = resolveFrameRef(clip, args)
+    const autoTagParts = args.autoTagParts !== false
+    const customName = args.name !== undefined ? asString(args.name, 'name', 120) : undefined
+    const rendered = renderSpriteTemplate(templateId, project.width, project.height, project.palette)
+    const layerName = customName || rendered.name
+    let newLayerId = ''
+    let partsCount = 0
+    execTransaction(`Starter template: ${layerName}`, () => {
+      getBus().execute('layer.add', { clipId: clip.id, name: layerName }, 'mcp')
+      const created = getBus().getProject().clips.find((c) => c.id === clip.id)?.layers.at(-1)
+      if (!created) throw new CommandError('INVALID_STATE', 'layer add produced no layer')
+      newLayerId = created.id
+      getBus().execute(
+        'pixels.applyOp',
+        {
+          clipId: clip.id,
+          frameId: frame.id,
+          layerId: newLayerId,
+          ops: [{ op: 'setBuffer' as const, buffer: new Uint8ClampedArray(rendered.buffer) }],
+        },
+        'mcp',
+      )
+      if (autoTagParts && rendered.parts.length > 0) {
+        getBus().execute(
+          'part.set',
+          {
+            clipId: clip.id,
+            parts: rendered.parts.map((p, z) => ({
+              name: p.name,
+              layerId: newLayerId,
+              rect: p.rect,
+              anchorFrameId: frame.id,
+              z,
+            })),
+          },
+          'mcp',
+        )
+        partsCount = rendered.parts.length
+      }
+    })
+    const craftGate = buildCraftGate(clip.id, frame.id, newLayerId)
+    return withStateHash(
+      {
+        clipId: clip.id,
+        frameId: frame.id,
+        layerId: newLayerId,
+        template: rendered.id,
+        name: layerName,
+        bounds: rendered.bounds,
+        partsCount,
+        craftGate,
+      },
+      {
+        undoable: true,
+        summary: `Inserted "${layerName}" template on "${clip.name}"${partsCount > 0 ? ` (${partsCount} Motion parts tagged)` : ''} · craft ${rendered.craftScore}/100`,
+      },
     )
   },
 
@@ -1195,7 +1327,7 @@ const handlers: Record<string, ToolHandler> = {
     })
     execCommand('pixels.applyOp', { clipId: clip.id, frameId: frame.id, layerId: layer.id, ops })
     return withStateHash(
-      { applied: ops.length, clipId: clip.id, frameId: frame.id, layerId: layer.id },
+      { applied: ops.length, clipId: clip.id, frameId: frame.id, layerId: layer.id, craftGate: buildCraftGate(clip.id, frame.id, layer.id) },
       { undoable: true, summary: `Painted ${ops.length} pixel(s) on "${clip.name}" / "${layer.name}"` }
     )
   },
@@ -1218,7 +1350,7 @@ const handlers: Record<string, ToolHandler> = {
       ops: [{ op: 'rect' as const, from, to, filled }],
     })
     return withStateHash(
-      { clipId: clip.id, frameId: frame.id, layerId: layer.id, from, to, filled },
+      { clipId: clip.id, frameId: frame.id, layerId: layer.id, from, to, filled, craftGate: buildCraftGate(clip.id, frame.id, layer.id) },
       { undoable: true, summary: `${filled ? 'Filled' : 'Outlined'} rect in "${clip.name}" / "${layer.name}"` }
     )
   },
@@ -1242,7 +1374,7 @@ const handlers: Record<string, ToolHandler> = {
       ops: [{ op: 'line' as const, from, to, size, mirrorX }],
     })
     return withStateHash(
-      { clipId: clip.id, frameId: frame.id, layerId: layer.id, from, to, size, mirrorX },
+      { clipId: clip.id, frameId: frame.id, layerId: layer.id, from, to, size, mirrorX, craftGate: buildCraftGate(clip.id, frame.id, layer.id) },
       { undoable: true, summary: `Drew line in "${clip.name}" / "${layer.name}"` }
     )
   },
@@ -1267,7 +1399,7 @@ const handlers: Record<string, ToolHandler> = {
       ops: [{ op: 'ellipse' as const, from, to, filled, size, mirrorX }],
     })
     return withStateHash(
-      { clipId: clip.id, frameId: frame.id, layerId: layer.id, from, to, filled, size, mirrorX },
+      { clipId: clip.id, frameId: frame.id, layerId: layer.id, from, to, filled, size, mirrorX, craftGate: buildCraftGate(clip.id, frame.id, layer.id) },
       { undoable: true, summary: `${filled ? 'Filled' : 'Outlined'} ellipse in "${clip.name}" / "${layer.name}"` }
     )
   },
@@ -1298,7 +1430,7 @@ const handlers: Record<string, ToolHandler> = {
       ops: [{ op: 'polygon' as const, points, filled, mirrorX }],
     })
     return withStateHash(
-      { clipId: clip.id, frameId: frame.id, layerId: layer.id, vertexCount: points.length, filled, mirrorX },
+      { clipId: clip.id, frameId: frame.id, layerId: layer.id, vertexCount: points.length, filled, mirrorX, craftGate: buildCraftGate(clip.id, frame.id, layer.id) },
       { undoable: true, summary: `${filled ? 'Filled' : 'Outlined'} ${points.length}-pt polygon in "${clip.name}" / "${layer.name}"` }
     )
   },
@@ -1320,7 +1452,7 @@ const handlers: Record<string, ToolHandler> = {
       ops: [{ op: 'fill' as const, x, y, mirrorX }],
     })
     return withStateHash(
-      { clipId: clip.id, frameId: frame.id, layerId: layer.id, x, y, mirrorX },
+      { clipId: clip.id, frameId: frame.id, layerId: layer.id, x, y, mirrorX, craftGate: buildCraftGate(clip.id, frame.id, layer.id) },
       { undoable: true, summary: `Flood-filled at (${x}, ${y}) in "${clip.name}" / "${layer.name}"` }
     )
   },
@@ -1719,6 +1851,50 @@ const handlers: Record<string, ToolHandler> = {
     )
   },
 
+  async pin_style_anchor(args) {
+    const project = getBus().getProject()
+    if (args.clear === true) {
+      const existing = project.settings.styleProfile
+      if (!existing?.anchor) {
+        return withStateHash(
+          { styleAnchor: null, cleared: false },
+          { undoable: false, summary: 'No Hero Style Anchor was pinned' },
+        )
+      }
+      const rest = { ...existing }
+      delete rest.anchor
+      execCommand('settings.setStyleProfile', { profile: rest })
+      return withStateHash(
+        { styleAnchor: null, cleared: true },
+        { undoable: true, summary: 'Cleared Hero Style Anchor' },
+      )
+    }
+    const clip = resolveClipRef(project, args)
+    const { frame, index: frameIndex } = resolveFrameRef(clip, args)
+    const label =
+      args.label !== undefined
+        ? asString(args.label, 'label', 64)
+        : `${clip.name} · F${frameIndex + 1}`
+    const rgba = composeFrameRgba(project, clip, frame)
+    const anchor = measureStyleAnchor(rgba, project.width, project.height, {
+      label,
+      clipId: clip.id,
+      frameIndex,
+    })
+    if (!anchor) {
+      throw new CommandError('VALIDATION_FAILED', 'cannot pin an empty frame — draw a sprite first')
+    }
+    const base = project.settings.styleProfile ?? defaultStyleProfile()
+    execCommand('settings.setStyleProfile', { profile: { ...base, enabled: true, anchor } })
+    return withStateHash(
+      { styleAnchor: anchor, promptTags: styleProfilePromptTags({ ...base, enabled: true, anchor }) },
+      {
+        undoable: true,
+        summary: `Pinned Hero Style Anchor "${anchor.label}" (${anchor.spriteWidth}×${anchor.spriteHeight}px, ground ${anchor.bottomMargin}px, ${anchor.outlineStyle}, craft ${anchor.craftScore}/100)`,
+      },
+    )
+  },
+
   async import_image_as_layer(args, ctx) {
     const project = getBus().getProject()
     const clip = resolveClipRef(project, args)
@@ -1903,7 +2079,7 @@ const handlers: Record<string, ToolHandler> = {
       `Beautify layer "${layer.name}"`,
     )
     return withStateHash(
-      { clipId: clip.id, frameId: frame.id, layerId: layer.id, selOut, shade, highlight, cleanDoubles, paletteLock },
+      { clipId: clip.id, frameId: frame.id, layerId: layer.id, selOut, shade, highlight, cleanDoubles, paletteLock, craftGate: buildCraftGate(clip.id, frame.id, layer.id) },
       {
         undoable: true,
         summary: `Polished "${layer.name}" — ${selOut ? 'sel-out' : outline ? 'outline' : 'no outline'}, shade ${shade ? 'on' : 'off'}${highlight ? ', highlight on' : ''}${cleanDoubles ? ', doubles cleaned' : ''}`,

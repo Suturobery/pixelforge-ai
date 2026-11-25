@@ -3,7 +3,14 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { analyzePixelCraft, composeFrameRgba, type PixelCraftReport } from '@pixelforge/core'
+import {
+  SPRITE_TEMPLATES,
+  analyzePixelCraft,
+  composeFrameRgba,
+  renderSpriteTemplate,
+  type PixelCraftReport,
+  type SpriteTemplateId,
+} from '@pixelforge/core'
 import { useEditor, getActiveFrame, getActiveClip } from '@/lib/pixelforge/store'
 import { useToast } from '@/hooks/use-toast'
 import type { Cel, Clip, Frame, Layer } from '@/lib/pixelforge/types'
@@ -48,7 +55,32 @@ import {
   Crosshair,
   Crop,
   Pin,
+  Anchor,
+  LayoutTemplate,
 } from 'lucide-react'
+
+function TemplatePreviewThumb({ templateId, palette }: { templateId: SpriteTemplateId; palette: readonly string[] }) {
+  const ref = useRef<HTMLCanvasElement>(null)
+  useEffect(() => {
+    const cv = ref.current
+    if (!cv) return
+    const rendered = renderSpriteTemplate(templateId, 32, 32, palette)
+    const ctx = cv.getContext('2d')
+    if (!ctx) return
+    ctx.clearRect(0, 0, 32, 32)
+    ctx.putImageData(new ImageData(new Uint8ClampedArray(rendered.buffer), 32, 32), 0, 0)
+  }, [templateId, palette])
+  return (
+    <canvas
+      ref={ref}
+      width={32}
+      height={32}
+      className="pixelforge-checker h-9 w-9 shrink-0 rounded border border-zinc-700/80"
+      style={{ imageRendering: 'pixelated' }}
+      aria-hidden
+    />
+  )
+}
 
 function LayerThumb({
   layer,
@@ -178,6 +210,13 @@ export function LayersPanel() {
   const centerContent = useEditor((s) => s.centerContent)
   const autoTrimCanvas = useEditor((s) => s.autoTrimCanvas)
   const setCraftPins = useEditor((s) => s.setCraftPins)
+  const applySpriteTemplate = useEditor((s) => s.applySpriteTemplate)
+  const pinStyleAnchor = useEditor((s) => s.pinStyleAnchor)
+  const clearStyleAnchor = useEditor((s) => s.clearStyleAnchor)
+  const [templateOpen, setTemplateOpen] = useState(false)
+  const [autoTagTemplateParts, setAutoTagTemplateParts] = useState(true)
+  const [anchorOpen, setAnchorOpen] = useState(false)
+  const [anchorLabel, setAnchorLabel] = useState('')
   const dragFrame = useEditor((s) => s.dragFrame)
   const { toast } = useToast()
   const [renaming, setRenaming] = useState<string | null>(null)
@@ -239,9 +278,205 @@ export function LayersPanel() {
           <span className="font-mono text-xs uppercase tracking-wider text-zinc-300">
             Layers · {clip.layers.length} layer{clip.layers.length === 1 ? '' : 's'}
           </span>
-          <Button variant="ghost" size="icon" className="h-7 w-7 text-zinc-300 hover:text-zinc-100" onClick={addLayer} aria-label="Add layer">
-            <Plus className="h-4 w-4" />
-          </Button>
+          <div className="flex items-center gap-0.5">
+            {/* Starter Sprite Templates Popover (v0.4.0) */}
+            <Popover open={templateOpen} onOpenChange={setTemplateOpen}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-zinc-400 hover:text-teal-300"
+                      aria-label="Insert starter sprite template"
+                    >
+                      <LayoutTemplate className="h-3.5 w-3.5" />
+                    </Button>
+                  </PopoverTrigger>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Starter sprite templates</TooltipContent>
+              </Tooltip>
+              <PopoverContent side="left" align="start" className="w-64 space-y-2.5 border-zinc-800 bg-zinc-950 p-3">
+                <div className="flex items-center justify-between">
+                  <span className="font-mono text-[10px] font-semibold uppercase tracking-wider text-zinc-200">
+                    Starter Templates
+                  </span>
+                  <span className="font-mono text-[9px] text-zinc-500">
+                    {project.width}×{project.height}
+                  </span>
+                </div>
+                <p className="font-mono text-[9px] leading-snug text-zinc-400">
+                  Clean palette-locked base silhouettes ready for detailing or Motion animation.
+                </p>
+                <div className="grid max-h-60 grid-cols-2 gap-1.5 overflow-y-auto pr-0.5">
+                  {SPRITE_TEMPLATES.map((tpl) => (
+                    <button
+                      key={tpl.id}
+                      type="button"
+                      onClick={() => {
+                        const res = applySpriteTemplate(tpl.id, { autoTagParts: autoTagTemplateParts })
+                        if (res) {
+                          toast({
+                            title: `Inserted ${res.name}`,
+                            description:
+                              res.partsCount > 0
+                                ? `Palette-locked layer + ${res.partsCount} Motion parts tagged (craft ${res.craftScore}/100).`
+                                : `Palette-locked starter layer created (craft ${res.craftScore}/100).`,
+                          })
+                          setTemplateOpen(false)
+                        }
+                      }}
+                      className="flex items-center gap-2 rounded-md border border-zinc-800 bg-zinc-900/70 p-1.5 text-left transition hover:border-teal-500/50 hover:bg-zinc-900"
+                    >
+                      <TemplatePreviewThumb templateId={tpl.id} palette={project.palette} />
+                      <div className="min-w-0">
+                        <div className="truncate text-[10px] font-medium text-zinc-100">{tpl.name}</div>
+                        <div className="font-mono text-[8px] uppercase text-zinc-500">
+                          {tpl.category}
+                          {tpl.hasMotionParts ? ' · rig' : ''}
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+                <label className="flex cursor-pointer items-center justify-between border-t border-zinc-800/80 pt-2 font-mono text-[9px] text-zinc-400">
+                  <span>Auto-tag Motion body parts</span>
+                  <input
+                    type="checkbox"
+                    checked={autoTagTemplateParts}
+                    onChange={(e) => setAutoTagTemplateParts(e.target.checked)}
+                    className="h-3.5 w-3.5 accent-teal-500"
+                  />
+                </label>
+              </PopoverContent>
+            </Popover>
+
+            {/* Hero Sprite Style Anchor Popover (v0.4.0) */}
+            <Popover
+              open={anchorOpen}
+              onOpenChange={(open) => {
+                setAnchorOpen(open)
+                if (open && !anchorLabel) {
+                  setAnchorLabel(project.settings.styleProfile?.anchor?.label ?? project.name)
+                }
+              }}
+            >
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className={`h-7 w-7 ${
+                        project.settings.styleProfile?.anchor
+                          ? 'bg-teal-500/15 text-teal-300'
+                          : 'text-zinc-400 hover:text-zinc-100'
+                      }`}
+                      aria-label="Hero sprite style anchor"
+                      aria-pressed={Boolean(project.settings.styleProfile?.anchor)}
+                    >
+                      <Anchor className="h-3.5 w-3.5" />
+                    </Button>
+                  </PopoverTrigger>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {project.settings.styleProfile?.anchor
+                    ? `Hero Style Anchor: ${project.settings.styleProfile.anchor.label}`
+                    : 'Pin current frame as Hero Style Anchor'}
+                </TooltipContent>
+              </Tooltip>
+              <PopoverContent side="left" align="start" className="w-64 space-y-2.5 border-zinc-800 bg-zinc-950 p-3">
+                <div className="flex items-center justify-between">
+                  <span className="font-mono text-[10px] font-semibold uppercase tracking-wider text-zinc-200">
+                    Hero Style Anchor
+                  </span>
+                  {project.settings.styleProfile?.anchor && (
+                    <span className="rounded bg-teal-500/15 px-1.5 py-0.5 font-mono text-[9px] text-teal-300">
+                      pinned
+                    </span>
+                  )}
+                </div>
+                <p className="font-mono text-[9px] leading-snug text-zinc-400">
+                  Locks sprite height, ground margin, outline style, and palette metrics for all paired AI IDEs.
+                </p>
+                {project.settings.styleProfile?.anchor && (
+                  <div className="space-y-1.5 rounded border border-zinc-800 bg-zinc-900/70 p-2 font-mono text-[9px]">
+                    <div className="truncate font-semibold text-zinc-100">
+                      {project.settings.styleProfile.anchor.label}
+                    </div>
+                    <div className="grid grid-cols-2 gap-1 text-zinc-400">
+                      <span>
+                        Size: <strong className="text-zinc-200">{project.settings.styleProfile.anchor.spriteWidth}×{project.settings.styleProfile.anchor.spriteHeight}</strong>
+                      </span>
+                      <span>
+                        Ground: <strong className="text-zinc-200">{project.settings.styleProfile.anchor.bottomMargin}px</strong>
+                      </span>
+                      <span>
+                        Outline: <strong className="text-zinc-200">{project.settings.styleProfile.anchor.outlineStyle}</strong>
+                      </span>
+                      <span>
+                        Craft: <strong className="text-teal-300">{project.settings.styleProfile.anchor.craftScore}/100</strong>
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-0.5 pt-0.5">
+                      {project.settings.styleProfile.anchor.paletteUsed.slice(0, 12).map((hex) => (
+                        <span
+                          key={hex}
+                          className="h-3 w-3 rounded-[2px] border border-white/15"
+                          style={{ backgroundColor: hex }}
+                          title={hex}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <Input
+                  value={anchorLabel}
+                  onChange={(e) => setAnchorLabel(e.target.value)}
+                  placeholder="Hero label (e.g. Knight Hero)"
+                  aria-label="Hero style anchor label"
+                  className="h-7 border-zinc-800 bg-zinc-900 px-2 font-mono text-[10px]"
+                />
+                <div className="flex gap-1.5">
+                  <Button
+                    size="sm"
+                    className="h-7 flex-1 bg-teal-600 font-mono text-[10px] text-white hover:bg-teal-500"
+                    onClick={() => {
+                      const res = pinStyleAnchor(anchorLabel)
+                      if (res) {
+                        toast({
+                          title: `Pinned "${res.label}"`,
+                          description: `Locked ${res.spriteWidth}×${res.spriteHeight}px (${res.outlineStyle}, ${res.bottomMargin}px ground margin) for AI IDEs.`,
+                        })
+                        setAnchorOpen(false)
+                      }
+                    }}
+                  >
+                    <Anchor className="mr-1 h-3 w-3" />
+                    {project.settings.styleProfile?.anchor ? 'Update Anchor' : 'Pin Frame'}
+                  </Button>
+                  {project.settings.styleProfile?.anchor && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 border-zinc-700 font-mono text-[10px] text-zinc-300 hover:bg-zinc-800"
+                      onClick={() => {
+                        clearStyleAnchor()
+                        toast({ title: 'Style anchor unpinned' })
+                        setAnchorOpen(false)
+                      }}
+                    >
+                      Unpin
+                    </Button>
+                  )}
+                </div>
+              </PopoverContent>
+            </Popover>
+
+            <Button variant="ghost" size="icon" className="h-7 w-7 text-zinc-300 hover:text-zinc-100" onClick={addLayer} aria-label="Add layer">
+              <Plus className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
 
         {/* frames in this clip — pick a frame to see its layer cells below */}

@@ -58,6 +58,21 @@ const styleProfileSchema = z.object({
     prefer: z.array(z.string().trim().min(1).max(72).regex(/^[^\u0000-\u001f\u007f]+$/)).max(4).optional().default([]),
     avoid: z.array(z.string().trim().min(1).max(72).regex(/^[^\u0000-\u001f\u007f]+$/)).max(4).optional().default([]),
   }).strict().optional().default({ prefer: [], avoid: [] }),
+  anchor: z.object({
+    label: z.string().trim().min(1).max(64),
+    clipId: z.string().regex(/^[a-z0-9_-]{1,80}$/i),
+    frameIndex: z.number().int().min(0).max(4095),
+    canvasWidth: z.number().int().min(1).max(4096),
+    canvasHeight: z.number().int().min(1).max(4096),
+    spriteWidth: z.number().int().min(1).max(4096),
+    spriteHeight: z.number().int().min(1).max(4096),
+    heightRatio: z.number().min(0).max(1),
+    bottomMargin: z.number().int().min(0).max(4096),
+    outlineStyle: z.enum(['dark-ink', 'sel-out', 'lineless']),
+    paletteUsed: z.array(hexColor).max(24),
+    craftScore: z.number().min(0).max(100),
+    pinnedAt: z.number().int().min(0),
+  }).strict().optional(),
 }).strict();
 
 export interface ToolDef {
@@ -163,6 +178,66 @@ export const TOOL_CATALOG: ToolDef[] = [
     inputSchema: {
       ...clipRef,
       ...frameRef,
+    },
+  },
+  {
+    name: 'list_templates',
+    title: 'List starter sprite templates',
+    description:
+      'List the 8 built-in deterministic Starter Sprite Templates (chibi-humanoid, slime, rpg-sword, potion-flask, ' +
+      'treasure-chest, stone-pedestal, topdown-tree, dungeon-tile). Each template scales to any canvas size, locks strictly ' +
+      'to the project palette, and character/creature bases include Motion body-part definitions. Free (L0).',
+    tier: 'L0',
+    relay: true,
+    inputSchema: {},
+  },
+  {
+    name: 'generate_template',
+    title: 'Insert starter sprite template',
+    description:
+      'Insert a palette-locked, sel-out polished Starter Sprite Template onto a new layer on the active/specified frame ' +
+      '(and auto-tag Motion body parts for character/creature templates) in ONE undoable transaction. Returns bounds, ' +
+      'tagged parts count, and automatic craftGate score. Free (L1).',
+    tier: 'L1',
+    relay: true,
+    inputSchema: {
+      template: z
+        .enum([
+          'chibi-humanoid',
+          'slime',
+          'rpg-sword',
+          'potion-flask',
+          'treasure-chest',
+          'stone-pedestal',
+          'topdown-tree',
+          'dungeon-tile',
+        ])
+        .describe('Template id from list_templates.'),
+      ...clipRef,
+      ...frameRef,
+      autoTagParts: z
+        .boolean()
+        .optional()
+        .describe('Auto-tag Motion Composer body-part regions when supported by the template. Default true.'),
+      name: z.string().trim().min(1).max(120).optional().describe('Optional custom layer name.'),
+      ...staleGuard,
+    },
+  },
+  {
+    name: 'pin_style_anchor',
+    title: 'Pin or clear Hero Sprite Style Anchor',
+    description:
+      'Measure a finished Hero sprite frame (exact spriteWidth × spriteHeight, heightRatio, bottomMargin ground line, ' +
+      'outlineStyle dark-ink/sel-out/lineless, paletteUsed, craftScore) and pin it onto project Style Lock so every ' +
+      'connected AI IDE matches exact proportions and style across the whole asset pack. Pass clear:true to unpin. Undoable (L1).',
+    tier: 'L1',
+    relay: true,
+    inputSchema: {
+      ...clipRef,
+      ...frameRef,
+      label: z.string().trim().min(1).max(64).optional().describe('Short label for the anchor, e.g. "Hero Knight".'),
+      clear: z.boolean().optional().describe('true = unpin the current Hero Style Anchor.'),
+      ...staleGuard,
     },
   },
     {

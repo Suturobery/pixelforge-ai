@@ -28,10 +28,13 @@ import {
   computeCenterShift,
   computeTrimBounds,
   createProject as coreCreateProject,
+  defaultStyleProfile,
   locateCel,
+  measureStyleAnchor,
   pasteRegionInPlace,
   polishLayerPixelArt,
   remapBufferToPalette,
+  renderSpriteTemplate,
   replaceColorInBuffer,
   sortPaletteColors,
   writeExportPlan,
@@ -45,6 +48,8 @@ import {
   type PolishPixelArtOptions,
   type Project,
   type QAIssue,
+  type SpriteTemplateId,
+  type StyleAnchor,
   type StyleProfile,
   type StrokeHandle as CoreStrokeHandle,
 } from '@pixelforge/core'
@@ -352,6 +357,15 @@ export interface EditorState {
   setOnionRange: (patch: { prev?: number; next?: number }) => void
   /** Shared project contract for AI panel and future MCP clients. */
   setStyleProfile: (profile: StyleProfile) => void
+  /** Pin the current composited frame as the project's Hero Sprite Style Anchor (v0.4.0). */
+  pinStyleAnchor: (label?: string) => StyleAnchor | null
+  /** Clear the pinned Hero Sprite Style Anchor. */
+  clearStyleAnchor: () => void
+  /** Insert a palette-locked Starter Sprite Template on a new layer (+ optional Motion parts). */
+  applySpriteTemplate: (
+    templateId: SpriteTemplateId,
+    opts?: { autoTagParts?: boolean },
+  ) => { layerId: string; name: string; partsCount: number; craftScore: number } | null
   addLayer: () => void
   deleteLayer: (layerId: string) => void
   duplicateLayer: (layerId: string) => void
@@ -1134,6 +1148,119 @@ export const useEditor = create<EditorState>()((set, get) => ({
       bus.execute('settings.setStyleProfile', { profile }, ORIGIN)
     } catch {
       /* style profile is validated again by the core command boundary */
+    }
+  },
+
+  pinStyleAnchor: (label) => {
+    const refs = activeRefs(get())
+    if (!refs) return null
+    const project = bus.getProject()
+    const clip = project.clips.find((c) => c.id === refs.clipId)
+    const frame = clip?.frames[refs.frameIndex]
+    if (!clip || !frame) return null
+    const rgba = composeFrameRgba(project, clip, frame)
+    const anchor = measureStyleAnchor(rgba, project.width, project.height, {
+      label: (label?.trim() || `${clip.name} · F${refs.frameIndex + 1}`).slice(0, 64),
+      clipId: clip.id,
+      frameIndex: refs.frameIndex,
+    })
+    if (!anchor) {
+      toast({
+        title: 'Cannot pin empty frame',
+        description: 'Draw a sprite first, then pin it as your Hero Style Anchor.',
+        variant: 'destructive',
+      })
+      return null
+    }
+    const base = project.settings.styleProfile ?? defaultStyleProfile()
+    try {
+      bus.execute('settings.setStyleProfile', { profile: { ...base, enabled: true, anchor } }, ORIGIN)
+    } catch {
+      return null
+    }
+    toast({
+      title: `Style Anchor pinned: "${anchor.label}"`,
+      description: `${anchor.spriteWidth}×${anchor.spriteHeight}px · ground ${anchor.bottomMargin}px · ${anchor.outlineStyle} · craft ${anchor.craftScore}/100`,
+    })
+    return anchor
+  },
+
+  clearStyleAnchor: () => {
+    const existing = bus.getProject().settings.styleProfile
+    if (!existing?.anchor) return
+    const rest = { ...existing }
+    delete rest.anchor
+    try {
+      bus.execute('settings.setStyleProfile', { profile: rest }, ORIGIN)
+    } catch {
+      return
+    }
+    toast({ title: 'Style Anchor unpinned', description: 'New sprites will no longer lock to the hero metrics.' })
+  },
+
+  applySpriteTemplate: (templateId, opts) => {
+    const refs = activeRefs(get())
+    if (!refs) return null
+    const project = bus.getProject()
+    const rendered = renderSpriteTemplate(templateId, project.width, project.height, project.palette)
+    const autoTag = opts?.autoTagParts ?? true
+    let newLayerId: string | null = null
+    let taggedCount = 0
+    try {
+      bus.transaction(`Starter template: ${rendered.name}`, ORIGIN, () => {
+        bus.execute('layer.add', { clipId: refs.clipId, name: rendered.name }, ORIGIN)
+        newLayerId = bus.getProject().clips.find((c) => c.id === refs.clipId)?.layers.at(-1)?.id ?? null
+        if (!newLayerId) throw new CommandError('INVALID_STATE', 'layer add produced no id')
+        bus.execute(
+          'pixels.applyOp',
+          {
+            clipId: refs.clipId,
+            frameId: refs.frameId,
+            layerId: newLayerId,
+            ops: [{ op: 'setBuffer', buffer: new Uint8ClampedArray(rendered.buffer) }],
+          },
+          ORIGIN,
+        )
+        if (autoTag && rendered.parts.length > 0) {
+          bus.execute(
+            'part.set',
+            {
+              clipId: refs.clipId,
+              parts: rendered.parts.map((p, z) => ({
+                name: p.name,
+                layerId: newLayerId!,
+                rect: p.rect,
+                anchorFrameId: refs.frameId,
+                z,
+              })),
+            },
+            ORIGIN,
+          )
+          taggedCount = rendered.parts.length
+        }
+      })
+    } catch {
+      toast({
+        title: 'Template failed',
+        description: 'Could not insert the starter template onto this frame.',
+        variant: 'destructive',
+      })
+      return null
+    }
+    if (!newLayerId) return null
+    set({ activeLayerId: newLayerId })
+    toast({
+      title: `Inserted "${rendered.name}"`,
+      description:
+        taggedCount > 0
+          ? `Palette-locked base + ${taggedCount} Motion body parts auto-tagged (craft ${rendered.craftScore}/100).`
+          : `Palette-locked starter silhouette on a new layer (craft ${rendered.craftScore}/100).`,
+    })
+    return {
+      layerId: newLayerId,
+      name: rendered.name,
+      partsCount: taggedCount,
+      craftScore: rendered.craftScore,
     }
   },
 

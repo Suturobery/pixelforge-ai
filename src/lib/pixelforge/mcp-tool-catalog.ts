@@ -27,7 +27,7 @@ export const MCP_TOOLS: McpToolInfo[] = [
     {
     name: 'get_project_state',
     tier: 'L0',
-    description: 'Active project summary: name, size, palette, project Style Lock, clips, trash, dirty flag and the document stateHash.',
+    description: 'Active project summary: name, size, palette, project Style Lock + pinned Hero Style Anchor, clips, trash, dirty flag and the document stateHash.',
     example: {},
   },
   {
@@ -65,6 +65,24 @@ export const MCP_TOOLS: McpToolInfo[] = [
     tier: 'L0',
     description: 'Deterministic pixel-art craft linter: reports exact (x, y) coordinates of outline doubles, orphan speckles, jaggies, and pillow shading with a 0–100 score.',
     example: {},
+  },
+  {
+    name: 'list_templates',
+    tier: 'L0',
+    description: 'List the 8 built-in palette-locked Starter Sprite Templates (chibi-humanoid, slime, rpg-sword, potion-flask, treasure-chest, stone-pedestal, topdown-tree, dungeon-tile).',
+    example: {},
+  },
+  {
+    name: 'generate_template',
+    tier: 'L1',
+    description: 'Insert a palette-locked, sel-out polished Starter Sprite Template onto a new layer (auto-tags Motion body parts for character/creature bases) in one undoable transaction.',
+    example: { template: 'chibi-humanoid', autoTagParts: true },
+  },
+  {
+    name: 'pin_style_anchor',
+    tier: 'L1',
+    description: 'Measure a finished Hero sprite frame (exact dimensions, ground margin, outline style, palette used, craft score) and pin it onto Style Lock so every AI IDE matches its proportions.',
+    example: { label: 'Hero Knight' },
   },
   {
     name: 'list_vfx',

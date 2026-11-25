@@ -62,22 +62,42 @@ How to work fast and never damage the user's work.
    drawn) and `uniformTiming`. An empty in-between is a bug, not a style:
    draw it before showing the clip.
 
-## Style contract
+## Style contract & v0.4.0 AI-Proof Consistency Pack
 
 PixelForge owns the art rules — you plan, it enforces:
 
 1. **Read before drawing.** `get_project_state` includes `styleProfile`
-   (art direction, lighting, outline, palette mode, notes, feedback cues).
-   Treat it as binding: wrong-style sprites fail `validate_style`.
-2. **It is enforced by the tools you already use.** `get_palette` returns
+   (art direction, lighting, outline, palette mode, notes, feedback cues)
+   AND `styleAnchor` (when the artist pinned a Hero Sprite Style Anchor:
+   exact `spriteWidth × spriteHeight`, `bottomMargin` ground line,
+   `outlineStyle`, `paletteUsed`, and `craftScore`). Match those exact
+   proportions, ground line, and outline style on every new character/prop.
+2. **Start from clean proportions with Starter Templates.** Call
+   `list_templates` (L0) and `generate_template` (L1) to drop a palette-locked,
+   sel-out polished starter base (`chibi-humanoid`, `slime`, `rpg-sword`,
+   `potion-flask`, `treasure-chest`, `stone-pedestal`, `topdown-tree`,
+   `dungeon-tile`) onto a new layer — character templates auto-tag Motion
+   body parts (`head`, `body`, `armL`, `armR`, `legL`, `legR`) immediately.
+   Refine details on top instead of guessing anatomy from a blank grid.
+3. **Pin your Hero Sprite with `pin_style_anchor` (L1).** Once the first hero
+   sprite is approved, call `pin_style_anchor` so every subsequent sprite in
+   the project inherits the exact height, ground line, and outline signature.
+4. **Act on the automatic `craftGate` after every pixel write.** Every
+   pixel-writing tool (`set_pixels`, `fill_rect`, `draw_line`, `draw_ellipse`,
+   `draw_polygon`, `flood_fill`, `beautify_layer`, `generate_template`)
+   returns a compact `craftGate` (`score`, `grade: "clean"|"polish"|"needs_fix"`,
+   `counts`, up to 6 `topDefects` with exact `{kind, x, y}`, and `hint`).
+   If `grade !== "clean"`, fix the flagged pixels or run `beautify_layer`
+   before presenting the sprite.
+5. **It is enforced by the tools you already use.** `get_palette` returns
    the project palette; `set_pixels` and friends validate palette
    membership, and `validate_style` confirms the result obeys the profile
    (size, outline, margins). Check the state's `styleProfile` instead of
    assuming — and never invent colors outside the palette.
-3. **Change it with `set_style_profile` (L1)** when the artist asks for a
+6. **Change it with `set_style_profile` (L1)** when the artist asks for a
    style change — not silently. Off-profile edits are still possible with
    pixel tools; keep them inside the palette and outline rules.
-4. **Critique is separate from validation.** `validate_style` (free, L0)
+7. **Critique is separate from validation.** `validate_style` (free, L0)
    runs the deterministic checks — size, crisp alpha, palette membership,
    transparent background, margins — on any frame. Run it BEFORE presenting
    work; fix warnings first. Subject readability and pose clarity are

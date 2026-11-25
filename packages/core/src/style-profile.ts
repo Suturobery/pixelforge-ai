@@ -30,6 +30,26 @@ export type StylePaletteMode = (typeof STYLE_PALETTE_MODES)[number];
 export const STYLE_CAMERA_ANGLES = ['side view', 'front', '3/4 view', 'top-down', 'isometric'] as const;
 export type StyleCameraAngle = (typeof STYLE_CAMERA_ANGLES)[number];
 
+export const STYLE_ANCHOR_OUTLINES = ['dark-ink', 'sel-out', 'lineless'] as const;
+export type StyleAnchorOutline = (typeof STYLE_ANCHOR_OUTLINES)[number];
+
+/** Measured hero-sprite consistency anchor pinned by the artist (v0.4.0). */
+export interface StyleAnchor {
+  label: string;
+  clipId: string;
+  frameIndex: number;
+  canvasWidth: number;
+  canvasHeight: number;
+  spriteWidth: number;
+  spriteHeight: number;
+  heightRatio: number;
+  bottomMargin: number;
+  outlineStyle: StyleAnchorOutline;
+  paletteUsed: string[];
+  craftScore: number;
+  pinnedAt: number;
+}
+
 /**
  * Reference sprite anchor. `clipId`/`frameId` point at an existing project
  * frame; an IMPORTED reference instead embeds its PNG (`pngBase64`) at its
@@ -77,6 +97,8 @@ export interface StyleProfile {
   references: StyleReference[];
   /** Short, artist-authored cues from candidate review. */
   feedback: StyleFeedback;
+  /** Measured hero sprite anchor (proportions, ground baseline, outline, palette). */
+  anchor?: StyleAnchor;
 }
 
 export const DEFAULT_STYLE_PROFILE: Readonly<StyleProfile> = Object.freeze({
@@ -182,11 +204,58 @@ function parseStyleFeedback(value: unknown): StyleFeedback | null {
   return { prefer, avoid };
 }
 
+function parseStyleAnchor(value: unknown): StyleAnchor | undefined | null {
+  if (value === undefined || value === null) return undefined;
+  if (!isRecord(value)) return null;
+  if (
+    !validString(value.label, 64) ||
+    !value.label.trim() ||
+    !isSafeId(value.clipId) ||
+    typeof value.frameIndex !== 'number' ||
+    !Number.isInteger(value.frameIndex) ||
+    value.frameIndex < 0 ||
+    typeof value.canvasWidth !== 'number' ||
+    typeof value.canvasHeight !== 'number' ||
+    typeof value.spriteWidth !== 'number' ||
+    typeof value.spriteHeight !== 'number' ||
+    typeof value.heightRatio !== 'number' ||
+    typeof value.bottomMargin !== 'number' ||
+    typeof value.craftScore !== 'number' ||
+    typeof value.pinnedAt !== 'number' ||
+    !STYLE_ANCHOR_OUTLINES.includes(value.outlineStyle as StyleAnchorOutline) ||
+    !Array.isArray(value.paletteUsed) ||
+    value.paletteUsed.length > 32
+  ) {
+    return null;
+  }
+  const paletteUsed: string[] = [];
+  for (const hex of value.paletteUsed) {
+    if (typeof hex !== 'string' || !/^#[0-9a-f]{6}$/i.test(hex)) return null;
+    paletteUsed.push(hex.toLowerCase());
+  }
+  return {
+    label: value.label.trim(),
+    clipId: value.clipId,
+    frameIndex: value.frameIndex,
+    canvasWidth: Math.max(1, Math.round(value.canvasWidth)),
+    canvasHeight: Math.max(1, Math.round(value.canvasHeight)),
+    spriteWidth: Math.max(1, Math.round(value.spriteWidth)),
+    spriteHeight: Math.max(1, Math.round(value.spriteHeight)),
+    heightRatio: Math.max(0, Math.min(1, Number(value.heightRatio))),
+    bottomMargin: Math.max(0, Math.round(value.bottomMargin)),
+    outlineStyle: value.outlineStyle as StyleAnchorOutline,
+    paletteUsed,
+    craftScore: Math.max(0, Math.min(100, Math.round(value.craftScore))),
+    pinnedAt: Math.round(value.pinnedAt),
+  };
+}
+
 /** Strict boundary parser for saved files, UI commands, and future MCP calls. */
 export function parseStyleProfile(value: unknown): StyleProfile | null {
   if (!isRecord(value)) return null;
   const references = parseStyleReferences(value.references);
   const feedback = parseStyleFeedback(value.feedback);
+  const anchor = parseStyleAnchor(value.anchor);
   const cameraAngle =
     value.cameraAngle === undefined
       ? undefined
@@ -195,6 +264,7 @@ export function parseStyleProfile(value: unknown): StyleProfile | null {
         : null;
   if (
     cameraAngle === null ||
+    anchor === null ||
     typeof value.enabled !== 'boolean' ||
     !validString(value.name, STYLE_PROFILE_MAX_NAME) ||
     !validString(value.artDirection, STYLE_PROFILE_MAX_DIRECTION) ||
@@ -223,6 +293,7 @@ export function parseStyleProfile(value: unknown): StyleProfile | null {
     notes: value.notes.trim(),
     references,
     feedback,
+    ...(anchor !== undefined ? { anchor } : {}),
   };
 }
 
@@ -231,6 +302,7 @@ export function cloneStyleProfile(profile: StyleProfile): StyleProfile {
     ...profile,
     references: profile.references.map((reference) => ({ ...reference })),
     feedback: { prefer: [...(profile.feedback?.prefer ?? [])], avoid: [...(profile.feedback?.avoid ?? [])] },
+    ...(profile.anchor ? { anchor: { ...profile.anchor, paletteUsed: [...profile.anchor.paletteUsed] } } : {}),
   };
 }
 
@@ -251,11 +323,15 @@ export function styleProfilePromptTags(profile: StyleProfile | undefined): strin
     'light-1px': 'consistent light 1-pixel outline',
     none: null,
   };
+  const anchorTag = profile.anchor
+    ? `match hero style anchor "${profile.anchor.label}": ~${profile.anchor.spriteWidth}×${profile.anchor.spriteHeight}px silhouette on ${profile.anchor.canvasWidth}×${profile.anchor.canvasHeight} canvas, ${profile.anchor.bottomMargin}px ground margin, ${profile.anchor.outlineStyle} outline`
+    : null;
   return [
     `project art direction: ${profile.artDirection}`,
     lighting[profile.lighting],
     outline[profile.outline],
     profile.cameraAngle ? `camera angle: ${profile.cameraAngle}` : null,
+    anchorTag,
     profile.paletteMode === 'enforce' ? 'use only the supplied project palette' : null,
     profile.paletteMode === 'prefer' ? 'prefer the supplied project palette' : null,
     profile.transparentBackground ? 'isolated subject intended for a transparent background' : null,

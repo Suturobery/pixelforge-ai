@@ -49,9 +49,20 @@ export {
   TRASH_CAP,
 } from './types/document';
 
-export type { StyleCameraAngle, StyleFeedback, StyleLighting, StyleOutline, StylePaletteMode, StyleProfile, StyleReference } from './style-profile';
+export type {
+  StyleAnchor,
+  StyleAnchorOutline,
+  StyleCameraAngle,
+  StyleFeedback,
+  StyleLighting,
+  StyleOutline,
+  StylePaletteMode,
+  StyleProfile,
+  StyleReference,
+} from './style-profile';
 export {
   DEFAULT_STYLE_PROFILE,
+  STYLE_ANCHOR_OUTLINES,
   STYLE_CAMERA_ANGLES,
   STYLE_LIGHTING,
   STYLE_REFERENCE_MAX_PNG_BASE64,
@@ -203,6 +214,17 @@ export {
   type ShadeMode,
   type TrimBoundsResult,
 } from './pixels/craft';
+export {
+  SPRITE_TEMPLATES,
+  isSpriteTemplateId,
+  listSpriteTemplates,
+  measureStyleAnchor,
+  renderSpriteTemplate,
+  type RenderedSpriteTemplate,
+  type SpriteTemplateId,
+  type SpriteTemplateInfo,
+  type SpriteTemplatePart,
+} from './pixels/templates';
 export {
   clampRect,
   clearRegionInPlace,
