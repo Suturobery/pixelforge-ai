@@ -24,9 +24,12 @@
 import {
   analyzePixelCraft,
   beautifyLayer,
+  buildAsepriteJson,
+  buildAtlasAsepriteJson,
   CommandError,
   buildPlaybackCycle,
   collectUniqueOpaqueColors,
+  composeAtlasRgba,
   composeFrameRgba,
   composeSheetRgba,
   computeCenterShift,
@@ -38,12 +41,15 @@ import {
   polishLayerPixelArt,
   remapBufferToPalette,
   renderInspectionRgba,
+  slugify,
   styleProfilePromptTags,
+  upscaleRgbaNearest,
   decodePng,
   encodePng,
   harvestPalette,
   uid,
   validateStyleCandidate,
+  type AtlasLayout,
   type InspectionScale,
   type StyleCheck,
   type BlendMode,
@@ -57,6 +63,7 @@ import {
   type Project,
   type RGBA,
 } from '@pixelforge/core'
+import { generateGodot4AtlasTres, type ExportScale } from './export'
 import { getBus, useEditor } from './store'
 import { MCP_TOOLS } from './mcp-tool-catalog'
 import { hexToRgba } from './color'
@@ -959,34 +966,88 @@ const handlers: Record<string, ToolHandler> = {
     const project = getBus().getProject()
     const clip = resolveClipRef(project, args)
     if (clip.frames.length === 0) return fail('not_found', `clip "${clip.name}" has no frames`)
+    const scale: ExportScale = args.scale === 2 || args.scale === 4 || args.scale === 8 ? args.scale : 1
+    const padding = optInt(args.padding, 'padding', 0, 64) ?? 0
+    const spacing = optInt(args.spacing, 'spacing', 0, 64) ?? undefined
+    const sheetOpts = { columns: 0, padding, spacing }
     let composed: { rgba: Uint8ClampedArray; layout: SheetLayout }
     try {
-      composed = composeSheetRgba(project, clip, {
-        columns: 0, // horizontal strip (single row)
-        padding: optInt(args.padding, 'padding', 0, 64) ?? 0,
-        spacing: optInt(args.spacing, 'spacing', 0, 64) ?? undefined,
-      })
+      composed = composeSheetRgba(project, clip, sheetOpts)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       return fail('validation_failed', msg)
     }
     const { rgba, layout } = composed
-    const png = await pngDataUrl(layout.width, layout.height, rgba)
+    const outW = layout.width * scale
+    const outH = layout.height * scale
+    const outRgba = scale > 1 ? upscaleRgbaNearest(rgba, layout.width, layout.height, scale) : rgba
+    const png = await pngDataUrl(outW, outH, outRgba)
     if (png.length > MAX_EXPORT_BYTES) {
-      return fail('response_too_large', `Encoded sheet is ${(png.length / 1e6).toFixed(1)} MB — fewer frames or smaller canvas.`)
+      return fail('response_too_large', `Encoded sheet is ${(png.length / 1e6).toFixed(1)} MB — reduce scale, frames, or canvas size.`)
     }
+    const imageFilename = `${slugify(project.name)}_${slugify(clip.name)}_sheet.png`
+    const asepriteJson =
+      args.jsonFormat === 'aseprite'
+        ? buildAsepriteJson(project, clip, sheetOpts, imageFilename, scale)
+        : undefined
     return withStateHash(
       {
         clipId: clip.id,
         clipName: clip.name,
         frameCount: clip.frames.length,
-        width: layout.width,
-        height: layout.height,
-        padding: layout.padding,
-        spacing: layout.spacing,
+        scale,
+        width: outW,
+        height: outH,
+        padding: layout.padding * scale,
+        spacing: layout.spacing * scale,
         png,
+        ...(asepriteJson ? { asepriteJson } : {}),
       },
-      { summary: `Exported sprite sheet "${clip.name}" (${clip.frames.length} frames, ${layout.width}×${layout.height})` }
+      { summary: `Exported sprite sheet "${clip.name}" (${clip.frames.length} frames, ${outW}×${outH}, ${scale}×)` }
+    )
+  },
+
+  async export_atlas(args) {
+    const project = getBus().getProject()
+    if (project.clips.length === 0) return fail('not_found', 'project has no clips')
+    const scale: ExportScale = args.scale === 2 || args.scale === 4 || args.scale === 8 ? args.scale : 1
+    const columns = optInt(args.columns, 'columns', 0, 64) ?? 0
+    const padding = optInt(args.padding, 'padding', 0, 64) ?? 0
+    const spacing = optInt(args.spacing, 'spacing', 0, 64) ?? padding
+    const includeTres = args.includeTres === true
+    const atlasOpts = { columns, padding, spacing }
+    let composed: { rgba: Uint8ClampedArray; layout: AtlasLayout }
+    try {
+      composed = composeAtlasRgba(project, atlasOpts)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      return fail('validation_failed', msg)
+    }
+    const { rgba, layout } = composed
+    const outW = layout.width * scale
+    const outH = layout.height * scale
+    const outRgba = scale > 1 ? upscaleRgbaNearest(rgba, layout.width, layout.height, scale) : rgba
+    const png = await pngDataUrl(outW, outH, outRgba)
+    if (png.length > MAX_EXPORT_BYTES) {
+      return fail('response_too_large', `Encoded atlas is ${(png.length / 1e6).toFixed(1)} MB — reduce scale or frames.`)
+    }
+    const imageFilename = `${slugify(project.name)}_atlas.png`
+    const asepriteJson = buildAtlasAsepriteJson(project, atlasOpts, imageFilename, scale)
+    const tres = includeTres ? generateGodot4AtlasTres(imageFilename, layout, scale) : undefined
+    return withStateHash(
+      {
+        clipCount: layout.clips.length,
+        frameCount: layout.frames.length,
+        scale,
+        width: outW,
+        height: outH,
+        columns: layout.columns,
+        rows: layout.rows,
+        png,
+        asepriteJson,
+        ...(tres ? { tres } : {}),
+      },
+      { summary: `Exported master atlas (${layout.clips.length} clips, ${layout.frames.length} frames, ${outW}×${outH}, ${scale}×)` }
     )
   },
 

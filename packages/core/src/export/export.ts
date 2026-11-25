@@ -281,6 +281,357 @@ function blitRect(
   }
 }
 
+/** Crisp nearest-neighbor integer upscale (scale 1..8) — never blurs or mutates source. */
+export function upscaleRgbaNearest(
+  src: Uint8ClampedArray,
+  w: number,
+  h: number,
+  scale: number,
+): Uint8ClampedArray {
+  const s = intIn(scale, 1, 8, 'scale');
+  if (s === 1) return new Uint8ClampedArray(src);
+  const sw = w * s;
+  const sh = h * s;
+  if (sw > MAX_SHEET_SIDE || sh > MAX_SHEET_SIDE || sw * sh > MAX_SHEET_PIXELS) {
+    throw new ExportError(
+      'SHEET_TOO_LARGE',
+      `scaled image ${sw}×${sh} exceeds the ${MAX_SHEET_SIDE}px / ${MAX_SHEET_PIXELS}px limits — lower export scale`,
+      { width: sw, height: sh },
+    );
+  }
+  const out = new Uint8ClampedArray(sw * sh * 4);
+  for (let y = 0; y < sh; y++) {
+    const sy = Math.floor(y / s);
+    for (let x = 0; x < sw; x++) {
+      const sx = Math.floor(x / s);
+      const si = (sy * w + sx) * 4;
+      const di = (y * sw + x) * 4;
+      out[di] = src[si]!;
+      out[di + 1] = src[si + 1]!;
+      out[di + 2] = src[si + 2]!;
+      out[di + 3] = src[si + 3]!;
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Master packed atlas (all clips in one sheet) + Aseprite-compatible JSON
+// ---------------------------------------------------------------------------
+
+export interface AtlasOptions {
+  /** 0 (default) = one horizontal row per clip; >0 wraps long clips at N columns while starting each clip on a fresh row. */
+  columns?: number;
+  /** Outer margin around the atlas, px. Default 0. */
+  padding?: number;
+  /** Gap between neighbouring frames, px. Defaults to `padding`. */
+  spacing?: number;
+}
+
+export interface AtlasFrameEntry {
+  globalIndex: number;
+  clipId: string;
+  clipName: string;
+  clipFrameIndex: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  durationMs: number;
+}
+
+export interface AtlasClipSpan {
+  clipId: string;
+  name: string;
+  fps: number;
+  loop: boolean;
+  loopMode: 'forward' | 'reverse' | 'pingpong';
+  /** Inclusive global frame index range inside the master atlas. */
+  from: number;
+  to: number;
+  /** Clip sub-tags mapped into global atlas frame indices. */
+  tags: { name: string; from: number; to: number }[];
+}
+
+export interface AtlasLayout {
+  columns: number;
+  rows: number;
+  padding: number;
+  spacing: number;
+  frameWidth: number;
+  frameHeight: number;
+  width: number;
+  height: number;
+  frames: AtlasFrameEntry[];
+  clips: AtlasClipSpan[];
+}
+
+/**
+ * Resolve deterministic master-atlas geometry combining EVERY clip in the project.
+ * Each clip begins on a fresh row so animations remain visually clean and inspectable.
+ */
+export function resolveAtlasLayout(project: Project, opts: AtlasOptions = {}): AtlasLayout {
+  if (!project || !Array.isArray(project.clips) || project.clips.length === 0) {
+    throw new ExportError('EMPTY_PROJECT', 'the project has no clips to export');
+  }
+  const columns = opts.columns === undefined ? 0 : intIn(opts.columns, 0, 4096, 'columns');
+  const padding = opts.padding === undefined ? 0 : intIn(opts.padding, 0, 512, 'padding');
+  const spacing = opts.spacing === undefined ? padding : intIn(opts.spacing, 0, 512, 'spacing');
+  const w = project.width;
+  const h = project.height;
+  if (!Number.isInteger(w) || !Number.isInteger(h) || w < 1 || h < 1 || w > 65535 || h > 65535) {
+    throw new ExportError('INVALID_OPTIONS', `invalid project dimensions ${w}×${h}`);
+  }
+
+  const frames: AtlasFrameEntry[] = [];
+  const clips: AtlasClipSpan[] = [];
+  let rowCursor = 0;
+  let maxCols = 0;
+  let globalIndex = 0;
+
+  for (const clip of project.clips) {
+    if (!Array.isArray(clip.frames) || clip.frames.length === 0) {
+      throw new ExportError('EMPTY_CLIP', `clip "${clip.name}" has no frames to export`);
+    }
+    const n = clip.frames.length;
+    const clipCols = columns > 0 ? Math.min(columns, n) : n;
+    const clipRows = Math.ceil(n / clipCols);
+    const fallbackMs = Math.max(1, Math.round(1000 / Math.min(60, Math.max(1, Math.round(clip.fps || 8)))));
+    const startGlobal = globalIndex;
+
+    for (let i = 0; i < n; i++) {
+      const gx = i % clipCols;
+      const gy = rowCursor + Math.floor(i / clipCols);
+      const fr = clip.frames[i]!;
+      frames.push({
+        globalIndex,
+        clipId: clip.id,
+        clipName: clip.name,
+        clipFrameIndex: i,
+        x: padding + gx * (w + spacing),
+        y: padding + gy * (h + spacing),
+        w,
+        h,
+        durationMs: fr.durationMs > 0 ? Math.max(1, Math.round(fr.durationMs)) : fallbackMs,
+      });
+      globalIndex++;
+    }
+
+    const mappedTags = clip.tags
+      .map((t) => ({
+        name: t.name,
+        from: startGlobal + Math.max(0, Math.min(n - 1, t.from)),
+        to: startGlobal + Math.max(0, Math.min(n - 1, t.to)),
+      }))
+      .filter((t) => t.from <= t.to);
+
+    clips.push({
+      clipId: clip.id,
+      name: clip.name,
+      fps: clip.fps,
+      loop: clip.loop,
+      loopMode: clip.loopMode,
+      from: startGlobal,
+      to: globalIndex - 1,
+      tags: mappedTags,
+    });
+
+    maxCols = Math.max(maxCols, clipCols);
+    rowCursor += clipRows;
+  }
+
+  const width = 2 * padding + maxCols * w + Math.max(0, maxCols - 1) * spacing;
+  const height = 2 * padding + rowCursor * h + Math.max(0, rowCursor - 1) * spacing;
+  if (width > MAX_SHEET_SIDE || height > MAX_SHEET_SIDE || width * height > MAX_SHEET_PIXELS) {
+    throw new ExportError(
+      'SHEET_TOO_LARGE',
+      `master atlas ${width}×${height} exceeds the ${MAX_SHEET_SIDE}px / ${MAX_SHEET_PIXELS}px limits — reduce columns, padding, or frame count`,
+      { width, height },
+    );
+  }
+
+  return {
+    columns: maxCols,
+    rows: rowCursor,
+    padding,
+    spacing,
+    frameWidth: w,
+    frameHeight: h,
+    width,
+    height,
+    frames,
+    clips,
+  };
+}
+
+/** Composite ALL clips in the project into one deterministic master atlas RGBA buffer. */
+export function composeAtlasRgba(
+  project: Project,
+  opts: AtlasOptions = {},
+): { rgba: Uint8ClampedArray; layout: AtlasLayout } {
+  const layout = resolveAtlasLayout(project, opts);
+  const out = new Uint8ClampedArray(layout.width * layout.height * 4);
+  const clipMap = new Map(project.clips.map((c) => [c.id, c]));
+  for (const entry of layout.frames) {
+    const clip = clipMap.get(entry.clipId)!;
+    const frameRgba = composeFrameRgba(project, clip, clip.frames[entry.clipFrameIndex]!);
+    blitRect(out, layout.width, entry.x, entry.y, entry.w, entry.h, frameRgba);
+  }
+  return { rgba: out, layout };
+}
+
+export interface AsepriteFrameRect {
+  frame: { x: number; y: number; w: number; h: number };
+  rotated: false;
+  trimmed: false;
+  spriteSourceSize: { x: 0; y: 0; w: number; h: number };
+  sourceSize: { w: number; h: number };
+  duration: number;
+}
+
+export interface AsepriteFrameTag {
+  name: string;
+  from: number;
+  to: number;
+  direction: 'forward' | 'reverse' | 'pingpong';
+}
+
+/**
+ * Standard Aseprite JSON hash format — directly supported by Unity Aseprite Importer,
+ * Godot Aseprite Wizard, Phaser 3 (`load.aseprite`), PixiJS, and Construct.
+ */
+export interface AsepriteJson {
+  frames: Record<string, AsepriteFrameRect>;
+  meta: {
+    app: 'PixelForge AI';
+    version: string;
+    image: string;
+    format: 'RGBA8888';
+    size: { w: number; h: number };
+    scale: string;
+    frameTags: AsepriteFrameTag[];
+  };
+}
+
+/** Build Aseprite-compatible JSON metadata for a single clip sprite sheet. */
+export function buildAsepriteJson(
+  project: Project,
+  clip: Clip,
+  opts: SheetOptions,
+  imageFilename: string,
+  scale = 1,
+): AsepriteJson {
+  const s = intIn(scale, 1, 8, 'scale');
+  const layout = resolveSheetLayout(project, clip, opts);
+  assertExportFilename(imageFilename);
+  const fallbackMs = Math.max(1, Math.round(1000 / Math.min(60, Math.max(1, Math.round(clip.fps || 8)))));
+  const slugClip = slugify(clip.name);
+  const frames: Record<string, AsepriteFrameRect> = {};
+
+  clip.frames.forEach((frame, i) => {
+    const origin = sheetFrameOrigin(layout, i);
+    const w = layout.frameWidth * s;
+    const h = layout.frameHeight * s;
+    const key = `${slugClip}_${String(i).padStart(2, '0')}`;
+    frames[key] = {
+      frame: { x: origin.x * s, y: origin.y * s, w, h },
+      rotated: false,
+      trimmed: false,
+      spriteSourceSize: { x: 0, y: 0, w, h },
+      sourceSize: { w, h },
+      duration: frame.durationMs > 0 ? Math.max(1, Math.round(frame.durationMs)) : fallbackMs,
+    };
+  });
+
+  const frameTags: AsepriteFrameTag[] = [
+    {
+      name: clip.name.trim() || 'default',
+      from: 0,
+      to: clip.frames.length - 1,
+      direction: clip.loopMode,
+    },
+  ];
+  for (const t of clip.tags) {
+    const name = t.name.trim();
+    if (!name || name === frameTags[0]!.name) continue;
+    const from = Math.max(0, Math.min(clip.frames.length - 1, t.from));
+    const to = Math.max(0, Math.min(clip.frames.length - 1, t.to));
+    if (from <= to) {
+      frameTags.push({ name, from, to, direction: clip.loopMode });
+    }
+  }
+
+  return {
+    frames,
+    meta: {
+      app: 'PixelForge AI',
+      version: '0.3.0',
+      image: imageFilename,
+      format: 'RGBA8888',
+      size: { w: layout.width * s, h: layout.height * s },
+      scale: String(s),
+      frameTags,
+    },
+  };
+}
+
+/** Build Aseprite-compatible JSON metadata for a multi-clip Master Atlas. */
+export function buildAtlasAsepriteJson(
+  project: Project,
+  opts: AtlasOptions,
+  imageFilename: string,
+  scale = 1,
+): AsepriteJson {
+  const s = intIn(scale, 1, 8, 'scale');
+  const layout = resolveAtlasLayout(project, opts);
+  assertExportFilename(imageFilename);
+  const frames: Record<string, AsepriteFrameRect> = {};
+
+  for (const f of layout.frames) {
+    const w = f.w * s;
+    const h = f.h * s;
+    const key = `${slugify(f.clipName)}_${String(f.clipFrameIndex).padStart(2, '0')}`;
+    const uniqueKey = frames[key] ? `${key}_${f.globalIndex}` : key;
+    frames[uniqueKey] = {
+      frame: { x: f.x * s, y: f.y * s, w, h },
+      rotated: false,
+      trimmed: false,
+      spriteSourceSize: { x: 0, y: 0, w, h },
+      sourceSize: { w, h },
+      duration: f.durationMs,
+    };
+  }
+
+  const seenTags = new Set<string>();
+  const frameTags: AsepriteFrameTag[] = [];
+  for (const span of layout.clips) {
+    const clipTag = span.name.trim() || `clip_${span.clipId}`;
+    if (!seenTags.has(clipTag)) {
+      seenTags.add(clipTag);
+      frameTags.push({ name: clipTag, from: span.from, to: span.to, direction: span.loopMode });
+    }
+    for (const t of span.tags) {
+      const name = t.name.trim();
+      if (!name || seenTags.has(name)) continue;
+      seenTags.add(name);
+      frameTags.push({ name, from: t.from, to: t.to, direction: span.loopMode });
+    }
+  }
+
+  return {
+    frames,
+    meta: {
+      app: 'PixelForge AI',
+      version: '0.3.0',
+      image: imageFilename,
+      format: 'RGBA8888',
+      size: { w: layout.width * s, h: layout.height * s },
+      scale: String(s),
+      frameTags,
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // JSON animation metadata (stable contract — see docs/export-metadata.md)
 // ---------------------------------------------------------------------------

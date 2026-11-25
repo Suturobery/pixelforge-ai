@@ -404,15 +404,35 @@ export const TOOL_CATALOG: ToolDef[] = [
     name: 'export_sheet',
     title: 'Export sprite sheet',
     description:
-      'Render every frame of a clip (all visible layers composited) into ONE horizontal sprite-sheet PNG at native ' +
-      'pixel size — game-engine ready. Returns base64 PNG data URL + dimensions. Frames are laid out left→right with ' +
-      'optional padding/spacing.',
+      'Render every frame of a clip (all visible layers composited) into ONE horizontal sprite-sheet PNG ' +
+      '(optional nearest-neighbor scale 1/2/4/8) — game-engine ready. Returns base64 PNG data URL + dimensions, ' +
+      'plus optional Aseprite-compatible JSON metadata (for Unity, Phaser, PixiJS, and Godot).',
     tier: 'L2',
     relay: true,
     inputSchema: {
       ...clipRef,
       padding: z.number().int().min(0).max(64).optional().describe('Outer margin around the sheet, px. Default 0.'),
       spacing: z.number().int().min(0).max(64).optional().describe('Gap between frames, px. Defaults to padding.'),
+      scale: z.union([z.literal(1), z.literal(2), z.literal(4), z.literal(8)]).optional().describe('Nearest-neighbor integer upscale (1/2/4/8). Default 1.'),
+      jsonFormat: z.enum(['pixelforge', 'aseprite']).optional().describe('Include sidecar metadata in the response: "aseprite" returns standard Aseprite JSON (Unity/Phaser/PixiJS/Godot).'),
+      ...staleGuard,
+    },
+  },
+  {
+    name: 'export_atlas',
+    title: 'Export master atlas (all clips)',
+    description:
+      'Pack EVERY animation clip in the project into ONE master sprite-sheet PNG (one row per clip, or wrapped grid), ' +
+      'plus Aseprite-compatible JSON (with frameTags per clip) and optional combined Godot 4 SpriteFrames (.tres). ' +
+      'Supports nearest-neighbor scale 1/2/4/8.',
+    tier: 'L2',
+    relay: true,
+    inputSchema: {
+      columns: z.number().int().min(0).max(64).optional().describe('0 (default) = one horizontal row per clip; >0 wraps long clips at N columns.'),
+      padding: z.number().int().min(0).max(64).optional().describe('Outer margin around the atlas, px. Default 0.'),
+      spacing: z.number().int().min(0).max(64).optional().describe('Gap between frames, px. Defaults to padding.'),
+      scale: z.union([z.literal(1), z.literal(2), z.literal(4), z.literal(8)]).optional().describe('Nearest-neighbor integer upscale (1/2/4/8). Default 1.'),
+      includeTres: z.boolean().optional().describe('Also generate a combined Godot 4 SpriteFrames (.tres) resource for all clips. Default false.'),
       ...staleGuard,
     },
   },

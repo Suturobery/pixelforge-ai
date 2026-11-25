@@ -12,15 +12,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useEditor, getActiveClip } from '@/lib/pixelforge/store'
 import {
+  composeAtlasRgba,
   composeFrameRgba,
   composeSheetRgba,
   planExport,
+  resolveAtlasLayout,
   slugify,
   type ExportFormat,
   type ExportScope,
   type Project,
 } from '@pixelforge/core'
-import { runExport } from '@/lib/pixelforge/export'
+import { runAtlasExport, runExport, type JsonMetadataFormat } from '@/lib/pixelforge/export'
 import { isDesktop } from '@/lib/pixelforge/desktop-bridge'
 import { Button } from '@/components/ui/button'
 import {
@@ -103,7 +105,7 @@ export function ExportDialog({
 }) {
   const { toast } = useToast()
   const [scope, setScope] = useState<ExportScope>('clip')
-  const [format, setFormat] = useState<ExportFormat | 'gif'>('sheet')
+  const [format, setFormat] = useState<ExportFormat | 'atlas' | 'gif'>('sheet')
   const [exportScale, setExportScale] = useState<ExportScale>(1)
   const [gifBg, setGifBg] = useState('#101014')
   const [layoutMode, setLayoutMode] = useState<'horizontal' | 'grid'>('grid')
@@ -111,6 +113,7 @@ export function ExportDialog({
   const [padding, setPadding] = useState(0)
   const [spacing, setSpacing] = useState(0)
   const [includeJson, setIncludeJson] = useState(true)
+  const [jsonFormat, setJsonFormat] = useState<JsonMetadataFormat>('aseprite')
   const [includeGodotTres, setIncludeGodotTres] = useState(false)
   const [zeroPad, setZeroPad] = useState('2')
   const [baseName, setBaseName] = useState('')
@@ -140,7 +143,7 @@ export function ExportDialog({
       scope,
       clipId: activeClip.id,
       frameIndex: activeFrameIndex,
-      format: (format === 'gif' ? 'png-frames' : format) as ExportFormat,
+      format: (format === 'gif' || format === 'atlas' ? 'png-frames' : format) as ExportFormat,
       sheet: sheetOptions,
       includeJson,
       baseName: effectiveBase,
@@ -166,6 +169,38 @@ export function ExportDialog({
           ],
         },
       }
+    if (format === 'atlas') {
+      try {
+        const layout = resolveAtlasLayout(project, sheetOptions)
+        const artifacts: Array<{ filename: string; kind: 'png' | 'json'; label: string; build: () => Promise<Uint8Array> }> = [
+          {
+            filename: `${effectiveBase}_atlas.png`,
+            kind: 'png',
+            label: `Master atlas (${layout.clips.length} clips · ${layout.frames.length} frames)`,
+            build: async () => new Uint8Array(),
+          },
+        ]
+        if (includeJson) {
+          artifacts.push({
+            filename: `${effectiveBase}_atlas.json`,
+            kind: 'json',
+            label: jsonFormat === 'aseprite' ? 'Aseprite JSON (Unity/Phaser/Godot)' : 'PixelForge Atlas JSON',
+            build: async () => new Uint8Array(),
+          })
+        }
+        if (includeGodotTres) {
+          artifacts.push({
+            filename: `${effectiveBase}_atlas.tres`,
+            kind: 'json',
+            label: 'Godot 4 SpriteFrames (all clips)',
+            build: async () => new Uint8Array(),
+          })
+        }
+        return { ok: true as const, plan: { artifacts } }
+      } catch (err) {
+        return { ok: false as const, message: friendlyError(err) }
+      }
+    }
     try {
       const p = planExport(project, exportRequest)
       const artifacts = [...p.artifacts]
@@ -184,7 +219,7 @@ export function ExportDialog({
     } catch (err) {
       return { ok: false as const, message: friendlyError(err) }
     }
-  }, [project, exportRequest, format, effectiveBase, activeClip, scope, includeGodotTres])
+  }, [project, exportRequest, format, sheetOptions, effectiveBase, activeClip, scope, includeJson, jsonFormat, includeGodotTres])
 
   // Live preview: compose through the CORE export service (pixel-identical to
   // the artifacts). Sheet preview shows the active clip; all-clips previews
@@ -203,7 +238,12 @@ export function ExportDialog({
         let rgba: Uint8ClampedArray
         let w = proj.width
         let h = proj.height
-        if (format === 'sheet') {
+        if (format === 'atlas') {
+          const composed = composeAtlasRgba(proj, sheetOptions)
+          rgba = composed.rgba
+          w = composed.layout.width
+          h = composed.layout.height
+        } else if (format === 'sheet') {
           const composed = composeSheetRgba(proj, clip, sheetOptions)
           rgba = composed.rgba
           w = composed.layout.width
@@ -272,7 +312,28 @@ export function ExportDialog({
         toast({ title: 'Export complete', description: `1 file → browser downloads (GIF, ${clip.frames.length} frames, ${gifScale}×)` })
         return
       }
-      const outcome = await runExport(st.project, { ...exportRequest, overwrite, scale: exportScale, includeTres: includeGodotTres })
+      if (format === 'atlas') {
+        const outcome = await runAtlasExport(st.project, {
+          baseName: effectiveBase,
+          columns: sheetOptions.columns,
+          padding: sheetOptions.padding,
+          spacing: sheetOptions.spacing,
+          scale: exportScale,
+          includeJson,
+          jsonFormat,
+          includeTres: includeGodotTres,
+          overwrite,
+        })
+        describeOutcome(outcome)
+        return
+      }
+      const outcome = await runExport(st.project, {
+        ...exportRequest,
+        overwrite,
+        scale: exportScale,
+        includeTres: includeGodotTres,
+        jsonFormat,
+      })
       describeOutcome(outcome)
     } catch (err) {
       toast({
@@ -424,13 +485,14 @@ export function ExportDialog({
             <div className="space-y-1">
               <span className="font-mono text-[10px] uppercase tracking-wide text-zinc-400">Format</span>
               <Segmented
-                className="grid-cols-1"
+                className="grid-cols-2"
                 ariaLabel="Export format"
                 value={format}
                 onChange={setFormat}
                 options={[
                   { value: 'png-frames', label: 'PNG frames' },
                   { value: 'sheet', label: 'Sprite sheet' },
+                  { value: 'atlas', label: 'Master atlas' },
                   { value: 'gif', label: 'GIF (clip)' },
                 ]}
               />
@@ -454,11 +516,17 @@ export function ExportDialog({
             />
           </div>
 
-          {format === 'sheet' && (
+          {(format === 'sheet' || format === 'atlas') && (
             <div className="space-y-3 rounded-md border border-zinc-800 bg-zinc-900/40 p-3.5">
               <div>
-                <h3 className="font-mono text-xs font-semibold uppercase tracking-[0.14em] text-zinc-300">Sheet details</h3>
-                <p className="mt-0.5 font-mono text-[10px] text-zinc-500">Control how frames are packed into one image.</p>
+                <h3 className="font-mono text-xs font-semibold uppercase tracking-[0.14em] text-zinc-300">
+                  {format === 'atlas' ? 'Master atlas details' : 'Sheet details'}
+                </h3>
+                <p className="mt-0.5 font-mono text-[10px] text-zinc-500">
+                  {format === 'atlas'
+                    ? `Packs all ${project.clips.length} clip${project.clips.length === 1 ? '' : 's'} into one image (one row per clip, or wrapped grid).`
+                    : 'Control how frames are packed into one image.'}
+                </p>
               </div>
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <div className="space-y-1">
@@ -513,17 +581,36 @@ export function ExportDialog({
               </div>
               <div className="flex items-center justify-between gap-2">
                 <Label htmlFor="exp-json" className="font-mono text-xs text-zinc-300">
-                  JSON metadata (per sheet)
+                  JSON metadata ({format === 'atlas' ? 'combined atlas' : 'per sheet'})
                 </Label>
                 <Switch id="exp-json" checked={includeJson} onCheckedChange={setIncludeJson} />
               </div>
+              {includeJson && (
+                <div className="space-y-1">
+                  <span className="font-mono text-[10px] uppercase tracking-wide text-zinc-400">
+                    JSON schema
+                  </span>
+                  <Segmented
+                    className="grid-cols-2"
+                    ariaLabel="JSON metadata schema"
+                    value={jsonFormat}
+                    onChange={setJsonFormat}
+                    options={[
+                      { value: 'aseprite', label: 'Aseprite (Unity/Phaser)' },
+                      { value: 'pixelforge', label: 'PixelForge v2' },
+                    ]}
+                  />
+                </div>
+              )}
               <div className="flex items-center justify-between gap-2">
                 <div className="space-y-0.5">
                   <Label htmlFor="exp-tres" className="font-mono text-xs text-zinc-300">
                     Godot 4 SpriteFrames (.tres)
                   </Label>
                   <p className="text-[10px] text-zinc-500">
-                    Resource with sheet frames &amp; animation tags for AnimatedSprite2D
+                    {format === 'atlas'
+                      ? 'Single combined .tres with every clip as an AnimatedSprite2D animation'
+                      : 'Resource with sheet frames & animation tags for AnimatedSprite2D'}
                   </p>
                 </div>
                 <Switch id="exp-tres" checked={includeGodotTres} onCheckedChange={setIncludeGodotTres} />

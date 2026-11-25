@@ -177,8 +177,14 @@ export const MCP_TOOLS: McpToolInfo[] = [
   {
     name: 'export_sheet',
     tier: 'L2',
-    description: 'Export a clip as ONE horizontal sprite-sheet PNG (native size, layers composited). Returns base64 data URL.',
-    example: { clipName: 'walk', padding: 1 },
+    description: 'Export a clip as ONE horizontal sprite-sheet PNG (supports 1×–8× scale and optional Aseprite JSON for Unity/Phaser/Godot).',
+    example: { clipName: 'walk', padding: 1, scale: 1, jsonFormat: 'aseprite' },
+  },
+  {
+    name: 'export_atlas',
+    tier: 'L2',
+    description: 'Pack ALL clips into ONE master atlas PNG + Aseprite JSON (with frameTags per clip) + optional combined Godot 4 .tres.',
+    example: { scale: 1, padding: 1, includeTres: true },
   },
   {
     name: 'export_gif',

@@ -12,10 +12,16 @@
 import {
   ExportError,
   buildAllArtifacts,
+  buildAsepriteJson,
+  buildAtlasAsepriteJson,
+  composeAtlasRgba,
   decodePng,
   encodeExportPng,
   planExport,
+  slugify,
+  upscaleRgbaNearest,
   writeExportPlan,
+  type AtlasLayout,
   type ExportRequest,
   type Project,
 } from '@pixelforge/core'
@@ -24,6 +30,7 @@ import { getBridge, isDesktop, makeBridgeFs } from './desktop-bridge'
 export type { ExportRequest } from '@pixelforge/core'
 export type ExportScale = 1 | 2 | 4 | 8
 export type ExportArtifactKind = 'png' | 'json' | 'tres'
+export type JsonMetadataFormat = 'pixelforge' | 'aseprite'
 
 export interface ExportArtifact {
   filename: string
@@ -44,6 +51,20 @@ export interface ExportRunOptions extends ExportRequest {
   scale?: ExportScale
   /** Also export a Godot 4 SpriteFrames (.tres) resource for sprite sheets. */
   includeTres?: boolean
+  /** Metadata schema for JSON sidecars: PixelForge v2 (default) or Aseprite-compatible JSON. */
+  jsonFormat?: JsonMetadataFormat
+}
+
+export interface AtlasRunOptions {
+  baseName?: string
+  columns?: number
+  padding?: number
+  spacing?: number
+  scale?: ExportScale
+  includeJson?: boolean
+  jsonFormat?: JsonMetadataFormat
+  includeTres?: boolean
+  overwrite?: boolean
 }
 
 export interface GodotTresInput {
@@ -101,22 +122,59 @@ export function generateGodot4SpriteFramesTres(options: GodotTresInput): string 
   return out
 }
 
-function upscaleRgbaNearest(src: Uint8ClampedArray, w: number, h: number, scale: number): Uint8ClampedArray {
-  const sw = w * scale
-  const sh = h * scale
-  const out = new Uint8ClampedArray(sw * sh * 4)
-  for (let y = 0; y < sh; y++) {
-    const sy = Math.floor(y / scale)
-    for (let x = 0; x < sw; x++) {
-      const sx = Math.floor(x / scale)
-      const si = (sy * w + sx) * 4
-      const di = (y * sw + x) * 4
-      out[di] = src[si]
-      out[di + 1] = src[si + 1]
-      out[di + 2] = src[si + 2]
-      out[di + 3] = src[si + 3]
+/**
+ * Generate ONE combined Godot 4 SpriteFrames (.tres) resource for a multi-clip Master Atlas.
+ * Every clip (and any unique sub-tags) becomes its own named animation referencing the single atlas PNG.
+ */
+export function generateGodot4AtlasTres(
+  sheetFilename: string,
+  layout: AtlasLayout,
+  scale: ExportScale = 1,
+): string {
+  const loadSteps = layout.frames.length + 2
+  let out = `[gd_resource type="SpriteFrames" load_steps=${loadSteps} format=3]\n\n`
+  out += `[ext_resource type="Texture2D" path="res://${sheetFilename}" id="1_tex"]\n\n`
+
+  for (const f of layout.frames) {
+    out += `[sub_resource type="AtlasTexture" id="AtlasTexture_${f.globalIndex}"]\n`
+    out += `atlas = ExtResource("1_tex")\n`
+    out += `region = Rect2(${f.x * scale}, ${f.y * scale}, ${f.w * scale}, ${f.h * scale})\n\n`
+  }
+
+  const animations: string[] = []
+  const seenNames = new Set<string>()
+  const formatSlice = (from: number, to: number, baseSpeed: number) => {
+    const stepMs = 1000 / baseSpeed
+    return layout.frames
+      .slice(from, to + 1)
+      .map((f) => {
+        const dur = f.durationMs > 0 ? Number((f.durationMs / stepMs).toFixed(3)) : 1.0
+        return `{\n"duration": ${dur},\n"texture": SubResource("AtlasTexture_${f.globalIndex}")\n}`
+      })
+      .join(', ')
+  }
+
+  for (const span of layout.clips) {
+    const baseSpeed = Math.min(60, Math.max(1, span.fps || 8))
+    const name = span.name.trim() || `clip_${span.clipId}`
+    if (!seenNames.has(name)) {
+      seenNames.add(name)
+      animations.push(
+        `{\n"frames": [${formatSlice(span.from, span.to, baseSpeed)}],\n"loop": ${span.loop},\n"name": &"${name}",\n"speed": ${Number(baseSpeed.toFixed(2))}\n}`,
+      )
+    }
+    for (const tag of span.tags) {
+      const tName = tag.name.trim()
+      if (!tName || seenNames.has(tName)) continue
+      seenNames.add(tName)
+      animations.push(
+        `{\n"frames": [${formatSlice(tag.from, tag.to, baseSpeed)}],\n"loop": ${span.loop},\n"name": &"${tName}",\n"speed": ${Number(baseSpeed.toFixed(2))}\n}`,
+      )
     }
   }
+
+  out += `[resource]\n`
+  out += `animations = [${animations.join(', ')}]\n`
   return out
 }
 
@@ -144,6 +202,7 @@ export async function buildExportArtifacts(
   request: ExportRequest,
   scale: ExportScale = 1,
   includeTres = false,
+  jsonFormat: JsonMetadataFormat = 'pixelforge',
 ): Promise<ExportArtifact[]> {
   const needJsonForTres = includeTres && !request.includeJson
   const plan = planExport(project, needJsonForTres ? { ...request, includeJson: true } : request)
@@ -161,8 +220,8 @@ export async function buildExportArtifacts(
           const meta = JSON.parse(new TextDecoder().decode(f.bytes)) as Record<string, unknown>
           if (typeof meta.frameWidth === 'number') meta.frameWidth *= scale
           if (typeof meta.frameHeight === 'number') meta.frameHeight *= scale
-          if (typeof meta.sheetWidth === 'number') meta.sheetWidth *= scale
-          if (typeof meta.sheetHeight === 'number') meta.sheetHeight *= scale
+          if (typeof meta.padding === 'number') meta.padding *= scale
+          if (typeof meta.spacing === 'number') meta.spacing *= scale
           if (Array.isArray(meta.frames)) {
             meta.frames = meta.frames.map((fr: Record<string, unknown>) => ({
               ...fr,
@@ -219,18 +278,101 @@ export async function buildExportArtifacts(
     artifacts.push(...tresArtifacts)
   }
 
+  // Convert sheet JSON sidecars to standard Aseprite format when requested (Unity / Phaser / PixiJS / Godot)
+  if (jsonFormat === 'aseprite' && request.format === 'sheet' && request.includeJson) {
+    const sheetOpts = request.sheet ?? { columns: 0, padding: 0 }
+    const clipById = new Map(project.clips.map((c) => [c.id, c]))
+    artifacts = artifacts.map((f) => {
+      if (f.kind !== 'json') return f
+      try {
+        const meta = JSON.parse(new TextDecoder().decode(f.bytes)) as {
+          clip?: { id?: string }
+          image?: string
+        }
+        const clip = meta.clip?.id ? clipById.get(meta.clip.id) : project.clips[0]
+        const imageFilename = typeof meta.image === 'string' ? meta.image : f.filename.replace(/\.json$/, '_sheet.png')
+        if (!clip) return f
+        const ase = buildAsepriteJson(project, clip, sheetOpts, imageFilename, scale)
+        return { ...f, bytes: new TextEncoder().encode(JSON.stringify(ase, null, 2) + '\n') }
+      } catch {
+        return f
+      }
+    })
+  }
+
   return artifacts
 }
 
 /**
- * Run a full export: validate → build every artifact in memory → deliver.
- * Throws ExportError for invalid input (caller shows a friendly toast);
- * never mutates the project.
+ * Build Master Atlas artifacts combining ALL clips of the project into a single PNG,
+ * plus optional Aseprite/PixelForge JSON metadata and combined Godot 4 SpriteFrames (.tres).
  */
-export async function runExport(project: Project, options: ExportRunOptions): Promise<ExportOutcome> {
-  const { overwrite, scale = 1, includeTres = false, ...request } = options
-  const files = await buildExportArtifacts(project, request, scale, includeTres)
+export async function buildAtlasExportArtifacts(
+  project: Project,
+  options: Omit<AtlasRunOptions, 'overwrite'> = {},
+): Promise<ExportArtifact[]> {
+  const base = slugify(options.baseName || project.name)
+  const scale: ExportScale = options.scale ?? 1
+  const atlasOpts = {
+    columns: options.columns ?? 0,
+    padding: options.padding ?? 0,
+    spacing: options.spacing ?? options.padding ?? 0,
+  }
+  const { rgba, layout } = composeAtlasRgba(project, atlasOpts)
+  const scaledRgba = scale > 1 ? upscaleRgbaNearest(rgba, layout.width, layout.height, scale) : rgba
+  const imageFilename = `${base}_atlas.png`
+  const pngBytes = await encodeExportPng(layout.width * scale, layout.height * scale, scaledRgba)
 
+  const artifacts: ExportArtifact[] = [{ filename: imageFilename, kind: 'png', bytes: pngBytes }]
+
+  if (options.includeJson !== false) {
+    const jsonFormat = options.jsonFormat ?? 'aseprite'
+    const jsonObj =
+      jsonFormat === 'aseprite'
+        ? buildAtlasAsepriteJson(project, atlasOpts, imageFilename, scale)
+        : {
+            app: 'PixelForge AI',
+            version: 2,
+            kind: 'master-atlas',
+            image: imageFilename,
+            scale,
+            width: layout.width * scale,
+            height: layout.height * scale,
+            frameWidth: layout.frameWidth * scale,
+            frameHeight: layout.frameHeight * scale,
+            columns: layout.columns,
+            rows: layout.rows,
+            padding: layout.padding * scale,
+            spacing: layout.spacing * scale,
+            clips: layout.clips,
+            frames: layout.frames.map((f) => ({
+              ...f,
+              x: f.x * scale,
+              y: f.y * scale,
+              w: f.w * scale,
+              h: f.h * scale,
+            })),
+          }
+    artifacts.push({
+      filename: `${base}_atlas.json`,
+      kind: 'json',
+      bytes: new TextEncoder().encode(JSON.stringify(jsonObj, null, 2) + '\n'),
+    })
+  }
+
+  if (options.includeTres) {
+    const tres = generateGodot4AtlasTres(imageFilename, layout, scale)
+    artifacts.push({
+      filename: `${base}_atlas.tres`,
+      kind: 'tres',
+      bytes: new TextEncoder().encode(tres),
+    })
+  }
+
+  return artifacts
+}
+
+async function deliverExportArtifacts(files: ExportArtifact[], overwrite?: boolean): Promise<ExportOutcome> {
   // --- web prototype: browser downloads (browser names/conflict UI its own) ---
   if (!isDesktop()) {
     for (const f of files) {
@@ -243,9 +385,6 @@ export async function runExport(project: Project, options: ExportRunOptions): Pr
   const bridge = getBridge()
   if (!bridge) throw new ExportError('WRITE_FAILED', 'desktop bridge is unavailable')
 
-  let written: { filename: string; bytes: Uint8Array }[]
-  let destination: string
-
   if (files.length === 1) {
     const file = files[0]
     const save = await bridge.project.pickSave({
@@ -253,11 +392,8 @@ export async function runExport(project: Project, options: ExportRunOptions): Pr
       filters: file.kind === 'png' ? PNG_FILTERS : file.kind === 'tres' ? TRES_FILTERS : JSON_FILTERS,
     })
     if (save.canceled || !save.path) return { status: 'canceled' }
-    written = [{ filename: file.filename, bytes: file.bytes }]
-    destination = save.path
-    // Core atomic write (tmp + rename) straight to the user-picked file.
+    const written = [{ filename: file.filename, bytes: file.bytes }]
     const result = await writeExportPlan(makeBridgeFs(), dirnameOf(save.path), written, { overwrite: true })
-    // overwrite: the native save dialog already confirmed replacement.
     if (result.status === 'partial') {
       throw new ExportError('WRITE_FAILED', `could not write ${result.failures[0].filename}: ${result.failures[0].message}`)
     }
@@ -266,7 +402,6 @@ export async function runExport(project: Project, options: ExportRunOptions): Pr
 
   const picked = await bridge.exports.pickDir()
   if (picked.canceled || !picked.dir) return { status: 'canceled' }
-  destination = picked.dir
   const result = await writeExportPlan(makeBridgeFs(), picked.dir, files, { overwrite })
   if (result.status === 'conflicts') {
     return { status: 'conflicts', conflicts: result.conflicts }
@@ -279,7 +414,25 @@ export async function runExport(project: Project, options: ExportRunOptions): Pr
       { failures: result.failures },
     )
   }
-  return { status: 'saved', filenames: files.map((f) => f.filename), destination }
+  return { status: 'saved', filenames: files.map((f) => f.filename), destination: picked.dir }
+}
+
+/**
+ * Run a full export: validate → build every artifact in memory → deliver.
+ * Throws ExportError for invalid input (caller shows a friendly toast);
+ * never mutates the project.
+ */
+export async function runExport(project: Project, options: ExportRunOptions): Promise<ExportOutcome> {
+  const { overwrite, scale = 1, includeTres = false, jsonFormat = 'pixelforge', ...request } = options
+  const files = await buildExportArtifacts(project, request, scale, includeTres, jsonFormat)
+  return deliverExportArtifacts(files, overwrite)
+}
+
+/** Run a Master Atlas export combining all clips into one PNG + optional JSON / Godot 4 .tres. */
+export async function runAtlasExport(project: Project, options: AtlasRunOptions = {}): Promise<ExportOutcome> {
+  const { overwrite, ...atlasOpts } = options
+  const files = await buildAtlasExportArtifacts(project, atlasOpts)
+  return deliverExportArtifacts(files, overwrite)
 }
 
 // keep the original helper name/behavior (web downloads)
