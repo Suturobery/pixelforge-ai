@@ -208,8 +208,7 @@ source and runs electron-builder. The NSIS installer lands in `apps/desktop/rele
 | `prisma`, `src/lib/db.ts` | SQLite schema and Prisma client |
 | `scripts` | Seed, audit and benchmark scripts, CI and smoke orchestrators, packaging helpers |
 | `tests` | Root-level tests (web persistence, hardening, Brain, IDE guide, MCP review) and deploy-script tests |
-| `.github/workflows/ci.yml` | Five CI jobs |
-| `.zscripts`, `Caddyfile` | Hosted-preview deploy scripts (build, start, dev) and the gateway config |
+| `.github/workflows` | CI (`ci.yml`) and multi-OS release automation (`release.yml`) |
 | `db` | Local runtime data in development: SQLite database, MCP data, task board |
 | `sprite-review` | Sample projects and review images (straw hat, watering farmer) |
 | `artifacts` | Test and verification output; most files are deleted in the working tree |

@@ -51,6 +51,7 @@ db/knowledge-learned/
 next-env.d.ts
 local-*
 .claude
+.zcode/
 .z-ai-config
 *.log
 dev.log

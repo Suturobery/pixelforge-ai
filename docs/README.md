@@ -22,8 +22,6 @@ manifests and tool catalog for the exact version and MCP count in your checkout.
 | [Connecting AI agents](connect-agents.md) | Short agent-facing guide: pair, then the workflow agents are asked to follow | Current |
 | [Development and testing](development.md) | Install, run, test suites, CI, smoke tests, golden images | Partly stale — see its status note |
 | [Export metadata schema](export-metadata.md) | The JSON sidecar written with every sprite-sheet export (version 2) | Current, one stale note |
-| [MCP packaging readiness](desktop-mcp-packaging-readiness.md) | The original assessment of how the desktop app should host the MCP service | Superseded — kept for history |
-| [Project plan (extracted)](PixelForge_AI_Project_Plan_extracted.md) | The original product plan, v1.0, 24 October 2026 | Historical — the vision, not the current state |
 
 ## Where to start
 
