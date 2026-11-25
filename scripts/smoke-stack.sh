@@ -95,6 +95,7 @@ else
     fail "port 3000 already serves the editor — stop the dev server, or run with REUSE_DEV_SERVER=1 (developer DB active)"
   fi
   export DATABASE_URL="file:$SMOKE_TMP/ci.db"
+  export PF_MCP_DATA_DIR="$SMOKE_TMP/mcp"
   bunx prisma db push --accept-data-loss --skip-generate >/dev/null 2>&1 || fail "prisma db push failed"
   bunx next dev -p 3000 >"$SMOKE_TMP/dev-server.log" 2>&1 &
   DEV_PID=$!
