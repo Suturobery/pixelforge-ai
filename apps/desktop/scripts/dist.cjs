@@ -15,7 +15,7 @@ const platformFlag =
   process.env.PF_DIST_TARGET ||
   (process.platform === 'darwin' ? '--mac' : process.platform === 'linux' ? '--linux' : '--win');
 
-const args = [platformFlag, '--config', 'electron-builder.yml'];
+const args = [platformFlag, '--config', 'electron-builder.yml', '--publish', 'never'];
 if (generic) {
   args.push('-c.publish.provider=generic', `-c.publish.url=${generic}`);
   console.log(`[dist] update feed (generic): ${generic}`);
