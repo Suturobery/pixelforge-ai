@@ -1,3 +1,6 @@
 dist/
 node_modules/
 artifacts/
+release/
+resources/mcp/mcp-server.exe
+resources/mcp/mcp-server
