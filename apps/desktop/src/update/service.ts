@@ -47,12 +47,18 @@ export class UpdateService {
     }
   }
 
-  /** Delayed startup check so update traffic never slows first paint. */
+  /** Delayed startup check + periodic 4h poll so long sessions still get updates. */
   scheduleStartupCheck(): void {
     if (!this.feedConfigured()) return;
     setTimeout(() => {
       void this.check();
-    }, 10_000);
+    }, 10_000).unref();
+    setInterval(() => {
+      if (this.status.state === 'checking' || this.status.state === 'downloading' || this.status.state === 'downloaded') {
+        return;
+      }
+      void this.check();
+    }, 4 * 60 * 60 * 1000).unref();
   }
 
   private async ensureUpdater(): Promise<import('electron-updater').AppUpdater | null> {
