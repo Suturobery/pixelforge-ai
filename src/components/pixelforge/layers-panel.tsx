@@ -471,10 +471,10 @@ export function LayersPanel() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="flex gap-1">
+            <div className="flex flex-wrap items-center gap-0.5">
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-7 w-7 text-zinc-400" onClick={() => moveLayer(active.id, 1)} aria-label="Move layer up">
+                  <Button variant="ghost" size="icon" className="h-6 w-6 text-zinc-400" onClick={() => moveLayer(active.id, 1)} aria-label="Move layer up">
                     <ArrowUp className="h-3.5 w-3.5" />
                   </Button>
                 </TooltipTrigger>
@@ -482,7 +482,7 @@ export function LayersPanel() {
               </Tooltip>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-7 w-7 text-zinc-400" onClick={() => moveLayer(active.id, -1)} aria-label="Move layer down">
+                  <Button variant="ghost" size="icon" className="h-6 w-6 text-zinc-400" onClick={() => moveLayer(active.id, -1)} aria-label="Move layer down">
                     <ArrowDown className="h-3.5 w-3.5" />
                   </Button>
                 </TooltipTrigger>
@@ -493,7 +493,7 @@ export function LayersPanel() {
                   <Button
                     variant="ghost"
                     size="icon"
-                    className={`h-7 w-7 ${active.linked ? 'text-teal-400 hover:text-teal-300' : 'text-zinc-400'}`}
+                    className={`h-6 w-6 ${active.linked ? 'text-teal-400 hover:text-teal-300' : 'text-zinc-400'}`}
                     onClick={() => setLayerLinked(active.id, !active.linked)}
                     aria-label={active.linked ? 'Unlink layer (separate cel per frame)' : 'Link layer (share cel across all frames)'}
                   >
@@ -504,7 +504,7 @@ export function LayersPanel() {
               </Tooltip>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-7 w-7 text-zinc-400" onClick={() => duplicateLayer(active.id)} aria-label="Duplicate layer">
+                  <Button variant="ghost" size="icon" className="h-6 w-6 text-zinc-400" onClick={() => duplicateLayer(active.id)} aria-label="Duplicate layer">
                     <Copy className="h-3.5 w-3.5" />
                   </Button>
                 </TooltipTrigger>
@@ -516,7 +516,7 @@ export function LayersPanel() {
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-7 w-7 text-zinc-400"
+                      className="h-6 w-6 text-zinc-400"
                       onClick={() => mergeDown(active.id)}
                       disabled={active.linked}
                       aria-label="Merge down"
@@ -532,7 +532,7 @@ export function LayersPanel() {
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-7 w-7 text-red-400/80 hover:text-red-300"
+                    className="h-6 w-6 text-red-400/80 hover:text-red-300"
                     onClick={() => deleteLayer(active.id)}
                     disabled={clip.layers.length <= 1}
                     aria-label="Delete layer"
@@ -543,7 +543,7 @@ export function LayersPanel() {
                 <TooltipContent>Delete</TooltipContent>
               </Tooltip>
 
-              <div className="ml-auto flex items-center gap-1">
+              <div className="ml-auto flex items-center gap-0.5">
                 {/* 1-click OKLab Sel-Out & Polish Layer popover */}
                 <Popover open={polishOpen} onOpenChange={setPolishOpen}>
                   <Tooltip>
@@ -552,7 +552,7 @@ export function LayersPanel() {
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-7 w-7 text-teal-400 hover:bg-teal-500/10 hover:text-teal-300"
+                          className="h-6 w-6 text-teal-400 hover:bg-teal-500/10 hover:text-teal-300"
                           aria-label="Polish layer (sel-out & shading)"
                         >
                           <Sparkles className="h-3.5 w-3.5" />
@@ -651,7 +651,7 @@ export function LayersPanel() {
                         <Button
                           variant="ghost"
                           size="icon"
-                          className={`h-7 w-7 ${craftPinned ? 'bg-amber-500/15 text-amber-300 ring-1 ring-amber-500/40' : 'text-zinc-400 hover:text-zinc-100'}`}
+                          className={`h-6 w-6 ${craftPinned ? 'bg-amber-500/15 text-amber-300 ring-1 ring-amber-500/40' : 'text-zinc-400 hover:text-zinc-100'}`}
                           aria-label="Inspect pixel craft score & defects"
                         >
                           <ScanSearch className="h-3.5 w-3.5" />
@@ -779,7 +779,7 @@ export function LayersPanel() {
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-7 w-7 text-zinc-400 hover:text-zinc-100"
+                      className="h-6 w-6 text-zinc-400 hover:text-zinc-100"
                       onClick={(e) => {
                         const scope = e.shiftKey ? 'frame' : 'layer'
                         const ok = centerContent(scope)
@@ -806,7 +806,7 @@ export function LayersPanel() {
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-7 w-7 text-zinc-400 hover:text-zinc-100"
+                          className="h-6 w-6 text-zinc-400 hover:text-zinc-100"
                           aria-label="Auto-trim canvas to content"
                         >
                           <Crop className="h-3.5 w-3.5" />
