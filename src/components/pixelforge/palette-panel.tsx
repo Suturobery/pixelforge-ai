@@ -13,7 +13,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useEditor } from '@/lib/pixelforge/store'
 import { useAppSettings } from '@/lib/pixelforge/settings'
-import { harvestPalette, listSkinPresets } from '@pixelforge/core'
+import {
+  collectUniqueOpaqueColors,
+  composeFrameRgba,
+  harvestPalette,
+  listSkinPresets,
+  remapBufferToPalette,
+  type RGBA,
+} from '@pixelforge/core'
 import { savePanelRaw, onPanelsHydrated, resetPanelLayoutsOnce } from '@/lib/pixelforge/panel-storage'
 import { useToast } from '@/hooks/use-toast'
 import { FloatPill } from '@/components/pixelforge/float-pill'
@@ -37,6 +44,45 @@ import { encodePaletteCode, decodePaletteCode } from '@/lib/pixelforge/palette-s
 import { PALETTES } from '@/lib/pixelforge/palettes'
 
 const STORE_KEY = 'pixelforge-palette-v1'
+
+/** Live miniature preview of the active frame remapped onto a skin preset palette. */
+function SkinPreviewThumb({
+  sourceRgba,
+  sourceColors,
+  width,
+  height,
+  skinPalette,
+}: {
+  sourceRgba: Uint8ClampedArray | null
+  sourceColors: RGBA[]
+  width: number
+  height: number
+  skinPalette: readonly string[]
+}) {
+  const ref = useRef<HTMLCanvasElement>(null)
+  useEffect(() => {
+    const cv = ref.current
+    if (!cv || !sourceRgba || width <= 0 || height <= 0) return
+    const ctx = cv.getContext('2d')
+    if (!ctx) return
+    const working = new Uint8ClampedArray(sourceRgba)
+    remapBufferToPalette(working, [...skinPalette], { mode: 'ramp', sourceColors })
+    ctx.clearRect(0, 0, width, height)
+    ctx.putImageData(new ImageData(working, width, height), 0, 0)
+  }, [sourceRgba, sourceColors, width, height, skinPalette])
+
+  if (!sourceRgba) return null
+  return (
+    <canvas
+      ref={ref}
+      width={width}
+      height={height}
+      className="pixelforge-checker h-9 w-9 shrink-0 rounded border border-zinc-700/80 object-contain"
+      style={{ imageRendering: 'pixelated' }}
+      aria-hidden
+    />
+  )
+}
 
 /** true when both palettes hold the same colors in the same order (case-insensitive) */
 function sameColors(a: string[], b: string[]): boolean {
@@ -83,7 +129,11 @@ export function PalettePanel() {
   const replaceColor = useEditor((s) => s.replaceColor)
   const remapToPalette = useEditor((s) => s.remapToPalette)
   const createSkinVariants = useEditor((s) => s.createSkinVariants)
-  const activeClipName = useEditor((s) => s.project.clips.find((c) => c.id === s.activeClipId)?.name ?? 'clip')
+  const project = useEditor((s) => s.project)
+  const activeClipId = useEditor((s) => s.activeClipId)
+  const activeFrameIndex = useEditor((s) => s.activeFrameIndex)
+  const activeClip = project.clips.find((c) => c.id === activeClipId) ?? project.clips[0]
+  const activeClipName = activeClip?.name ?? 'clip'
   const floatBtnSize = useAppSettings((s) => s.floatBtnSize)
 
   // visibility lives in the editor store so the P shortcut can toggle it
@@ -108,6 +158,16 @@ export function PalettePanel() {
   const [skinsOpen, setSkinsOpen] = useState(false)
   const [selectedSkins, setSelectedSkins] = useState<string[]>(['fire', 'ice'])
   const [searchQuery, setSearchQuery] = useState('')
+
+  const skinPreviewSource = useMemo(() => {
+    if (!skinsOpen || !activeClip) return null
+    const frame = activeClip.frames[Math.min(activeFrameIndex, activeClip.frames.length - 1)]
+    if (!frame) return null
+    const rgba = composeFrameRgba(project, activeClip, frame)
+    const colors = collectUniqueOpaqueColors([rgba])
+    if (colors.length === 0) return null
+    return { rgba, colors }
+  }, [skinsOpen, project, activeClip, activeFrameIndex])
   const [filterSize, setFilterSize] = useState<'all' | '8' | '16' | '32'>('all')
   const [library, setLibrary] = useState<PalettePreset[] | null>(null)
   const [libError, setLibError] = useState(false)
@@ -635,7 +695,7 @@ export function PalettePanel() {
               </TooltipTrigger>
               <TooltipContent side="top">Generate palette-swapped skin variant clips</TooltipContent>
             </Tooltip>
-            <PopoverContent side="top" align="end" className="w-72 space-y-2 border-zinc-800 bg-zinc-950 p-2.5">
+            <PopoverContent side="top" align="end" className="w-80 space-y-2 border-zinc-800 bg-zinc-950 p-2.5">
               <div className="flex items-center justify-between gap-2">
                 <p className="font-mono text-[10px] font-semibold uppercase tracking-wider text-zinc-200">
                   Sprite Skin Variants
@@ -647,7 +707,7 @@ export function PalettePanel() {
               <p className="font-mono text-[9px] leading-tight text-zinc-400">
                 Clones the active clip into new palette-swapped clips (original stays intact) — ready for batch spritesheet or Master Atlas export.
               </p>
-              <div className="pixelforge-scroll max-h-48 space-y-1 overflow-y-auto pr-0.5">
+              <div className="pixelforge-scroll max-h-60 space-y-1 overflow-y-auto pr-0.5">
                 {listSkinPresets().map((preset) => {
                   const active = selectedSkins.includes(preset.id)
                   return (
@@ -666,6 +726,13 @@ export function PalettePanel() {
                           : 'border-zinc-800/80 bg-zinc-900/40 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
                       }`}
                     >
+                      <SkinPreviewThumb
+                        sourceRgba={skinPreviewSource?.rgba ?? null}
+                        sourceColors={skinPreviewSource?.colors ?? []}
+                        width={project.width}
+                        height={project.height}
+                        skinPalette={preset.palette}
+                      />
                       <div className="min-w-0 flex-1">
                         <p className="truncate font-mono text-[10px] font-medium">{preset.name}</p>
                         <p className="truncate font-mono text-[8px] text-zinc-500">

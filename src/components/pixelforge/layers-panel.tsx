@@ -75,7 +75,7 @@ function TemplatePreviewThumb({ templateId, palette }: { templateId: SpriteTempl
       ref={ref}
       width={32}
       height={32}
-      className="pixelforge-checker h-9 w-9 shrink-0 rounded border border-zinc-700/80"
+      className="pixelforge-checker h-12 w-12 shrink-0 rounded border border-zinc-700/80"
       style={{ imageRendering: 'pixelated' }}
       aria-hidden
     />
@@ -296,7 +296,7 @@ export function LayersPanel() {
                 </TooltipTrigger>
                 <TooltipContent side="bottom">Starter sprite templates</TooltipContent>
               </Tooltip>
-              <PopoverContent side="left" align="start" className="w-64 space-y-2.5 border-zinc-800 bg-zinc-950 p-3">
+              <PopoverContent side="left" align="start" className="w-80 space-y-2.5 border-zinc-800 bg-zinc-950 p-3">
                 <div className="flex items-center justify-between">
                   <span className="font-mono text-[10px] font-semibold uppercase tracking-wider text-zinc-200">
                     Starter Templates
@@ -306,9 +306,9 @@ export function LayersPanel() {
                   </span>
                 </div>
                 <p className="font-mono text-[9px] leading-snug text-zinc-400">
-                  Clean palette-locked base silhouettes ready for detailing or Motion animation.
+                  Hand-crafted 16-bit sprites locked to your palette — ready for detailing, Skins, or Motion.
                 </p>
-                <div className="grid max-h-60 grid-cols-2 gap-1.5 overflow-y-auto pr-0.5">
+                <div className="grid max-h-72 grid-cols-2 gap-1.5 overflow-y-auto pr-0.5">
                   {SPRITE_TEMPLATES.map((tpl) => (
                     <button
                       key={tpl.id}
