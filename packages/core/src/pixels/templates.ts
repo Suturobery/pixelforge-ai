@@ -1,9 +1,10 @@
 /**
- * PixelForge AI — deterministic Starter Sprite Templates & Style Anchor measurement.
+ * PixelForge AI — hand-crafted Starter Sprite Templates & Style Anchor measurement.
  *
- * Pure, DOM-free starter silhouettes that scale cleanly to any canvas size
- * (16×16..128×128), lock strictly to the project palette, polish with OKLab
- * sel-out + double cleanup, and emit ready-to-animate Motion PartRects.
+ * Pure, DOM-free 16-bit pixel-art starter masters (strictly locked to the active
+ * project palette via hue-matched OKLab semantic ramps) that place cleanly at
+ * native 1:1 on 32×32, crisp 2× on 64×64, and clean downscale on 16×16, with
+ * ready-to-animate Motion PartRects.
  */
 
 import { parseHexColor, rgbToOklab } from '../ai/oklab';
@@ -13,10 +14,7 @@ import {
   analyzePixelCraft,
   collectUniqueOpaqueColors,
   computeTrimBounds,
-  polishLayerPixelArt,
 } from './craft';
-import { drawEllipsePixels } from './ellipse';
-import { drawLinePixels, drawRectPixels } from './ops';
 
 export type SpriteTemplateId =
   | 'chibi-humanoid'
@@ -57,56 +55,56 @@ export const SPRITE_TEMPLATES: readonly SpriteTemplateInfo[] = [
     id: 'chibi-humanoid',
     name: 'Chibi Hero',
     category: 'character',
-    description: 'Balanced RPG chibi character base with auto-tagged head, body, arms, and legs for Motion.',
+    description: '16-bit RPG chibi adventurer with shaded hair, expressive eyes, tunic, gold belt, boots, and 6 Motion parts.',
     hasMotionParts: true,
   },
   {
     id: 'slime',
     name: 'RPG Slime',
     category: 'creature',
-    description: 'Smooth organic jelly dome with shoulder highlight, lower belly glow, and ground shadow.',
+    description: 'Glossy 16-bit jelly slime with soft top-left specular crescent, kawaii catchlight eyes, and contact shadow.',
     hasMotionParts: true,
   },
   {
     id: 'rpg-sword',
     name: 'Runic Sword',
     category: 'item',
-    description: 'Upright two-tone forged blade with fuller channel, winged crossguard, grip, and pommel.',
+    description: 'Beveled 16-bit broadsword with split steel edge lighting, glowing rune spine, winged gold guard, and pommel gem.',
     hasMotionParts: false,
   },
   {
     id: 'potion-flask',
     name: 'Potion Flask',
     category: 'item',
-    description: 'Corked glass RPG potion bottle with glowing liquid fill and specular shine.',
+    description: 'Corked alchemist bottle with glowing liquid meniscus, floating bubbles, and crisp curved glass highlight.',
     hasMotionParts: false,
   },
   {
     id: 'treasure-chest',
     name: 'Treasure Chest',
     category: 'prop',
-    description: 'Classic RPG chest with arched lid, shaded trim bands, and bright center lock clasp.',
+    description: 'Arched RPG wooden chest with shaded planks, riveted iron bands, recessed lid shadow, and golden lock clasp.',
     hasMotionParts: false,
   },
   {
     id: 'stone-pedestal',
     name: 'Stone Pedestal',
     category: 'prop',
-    description: 'Stepped carved altar block with beveled top stone and chiseled shadow face.',
+    description: 'Carved temple altar pedestal with beveled stone slab, glowing recessed rune, weathered cracks, and stepped plinth.',
     hasMotionParts: false,
   },
   {
     id: 'topdown-tree',
     name: 'RPG Tree',
     category: 'prop',
-    description: 'Layered rounded canopy foliage crown with shaded trunk and grounded shadow.',
+    description: 'Layered 16-bit foliage canopy with scalloped leaf clusters, sunlit crown highlights, bark trunk, and roots.',
     hasMotionParts: false,
   },
   {
     id: 'dungeon-tile',
     name: 'Dungeon Brick Tile',
     category: 'tile',
-    description: 'Seamless edge-to-edge beveled stone floor tile ready for 3×3 Tiled Wrap editing.',
+    description: 'Seamless beveled stone flagstones with mortar grooves, subtle cracks, and highlights ready for 3×3 Tiled Wrap.',
     hasMotionParts: false,
   },
 ] as const;
@@ -119,65 +117,402 @@ export function isSpriteTemplateId(value: string): value is SpriteTemplateId {
   return SPRITE_TEMPLATES.some((t) => t.id === value);
 }
 
-interface PaletteRoles {
-  ink: RGBA;
-  shadow: RGBA;
-  mid: RGBA;
-  light: RGBA;
-  highlight: RGBA;
-  accent: RGBA;
-  accentBright: RGBA;
-  warm: RGBA;
+// ---------------------------------------------------------------------------
+// Hue-aware OKLab semantic palette matcher (strictly within project palette)
+// ---------------------------------------------------------------------------
+
+interface LabSwatch {
+  rgba: RGBA;
+  L: number;
+  a: number;
+  b: number;
+  chroma: number;
 }
 
-function pickPaletteRoles(palette: readonly string[]): PaletteRoles {
-  const entries = palette
-    .map((hex) => {
-      const rgb = parseHexColor(hex);
-      if (!rgb) return null;
-      const lab = rgbToOklab(rgb[0], rgb[1], rgb[2]);
-      const chroma = Math.hypot(lab.a, lab.b);
-      return { hex, rgba: [rgb[0], rgb[1], rgb[2], 255] as RGBA, L: lab.L, a: lab.a, b: lab.b, chroma };
-    })
-    .filter((e): e is NonNullable<typeof e> => e !== null)
+type SymbolKey =
+  | 'k' | 's' | '0' | '1' | '2' | 'w'
+  | 'a' | 'b' | 'c'
+  | 'd' | 'e' | 'f'
+  | 'g' | 'y' | 'Y'
+  | 'p' | 'q' | 'r'
+  | 'm' | 'n' | 'o'
+  | 'u' | 'v' | 'x';
+
+type SemanticPalette = Record<SymbolKey, RGBA>;
+
+const FALLBACK_PALETTE: readonly string[] = [
+  '#141013', '#2c2137', '#4b3d44', '#76428a',
+  '#ac3232', '#d95763', '#df7126', '#eec39a',
+  '#fbf236', '#6abe30', '#37946e', '#306082',
+  '#5b6ee1', '#639bff', '#cbdbfc', '#ffffff',
+];
+
+function hexToLab(hex: string): LabSwatch | null {
+  const rgb = parseHexColor(hex);
+  if (!rgb) return null;
+  const lab = rgbToOklab(rgb[0], rgb[1], rgb[2]);
+  return {
+    rgba: [rgb[0], rgb[1], rgb[2], 255],
+    L: lab.L,
+    a: lab.a,
+    b: lab.b,
+    chroma: Math.hypot(lab.a, lab.b),
+  };
+}
+
+function closestSwatch(
+  swatches: readonly LabSwatch[],
+  targetHex: string,
+  opts?: { minL?: number; maxL?: number; weightL?: number; neutralPenalty?: number },
+): LabSwatch {
+  const target = hexToLab(targetHex)!;
+  const wL = opts?.weightL ?? 1.25;
+  const nPen = opts?.neutralPenalty ?? 0;
+  let best = swatches[0]!;
+  let bestDist = Infinity;
+  for (const s of swatches) {
+    let penalty = nPen > 0 ? s.chroma * nPen : 0;
+    if (opts?.minL !== undefined && s.L < opts.minL) penalty += (opts.minL - s.L) * 4;
+    if (opts?.maxL !== undefined && s.L > opts.maxL) penalty += (s.L - opts.maxL) * 4;
+    const dL = (s.L - target.L) * wL;
+    const da = s.a - target.a;
+    const db = s.b - target.b;
+    const d = Math.hypot(dL, da, db) + penalty;
+    if (d < bestDist) {
+      bestDist = d;
+      best = s;
+    }
+  }
+  return best;
+}
+
+function buildSemanticPalette(palette: readonly string[]): SemanticPalette {
+  const source = palette.length > 0 ? palette : FALLBACK_PALETTE;
+  const swatches = source
+    .map(hexToLab)
+    .filter((s): s is LabSwatch => s !== null)
     .sort((x, y) => x.L - y.L);
 
-  if (entries.length === 0) {
+  if (swatches.length === 0) {
+    return buildSemanticPalette(FALLBACK_PALETTE);
+  }
+
+  const at = (frac: number) =>
+    swatches[Math.min(swatches.length - 1, Math.max(0, Math.round(frac * (swatches.length - 1))))]!.rgba;
+
+  // For tiny palettes (<= 5 colors like GameBoy 4-shade), map cleanly by luminance ramp
+  if (swatches.length <= 5) {
+    const c0 = at(0);
+    const c1 = at(0.33);
+    const c2 = at(0.67);
+    const c3 = at(1);
     return {
-      ink: [26, 28, 44, 255],
-      shadow: [51, 60, 87, 255],
-      mid: [86, 108, 134, 255],
-      light: [148, 176, 194, 255],
-      highlight: [244, 244, 244, 255],
-      accent: [56, 183, 100, 255],
-      accentBright: [167, 240, 112, 255],
-      warm: [255, 205, 117, 255],
+      k: c0, s: c0,
+      0: c1, 1: c2, 2: c3, w: c3,
+      a: c1, b: c2, c: c3,
+      d: c1, e: c2, f: c3,
+      g: c1, y: c2, Y: c3,
+      p: c1, q: c2, r: c3,
+      m: c1, n: c2, o: c3,
+      u: c1, v: c2, x: c3,
     };
   }
 
-  const at = (frac: number) => entries[Math.min(entries.length - 1, Math.max(0, Math.round(frac * (entries.length - 1))))]!.rgba;
-  const chromatic = [...entries].sort((x, y) => y.chroma - x.chroma);
-  const accentEntry = chromatic[0] ?? entries[Math.floor(entries.length / 2)]!;
-  const accentBrightEntry =
-    entries.find((e) => e.L > accentEntry.L + 0.08 && e.chroma > 0.04) ??
-    entries[entries.length - 1]!;
-  const warmEntry =
-    entries
-      .filter((e) => e.b > 0.04 && e.L > 0.35 && e.L < 0.9)
-      .sort((x, y) => y.chroma - x.chroma)[0] ??
-    accentBrightEntry;
+  const ink = swatches[0]!.rgba;
+  const shadow = swatches[Math.min(1, swatches.length - 1)]!.rgba;
+  const highlight = swatches[swatches.length - 1]!.rgba;
+
+  const pick = (hex: string, minL?: number, maxL?: number, neutralPenalty?: number) =>
+    closestSwatch(swatches, hex, { minL, maxL, neutralPenalty }).rgba;
 
   return {
-    ink: at(0),
-    shadow: at(0.22),
-    mid: at(0.48),
-    light: at(0.75),
-    highlight: at(1.0),
-    accent: accentEntry.rgba,
-    accentBright: accentBrightEntry.rgba,
-    warm: warmEntry.rgba,
+    k: ink,
+    s: shadow,
+    // Steel / Stone neutral ramp (prefer low-chroma grays/slates over greens)
+    0: pick('#363240', 0.18, 0.42, 0.9),
+    1: pick('#5b5e73', 0.34, 0.62, 1.2),
+    2: pick('#c4d3e8', 0.66, 0.94, 0.8),
+    w: highlight,
+    // Warm skin ramp
+    a: pick('#c4805c', 0.45, 0.72),
+    b: pick('#eec39a', 0.68, 0.90),
+    c: pick('#fde4c8', 0.80, 1.0),
+    // Chestnut wood / hair / leather ramp
+    d: pick('#4d2b24', 0.16, 0.42),
+    e: pick('#8f4c2c', 0.34, 0.62),
+    f: pick('#d17c3a', 0.52, 0.82),
+    // Gold / warm brass ramp
+    g: pick('#a8601c', 0.38, 0.66),
+    y: pick('#e5a92e', 0.62, 0.88),
+    Y: pick('#fff266', 0.78, 1.0),
+    // Hero cobalt / teal accent ramp
+    p: pick('#284b7a', 0.24, 0.52),
+    q: pick('#4d7be0', 0.42, 0.72),
+    r: pick('#74b8ff', 0.60, 0.92),
+    // Ruby / crimson magic ramp (potion, cloak, jewel)
+    m: pick('#7d1e32', 0.22, 0.48),
+    n: pick('#cf3848', 0.40, 0.68),
+    o: pick('#ff7585', 0.58, 0.90),
+    // Emerald foliage / slime green ramp (keep leaf-green, avoid pure yellow)
+    u: pick('#245c44', 0.24, 0.50),
+    v: pick('#37946e', 0.42, 0.66),
+    x: pick('#6abe30', 0.54, 0.82),
   };
 }
+
+// ---------------------------------------------------------------------------
+// Hand-crafted 16-bit pixel-art masters
+// ---------------------------------------------------------------------------
+
+interface PixelMaster {
+  grid: readonly string[];
+  /** Optional relative Motion part rects in master grid coordinates. */
+  parts?: ReadonlyArray<{ name: string; rect: PartRect }>;
+  /** True for edge-to-edge seamless tiles. */
+  tileable?: boolean;
+}
+
+const MASTERS: Record<SpriteTemplateId, PixelMaster> = {
+  // 22×26 16-bit RPG Chibi Adventurer (spiky hair, bright eyes, cobalt tunic, red scarf, gold belt, boots)
+  'chibi-humanoid': {
+    grid: [
+      '.......kkkkkkkk.......',
+      '.....kkfeffffffkk.....',
+      '....kffeeefffffefk....',
+      '....kfeeeffffffeek....',
+      '...kdfeeddeeefffdek...',
+      '...kddedkddkddfeddk...',
+      '...kddekbbcbkkkeddk...',
+      '...kddkbbbbbbbbkddk...',
+      '....kkbbkwbbwkbbkk....',
+      '....kkbbkkbbkkbbkk....',
+      '....kkabbbbbbbbaak....',
+      '.....kkabbbbbbakk.....',
+      '......kkmmnnmmkk......',
+      '.....kppqnnnnqppk.....',
+      '....kpqqqqrrqqqqpk....',
+      '...kbbkpqrrrrqpkbbk...',
+      '...kabkpqqrrqqpkbak...',
+      '....kkkpqqqqqqpkkk....',
+      '.....kkdggYYggdkk.....',
+      '.....kkppppppppkk.....',
+      '.....kpppk..kpppk.....',
+      '.....kddk....kddk.....',
+      '....kdeek....keedk....',
+      '....kdddk....kdddk....',
+      '....kkkkk....kkkkk....',
+      '.....ssssssssssss.....',
+    ],
+    parts: [
+      { name: 'head', rect: { x: 3, y: 0, w: 16, h: 13 } },
+      { name: 'body', rect: { x: 5, y: 12, w: 12, h: 9 } },
+      { name: 'armL', rect: { x: 3, y: 13, w: 4, h: 6 } },
+      { name: 'armR', rect: { x: 15, y: 13, w: 4, h: 6 } },
+      { name: 'legL', rect: { x: 4, y: 20, w: 5, h: 5 } },
+      { name: 'legR', rect: { x: 13, y: 20, w: 5, h: 5 } },
+    ],
+  },
+
+  // 22×19 Glossy 16-bit RPG Jelly Slime
+  slime: {
+    grid: [
+      '........kkkkkk........',
+      '......kkxxxxxxkk......',
+      '.....kxxxwwxxxxvk.....',
+      '....kxxwwxxxvvvvvk....',
+      '...kxwwxxxvvvvvvvvk...',
+      '...kxxwxxvvvvvvvvvk...',
+      '..kxxvvvvvvvvvvvvvvk..',
+      '..kxvvvvvvvvvvvvvvuk..',
+      '.kxvvvvvvvvvvvvvvvvuk.',
+      '.kvvvvvvkwvvvvkwvvvuk.',
+      '.kvvvvvvkkvvvvkkvvvuk.',
+      '.kvvvvvvvvvvvvvvvvuuk.',
+      '.kvvvvvvvvvvvvvvvuuuk.',
+      '.kuvvvvvvvvvvvvvuuuuk.',
+      '..kuuvvvvvvvvvuuuuuk..',
+      '...kuuuuuuuuuuuuuuk...',
+      '....kkkkkkkkkkkkkk....',
+      '...ssssssssssssssss...',
+      '.....ssssssssssss.....',
+    ],
+    parts: [{ name: 'body', rect: { x: 1, y: 0, w: 20, h: 17 } }],
+  },
+
+  // 20×26 Forged 16-bit Runic Broadsword
+  'rpg-sword': {
+    grid: [
+      '.........kk.........',
+      '........kw2k........',
+      '........kw1k........',
+      '.......kw210k.......',
+      '.......kw210k.......',
+      '.......kw2r0k.......',
+      '.......kw2q0k.......',
+      '.......kw2r0k.......',
+      '.......kw210k.......',
+      '.......kw2r0k.......',
+      '.......kw2q0k.......',
+      '.......kw2r0k.......',
+      '.......kw210k.......',
+      '.......kw210k.......',
+      '.......kw210k.......',
+      '..kk...kw210k...kk..',
+      '.kYYkkkkw210kkkkggk.',
+      '.kYyyYYYYoYYYYyyggk.',
+      '..kggyyyynyyyygggk..',
+      '....kkkkkmmkkkkk....',
+      '........kdek........',
+      '........kedk........',
+      '........kdek........',
+      '.......kYyygk.......',
+      '.......kyogk........',
+      '........kkkk........',
+    ],
+  },
+
+  // 20×24 Corked Alchemist Potion Flask with Liquid Meniscus & Specular Arc
+  'potion-flask': {
+    grid: [
+      '.......kkkkkk.......',
+      '.......kfeefk.......',
+      '.......kfeedk.......',
+      '......kkddddkk......',
+      '.....k2ww22110k.....',
+      '......kk2210kk......',
+      '.......k2w10k.......',
+      '.......k2w10k.......',
+      '......k222110k......',
+      '.....k2w222110k.....',
+      '....k2w22222110k....',
+      '...k2w2oooooonn0k...',
+      '..k2w2ooowoonnnm0k..',
+      '..k2w2oonnnnnnnm0k..',
+      '..k22oonnnnnonnm0k..',
+      '..k2onnnnnnnnnmm0k..',
+      '..k2onnnnnnnnnmm0k..',
+      '..k2wnnnnnnnnmmm0k..',
+      '...k1onnnnnnmmm0k...',
+      '....k1mmmmmmmm0k....',
+      '.....kk000000kk.....',
+      '.......kkkkkk.......',
+      '.....ssssssssss.....',
+      '.......ssssss.......',
+    ],
+  },
+
+  // 24×21 Classic Arched 16-bit RPG Treasure Chest (exact 24-col symmetry)
+  'treasure-chest': {
+    grid: [
+      '....kkkkkkkkkkkkkkkk....',
+      '..kk22kffffeeeeffk22kk..',
+      '.k122kfffefffffeffk221k.',
+      '.k12kffeeeeeeeeeefk221k.',
+      'k012kddddddddddddddk210k',
+      'k012kffffeeeeeeeefkk210k',
+      'k012keeeeeeeeeeeeedk210k',
+      'k012kddddddddddddddk210k',
+      'k0122kkYyyyyyyyYkk22210k',
+      'k01222kYyykkyyyYk222110k',
+      'k00111kYyykkyyyYk111000k',
+      'k012kddkggyyyyggkddk210k',
+      'k012keedkkggggkkdeek210k',
+      'k012keeeeeeddeeeeeek210k',
+      'k012kddddddddddddddk210k',
+      'k012keeeeeeddeeeeeek210k',
+      'k012kddddddddddddddk210k',
+      'k001kddddddddddddddk100k',
+      '.kkkkkkkkkkkkkkkkkkkkkk.',
+      '..ssssssssssssssssssss..',
+      '....ssssssssssssssss....',
+    ],
+  },
+
+  // 22×24 Carved Temple Stone Pedestal with Glowing Rune
+  'stone-pedestal': {
+    grid: [
+      '....kkkkkkkkkkkkkk....',
+      '...kww222222222211k...',
+      '..kw222222222221110k..',
+      '..k2221111111111100k..',
+      '..k1111000000000000k..',
+      '...kk110000000000kk...',
+      '....k211111111100k....',
+      '....k21111kk11100k....',
+      '....k2111krrk1100k....',
+      '....k211krwwrk100k....',
+      '....k2111kqqk1100k....',
+      '....k21111kp11100k....',
+      '....k211111111100k....',
+      '....k211k11111100k....',
+      '....k2111k1111100k....',
+      '....k111111111000k....',
+      '...k22211111111000k...',
+      '..kw222222222111000k..',
+      '..k2211111111111000k..',
+      '..k1111111111100000k..',
+      '..k0000000000000000k..',
+      '...kkkkkkkkkkkkkkkk...',
+      '..ssssssssssssssssss..',
+      '....ssssssssssssss....',
+    ],
+  },
+
+  // 26×26 Lush 16-bit RPG Tree with Scalloped Leaf Clusters & Bark Trunk
+  'topdown-tree': {
+    grid: [
+      '........kkkkkkkkkk........',
+      '......kkxxxvxvxxxxkk......',
+      '.....kxxxxwwxxxxvvvvk.....',
+      '....kxxxwxxxxxvvvvvvvk....',
+      '...kxxxxxxxxxvvvvvvvvuk...',
+      '..kxxxxvxvvxvvvvvvvvvuuk..',
+      '..kxxxvvvvvvvvvvvvvvvuuk..',
+      '.kxxxvvvvvvvvvvvxvvvuuuuk.',
+      '.kxxvvxvvvvvvvvvvvvvuuuuk.',
+      '.kxxvvvvvvvvvvvvvvvvuuuuk.',
+      '.kvvvvvvvvxvvvvvvvuuuuuuk.',
+      '.kvvvvvvvvvvvvvvvuuuuuuuk.',
+      '..kuvvvvvvvvvvvvuuuuuuuk..',
+      '..kuuvvvvvvvvvvuuuuuuuk...',
+      '...kuuuuvvvvvuuuuuuuuk....',
+      '....kkuuuuuuuuuuuuukk.....',
+      '......kkkkuuuuuukkk.......',
+      '.........kfeefdk..........',
+      '.........kfeeddk..........',
+      '.........kfeefdk..........',
+      '.........kfedddk..........',
+      '........kfeeddddk.........',
+      '.......kfeedddeddk........',
+      '......kkdddddddddkk.......',
+      '.....sssssssssssssss......',
+      '.......sssssssssss........',
+    ],
+  },
+
+  // 16×16 Seamless Running-Bond Beveled Dungeon Flagstone Brick Tile
+  'dungeon-tile': {
+    grid: [
+      'kkkkkkkkkkkkkkkk',
+      'k2222221k2222221',
+      'k2111110k2111110',
+      'k2112110k2111110',
+      'k2111110k2101110',
+      'k2111110k2110110',
+      'k1000000k1000000',
+      'kkkkkkkkkkkkkkkk',
+      '2221k2222221k222',
+      '1110k2111110k211',
+      '1110k2112110k211',
+      '1010k2111110k211',
+      '1100k2111110k211',
+      '1110k2111110k211',
+      '0000k1000000k100',
+      'kkkkkkkkkkkkkkkk',
+    ],
+    tileable: true,
+  },
+};
 
 function setPx(buf: Uint8ClampedArray, w: number, h: number, x: number, y: number, c: RGBA): void {
   if (x < 0 || y < 0 || x >= w || y >= h) return;
@@ -197,248 +532,90 @@ function clampPartRect(r: PartRect, w: number, h: number): PartRect {
 }
 
 /**
- * Deterministically render a crisp pixel-art starter template fitted to `width × height`
- * using the project's palette, complete with sel-out polish and Motion part regions.
+ * Deterministically render a crisp 16-bit pixel-art starter template fitted to
+ * `width × height` strictly within `palette`, with ready-to-animate Motion parts.
  */
 export function renderSpriteTemplate(
   id: SpriteTemplateId,
   width: number,
   height: number,
   palette: readonly string[],
-  opts: { polish?: boolean } = {},
+  _opts: { polish?: boolean } = {},
 ): RenderedSpriteTemplate {
   const info = SPRITE_TEMPLATES.find((t) => t.id === id) ?? SPRITE_TEMPLATES[0]!;
+  const master = MASTERS[info.id];
   const w = Math.max(8, Math.round(width));
   const h = Math.max(8, Math.round(height));
   const buf = new Uint8ClampedArray(w * h * 4);
-  const c = pickPaletteRoles(palette);
+  const sem = buildSemanticPalette(palette);
+
+  const mw = Math.max(...master.grid.map((row) => row.length));
+  const mh = master.grid.length;
+
   const parts: SpriteTemplatePart[] = [];
-  const shouldPolish = opts.polish !== false && id !== 'dungeon-tile';
 
-  const cx = (w - 1) / 2;
-  const px = (fx: number) => Math.round(fx * (w - 1));
-  const py = (fy: number) => Math.round(fy * (h - 1));
-
-  if (id === 'chibi-humanoid') {
-    // Ground shadow
-    drawEllipsePixels(buf, w, h, px(0.28), py(0.84), px(0.72), py(0.92), 1, c.shadow, true, false);
-
-    // Legs (two separate feet so Walk/Run presets animate cleanly)
-    const legTop = py(0.67);
-    const legBot = py(0.86);
-    const lLegL = px(0.32);
-    const lLegR = px(0.46);
-    const rLegL = px(0.54);
-    const rLegR = px(0.68);
-    drawRectPixels(buf, w, h, lLegL, legTop, lLegR, legBot, 1, c.shadow, true, false);
-    drawRectPixels(buf, w, h, lLegL, legTop, Math.max(lLegL, lLegR - 1), Math.max(legTop, legBot - 1), 1, c.mid, true, false);
-    drawRectPixels(buf, w, h, rLegL, legTop, rLegR, legBot, 1, c.shadow, true, false);
-    drawRectPixels(buf, w, h, rLegL, legTop, Math.max(rLegL, rLegR - 1), Math.max(legTop, legBot - 1), 1, c.mid, true, false);
-
-    // Arms
-    const armTop = py(0.49);
-    const armBot = py(0.67);
-    const lArmL = px(0.20);
-    const lArmR = px(0.31);
-    const rArmL = px(0.69);
-    const rArmR = px(0.80);
-    drawRectPixels(buf, w, h, lArmL, armTop, lArmR, armBot, 1, c.accent, true, false);
-    drawRectPixels(buf, w, h, lArmL, armTop, lArmR, Math.max(armTop, Math.round((armTop + armBot) / 2)), 1, c.accentBright, true, false);
-    drawRectPixels(buf, w, h, rArmL, armTop, rArmR, armBot, 1, c.shadow, true, false);
-    drawRectPixels(buf, w, h, rArmL, armTop, rArmR, Math.max(armTop, Math.round((armTop + armBot) / 2)), 1, c.accent, true, false);
-
-    // Torso tunic
-    const bodyL = px(0.31);
-    const bodyR = px(0.69);
-    const bodyTop = py(0.46);
-    const bodyBot = py(0.69);
-    drawRectPixels(buf, w, h, bodyL, bodyTop, bodyR, bodyBot, 1, c.accent, true, false);
-    drawRectPixels(buf, w, h, bodyL, bodyTop, Math.round((bodyL + bodyR) / 2), Math.max(bodyTop, bodyBot - 2), 1, c.accentBright, true, false);
-    // Belt accent
-    const beltY = py(0.63);
-    drawLinePixels(buf, w, h, bodyL, beltY, bodyR, beltY, 1, c.shadow, false);
-    setPx(buf, w, h, Math.round(cx), beltY, c.warm);
-
-    // Oversized chibi head (expressive RPG silhouette)
-    const headL = px(0.24);
-    const headR = px(0.76);
-    const headTop = py(0.14);
-    const headBot = py(0.49);
-    drawEllipsePixels(buf, w, h, headL, headTop, headR, headBot, 1, c.warm, true, false);
-    // Top-left forehead highlight
-    drawEllipsePixels(buf, w, h, px(0.30), py(0.18), px(0.56), py(0.32), 1, c.highlight, true, false);
-    // Simple hair cap
-    drawEllipsePixels(buf, w, h, headL, headTop, headR, py(0.28), 1, c.mid, true, false);
-    drawEllipsePixels(buf, w, h, px(0.28), py(0.15), px(0.54), py(0.23), 1, c.light, true, false);
-    // Crisp eye anchors
-    const eyeY = py(0.36);
-    const eyeOff = Math.max(2, Math.round(w * 0.1));
-    setPx(buf, w, h, Math.round(cx - eyeOff), eyeY, c.ink);
-    setPx(buf, w, h, Math.round(cx + eyeOff), eyeY, c.ink);
-    if (h >= 28) {
-      setPx(buf, w, h, Math.round(cx - eyeOff), eyeY + 1, c.ink);
-      setPx(buf, w, h, Math.round(cx + eyeOff), eyeY + 1, c.ink);
-    }
-
-    parts.push(
-      { name: 'head', rect: clampPartRect({ x: headL - 1, y: headTop - 1, w: headR - headL + 3, h: headBot - headTop + 2 }, w, h) },
-      { name: 'body', rect: clampPartRect({ x: bodyL, y: bodyTop, w: bodyR - bodyL + 1, h: bodyBot - bodyTop + 1 }, w, h) },
-      { name: 'armL', rect: clampPartRect({ x: lArmL - 1, y: armTop - 1, w: lArmR - lArmL + 2, h: armBot - armTop + 3 }, w, h) },
-      { name: 'armR', rect: clampPartRect({ x: rArmL, y: armTop - 1, w: rArmR - rArmL + 2, h: armBot - armTop + 3 }, w, h) },
-      { name: 'legL', rect: clampPartRect({ x: lLegL - 1, y: legTop, w: lLegR - lLegL + 2, h: legBot - legTop + 2 }, w, h) },
-      { name: 'legR', rect: clampPartRect({ x: rLegL, y: legTop, w: rLegR - rLegL + 2, h: legBot - legTop + 2 }, w, h) },
-    );
-  } else if (id === 'slime') {
-    const rx = Math.max(4, w * 0.30);
-    const ry = Math.max(4, h * 0.26);
-    const groundY = py(0.80);
-    const cy = groundY - ry * 0.78;
-
-    drawEllipsePixels(buf, w, h, Math.round(cx - rx * 0.92), groundY - 1, Math.round(cx + rx * 0.92), Math.min(h - 2, groundY + Math.max(1, Math.round(h * 0.05))), 1, c.shadow, true, false);
-
-    for (let y = 1; y < h - 1; y++) {
-      const ny = (y - cy) / ry;
-      if (ny < -1.02 || ny > 0.96 || y > groundY) continue;
-      const effRx = rx * (1 + 0.14 * Math.max(-0.6, ny));
-      for (let x = 1; x < w - 1; x++) {
-        const nx = (x - cx) / effRx;
-        const pwr = ny > 0 ? 2.5 : 2.0;
-        if (Math.pow(Math.abs(nx), pwr) + Math.pow(Math.abs(ny), pwr) <= 1.0) {
-          const lightDot = -nx * 0.52 - ny * 0.85;
-          if (lightDot > 0.35) setPx(buf, w, h, x, y, c.accentBright);
-          else if (lightDot < -0.25 || ny > 0.58) setPx(buf, w, h, x, y, c.shadow);
-          else setPx(buf, w, h, x, y, c.accent);
+  if (master.tileable) {
+    // Seamless edge-to-edge tiling across any canvas dimensions
+    for (let y = 0; y < h; y++) {
+      const row = master.grid[y % mh]!;
+      for (let x = 0; x < w; x++) {
+        const ch = row[x % row.length] as SymbolKey | '.';
+        if (ch && ch !== '.' && ch in sem) {
+          setPx(buf, w, h, x, y, sem[ch]);
         }
       }
     }
-    // Glossy shoulder highlight
-    const sx = Math.round(cx - rx * 0.42);
-    const sy = Math.round(cy - ry * 0.44);
-    drawEllipsePixels(buf, w, h, sx - Math.max(1, Math.round(w * 0.04)), sy - 1, sx + Math.max(1, Math.round(w * 0.04)), sy + 1, 1, c.highlight, true, false);
-    // Cute eyes
-    const ex = Math.max(2, Math.round(rx * 0.36));
-    const ey = Math.round(cy + ry * 0.12);
-    setPx(buf, w, h, Math.round(cx - ex), ey, c.ink);
-    setPx(buf, w, h, Math.round(cx + ex), ey, c.ink);
-    if (h >= 28) {
-      setPx(buf, w, h, Math.round(cx - ex), ey + 1, c.ink);
-      setPx(buf, w, h, Math.round(cx + ex), ey + 1, c.ink);
-    }
-
-    parts.push({
-      name: 'body',
-      rect: clampPartRect({ x: Math.round(cx - rx - 1), y: Math.round(cy - ry - 1), w: Math.round(rx * 2 + 3), h: Math.round(groundY - (cy - ry) + 3) }, w, h),
-    });
-  } else if (id === 'rpg-sword') {
-    const bladeHalf = Math.max(1, Math.round(w * 0.08));
-    const midX = Math.round(cx);
-    const tipY = py(0.12);
-    const guardY = py(0.66);
-    // Pointed blade tip
-    for (let dy = 0; dy <= bladeHalf; dy++) {
-      const y = tipY + dy;
-      drawLinePixels(buf, w, h, midX - dy, y, midX, y, 1, c.highlight, false);
-      drawLinePixels(buf, w, h, midX, y, midX + dy, y, 1, c.mid, false);
-    }
-    // Two-tone forged steel blade
-    drawRectPixels(buf, w, h, midX - bladeHalf, tipY + bladeHalf, midX, guardY, 1, c.light, true, false);
-    drawRectPixels(buf, w, h, midX + 1, tipY + bladeHalf, midX + bladeHalf, guardY, 1, c.shadow, true, false);
-    drawLinePixels(buf, w, h, midX - bladeHalf, tipY + bladeHalf + 1, midX - bladeHalf, guardY - 1, 1, c.highlight, false);
-    // Glowing fuller channel
-    drawLinePixels(buf, w, h, midX, tipY + bladeHalf + 2, midX, guardY - 2, 1, c.accentBright, false);
-    // Winged crossguard
-    const guardHalf = Math.max(3, Math.round(w * 0.24));
-    const guardH = Math.max(2, Math.round(h * 0.08));
-    drawRectPixels(buf, w, h, midX - guardHalf, guardY, midX + guardHalf, guardY + guardH, 1, c.warm, true, false);
-    drawLinePixels(buf, w, h, midX - guardHalf, guardY, midX + guardHalf, guardY, 1, c.highlight, false);
-    // Wrapped grip
-    const gripHalf = Math.max(1, Math.round(w * 0.05));
-    const pommelY = py(0.84);
-    drawRectPixels(buf, w, h, midX - gripHalf, guardY + guardH + 1, midX + gripHalf, pommelY, 1, c.shadow, true, false);
-    // Pommel jewel
-    const pomR = Math.max(2, Math.round(w * 0.08));
-    drawEllipsePixels(buf, w, h, midX - pomR, pommelY, midX + pomR, Math.min(h - 2, pommelY + pomR * 2), 1, c.warm, true, false);
-    setPx(buf, w, h, midX, pommelY + Math.max(1, Math.floor(pomR)), c.accentBright);
-  } else if (id === 'potion-flask') {
-    const midX = Math.round(cx);
-    // Cork stopper
-    drawRectPixels(buf, w, h, px(0.41), py(0.14), px(0.59), py(0.24), 1, c.warm, true, false);
-    // Glass neck + rim
-    drawRectPixels(buf, w, h, px(0.36), py(0.24), px(0.64), py(0.30), 1, c.light, true, false);
-    drawRectPixels(buf, w, h, px(0.41), py(0.30), px(0.59), py(0.42), 1, c.mid, true, false);
-    // Round glass body
-    drawEllipsePixels(buf, w, h, px(0.22), py(0.38), px(0.78), py(0.86), 1, c.mid, true, false);
-    // Glowing liquid lower 65%
-    drawEllipsePixels(buf, w, h, px(0.26), py(0.50), px(0.74), py(0.83), 1, c.accent, true, false);
-    drawEllipsePixels(buf, w, h, px(0.30), py(0.51), px(0.68), py(0.60), 1, c.accentBright, true, false);
-    // Specular glass streak
-    drawLinePixels(buf, w, h, px(0.31), py(0.48), px(0.31), py(0.66), 1, c.highlight, false);
-    setPx(buf, w, h, midX - Math.max(2, Math.round(w * 0.14)), py(0.71), c.highlight);
-  } else if (id === 'treasure-chest') {
-    // Shadow
-    drawEllipsePixels(buf, w, h, px(0.16), py(0.79), px(0.84), py(0.89), 1, c.shadow, true, false);
-    // Base wooden box
-    drawRectPixels(buf, w, h, px(0.18), py(0.48), px(0.82), py(0.82), 1, c.shadow, true, false);
-    drawRectPixels(buf, w, h, px(0.20), py(0.50), px(0.76), py(0.79), 1, c.mid, true, false);
-    // Arched lid
-    drawEllipsePixels(buf, w, h, px(0.18), py(0.24), px(0.82), py(0.56), 1, c.warm, true, false);
-    drawRectPixels(buf, w, h, px(0.18), py(0.44), px(0.82), py(0.52), 1, c.shadow, true, false);
-    // Vertical metal trim straps
-    const strapW = Math.max(1, Math.round(w * 0.06));
-    drawRectPixels(buf, w, h, px(0.26), py(0.28), px(0.26) + strapW, py(0.81), 1, c.light, true, false);
-    drawRectPixels(buf, w, h, px(0.74) - strapW, py(0.28), px(0.74), py(0.81), 1, c.light, true, false);
-    // Bright gold lock clasp
-    drawRectPixels(buf, w, h, px(0.44), py(0.45), px(0.56), py(0.60), 1, c.highlight, true, false);
-    setPx(buf, w, h, Math.round(cx), py(0.53), c.ink);
-  } else if (id === 'stone-pedestal') {
-    drawEllipsePixels(buf, w, h, px(0.14), py(0.82), px(0.86), py(0.92), 1, c.ink, true, false);
-    // Wide plinth
-    drawRectPixels(buf, w, h, px(0.18), py(0.70), px(0.82), py(0.85), 1, c.shadow, true, false);
-    drawRectPixels(buf, w, h, px(0.18), py(0.70), px(0.70), py(0.76), 1, c.mid, true, false);
-    // Center altar pillar
-    drawRectPixels(buf, w, h, px(0.26), py(0.42), px(0.74), py(0.71), 1, c.shadow, true, false);
-    drawRectPixels(buf, w, h, px(0.26), py(0.42), px(0.62), py(0.69), 1, c.mid, true, false);
-    // Stepped crown + beveled highlight
-    drawRectPixels(buf, w, h, px(0.20), py(0.32), px(0.80), py(0.43), 1, c.mid, true, false);
-    drawRectPixels(buf, w, h, px(0.20), py(0.32), px(0.72), py(0.37), 1, c.light, true, false);
-    drawLinePixels(buf, w, h, px(0.21), py(0.32), px(0.70), py(0.32), 1, c.highlight, false);
-  } else if (id === 'topdown-tree') {
-    // Ground shadow
-    drawEllipsePixels(buf, w, h, px(0.22), py(0.76), px(0.78), py(0.90), 1, c.shadow, true, false);
-    // Trunk
-    drawRectPixels(buf, w, h, px(0.41), py(0.54), px(0.59), py(0.82), 1, c.warm, true, false);
-    drawRectPixels(buf, w, h, px(0.51), py(0.54), px(0.59), py(0.82), 1, c.shadow, true, false);
-    // Layered foliage blobs
-    drawEllipsePixels(buf, w, h, px(0.18), py(0.22), px(0.82), py(0.66), 1, c.shadow, true, false);
-    drawEllipsePixels(buf, w, h, px(0.20), py(0.16), px(0.78), py(0.58), 1, c.accent, true, false);
-    drawEllipsePixels(buf, w, h, px(0.24), py(0.14), px(0.62), py(0.42), 1, c.accentBright, true, false);
-    drawEllipsePixels(buf, w, h, px(0.28), py(0.16), px(0.46), py(0.28), 1, c.highlight, true, false);
   } else {
-    // dungeon-tile: seamless edge-to-edge beveled stone bricks
-    drawRectPixels(buf, w, h, 0, 0, w - 1, h - 1, 1, c.mid, true, false);
-    const halfY = Math.floor(h / 2);
-    const halfX = Math.floor(w / 2);
-    // Mortar grooves
-    drawLinePixels(buf, w, h, 0, 0, w - 1, 0, 1, c.ink, false);
-    drawLinePixels(buf, w, h, 0, halfY, w - 1, halfY, 1, c.ink, false);
-    drawLinePixels(buf, w, h, 0, 0, 0, halfY, 1, c.ink, false);
-    drawLinePixels(buf, w, h, halfX, halfY, halfX, h - 1, 1, c.ink, false);
-    // Top-left stone bevel highlights
-    drawLinePixels(buf, w, h, 1, 1, w - 2, 1, 1, c.light, false);
-    drawLinePixels(buf, w, h, 1, halfY + 1, w - 2, halfY + 1, 1, c.light, false);
-    // Bottom-right shadow bevels
-    drawLinePixels(buf, w, h, 1, halfY - 1, w - 2, halfY - 1, 1, c.shadow, false);
-    drawLinePixels(buf, w, h, 1, h - 1, w - 2, h - 1, 1, c.shadow, false);
-  }
+    // Choose crisp integer scale when master fits (e.g. 1× on 32×32, 2× on 64×64),
+    // otherwise scale proportionally to fit ~92% of smaller canvases (e.g. 16×16).
+    const intScale = Math.min(Math.floor(w / mw), Math.floor(h / mh));
+    let drawW: number;
+    let drawH: number;
+    if (intScale >= 1) {
+      drawW = mw * intScale;
+      drawH = mh * intScale;
+    } else {
+      const fit = Math.min((w - 1) / mw, (h - 1) / mh);
+      drawW = Math.max(4, Math.round(mw * fit));
+      drawH = Math.max(4, Math.round(mh * fit));
+    }
 
-  if (shouldPolish) {
-    polishLayerPixelArt(buf, w, h, {
-      palette: palette.length > 0 ? [...palette] : undefined,
-      selOut: true,
-      shade: false,
-      highlight: false,
-      cleanDoubles: true,
-    });
+    const ox = Math.floor((w - drawW) / 2);
+    // Grounded near bottom with a clean 1–3px margin
+    const bottomPad = h >= 24 ? Math.max(2, Math.floor((h - drawH) / 2)) : Math.floor((h - drawH) / 2);
+    const oy = Math.max(0, h - drawH - bottomPad);
+
+    for (let dy = 0; dy < drawH; dy++) {
+      const sy = Math.min(mh - 1, Math.floor((dy * mh) / drawH));
+      const row = master.grid[sy]!;
+      for (let dx = 0; dx < drawW; dx++) {
+        const sx = Math.min(row.length - 1, Math.floor((dx * mw) / drawW));
+        const ch = row[sx] as SymbolKey | '.';
+        if (ch && ch !== '.' && ch in sem) {
+          setPx(buf, w, h, ox + dx, oy + dy, sem[ch]);
+        }
+      }
+    }
+
+    if (master.parts) {
+      const sx = drawW / mw;
+      const sy = drawH / mh;
+      for (const p of master.parts) {
+        parts.push({
+          name: p.name,
+          rect: clampPartRect(
+            {
+              x: ox + p.rect.x * sx,
+              y: oy + p.rect.y * sy,
+              w: p.rect.w * sx,
+              h: p.rect.h * sy,
+            },
+            w,
+            h,
+          ),
+        });
+      }
+    }
   }
 
   const trim = computeTrimBounds([buf], w, h, 0);
