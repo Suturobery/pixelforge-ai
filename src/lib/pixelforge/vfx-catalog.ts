@@ -14,11 +14,21 @@ export interface VfxEffectInfo {
   desc: string
   tags: string[]
   size: [number, number]
+  origin: [number, number]
   duration: number
+  loop: boolean
 }
 
 type FxModule = {
-  meta?: { name?: string; desc?: string; tags?: string[]; size?: number[]; origin?: number[]; duration?: number }
+  meta?: {
+    name?: string
+    desc?: string
+    tags?: string[]
+    size?: number[]
+    origin?: number[]
+    duration?: number
+    loop?: boolean
+  }
 }
 
 const VFX_ID_RE = /^[a-z][a-z0-9]*(?:\/[a-z0-9][a-z0-9-]*)*$/
@@ -35,18 +45,33 @@ export async function listVfx(category?: string): Promise<VfxEffectInfo[]> {
     const meta = mod.meta
     const cat = key.split('/')[0] ?? 'misc'
     if (category && cat !== category.toLowerCase()) continue
+    const sw = meta.size?.[0] ?? 64
+    const sh = meta.size?.[1] ?? 64
     out.push({
       id: key,
       name: meta.name ?? key,
       category: cat,
       desc: (meta.desc ?? '').slice(0, 200),
       tags: (meta.tags ?? []).slice(0, 6),
-      size: [meta.size?.[0] ?? 64, meta.size?.[1] ?? 64],
+      size: [sw, sh],
+      origin: [meta.origin?.[0] ?? Math.round(sw / 2), meta.origin?.[1] ?? sh],
       duration: meta.duration ?? 1,
+      loop: Boolean(meta.loop),
     })
   }
   out.sort((a, b) => (a.category + a.id).localeCompare(b.category + b.id))
   return out
+}
+
+export async function listVfxCategories(): Promise<Array<{ id: string; count: number }>> {
+  const effects = await listVfx()
+  const counts = new Map<string, number>()
+  for (const e of effects) {
+    counts.set(e.category, (counts.get(e.category) ?? 0) + 1)
+  }
+  return [...counts.entries()]
+    .map(([id, count]) => ({ id, count }))
+    .sort((a, b) => a.id.localeCompare(b.id))
 }
 
 /** Fuzzy-resolve a vague effect query ("campfire", "coin") to a catalog id.

@@ -641,7 +641,7 @@ export function interpretAndEnhancePrompt(
     )
   } else if (detectedIntent === 'procedural-vfx') {
     pixelArtGuidance.push(
-      `VFX accuracy: use generate_vfx with effect="${vfxMatch ?? 'fire/campfire'}", palette="project", and light=0.55 so it blends with your ${project.palette.length}-color palette.`,
+      `VFX accuracy: use generate_vfx with effect="${vfxMatch ?? 'arcane/rune-circle'}", target="current_clip", depth="split", crispPixelArt=true, palette="project", and light=0.72 so built-in pixelfx wraps behind and in front of your sprite in your ${project.palette.length}-color palette.`,
     )
   } else if (detectedIntent === 'palette-style') {
     pixelArtGuidance.push(

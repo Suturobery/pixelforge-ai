@@ -1,0 +1,1 @@
+(globalThis.TURBOPACK||(globalThis.TURBOPACK=[])).push(["object"==typeof document?document.currentScript:void 0,64707,t=>{"use strict";t.S([45632,"generateVfx,z",0,60765,"listVfx,T"])}]);

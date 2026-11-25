@@ -71,7 +71,7 @@ export type { SelectionRect, ClipboardContent, TransformKind }
 export const MIN_ZOOM = 0.25 // 25% — lets big canvases fit small screens
 export const MAX_ZOOM = 64 // 6400% — 1 canvas px = 64 screen px
 
-export type RightTab = 'layers' | 'reference' | 'brain' | 'motion' | 'agent'
+export type RightTab = 'layers' | 'reference' | 'brain' | 'motion' | 'vfx' | 'agent'
 
 /** Draft motion part (Motion Composer panel → part.set command). */
 export interface MotionPartDraft {

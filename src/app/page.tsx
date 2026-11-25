@@ -34,7 +34,7 @@ import { isDesktop } from '@/lib/pixelforge/desktop-bridge'
 import { useSaveProject } from '@/components/pixelforge/use-save'
 import { useKeyboardShortcuts } from '@/components/pixelforge/use-keyboard'
 import { useIsMobile } from '@/components/pixelforge/use-is-mobile'
-import { Layers, Brain, Bot, PersonStanding, Images, PanelRightClose, Maximize2, Minimize2 } from 'lucide-react'
+import { Layers, Brain, Bot, PersonStanding, Images, PanelRightClose, Maximize2, Minimize2, Flame } from 'lucide-react'
 import { Header } from '@/components/pixelforge/header'
 import { ToolRail } from '@/components/pixelforge/tool-rail'
 import { CanvasStage } from '@/components/pixelforge/canvas-stage'
@@ -44,6 +44,7 @@ import { OnboardingTour } from '@/components/pixelforge/onboarding-tour'
 import { SecondBrain } from '@/components/pixelforge/second-brain'
 import { AgentPanel } from '@/components/pixelforge/agent-panel'
 import { MotionPanel } from '@/components/pixelforge/motion-panel'
+import { VfxPanel } from '@/components/pixelforge/vfx-panel'
 import { ReferenceCreator } from '@/components/pixelforge/reference-creator'
 import { Footer } from '@/components/pixelforge/footer'
 import { cn } from '@/lib/utils'
@@ -54,12 +55,13 @@ const RIGHT_TABS: { id: RightTab; label: string; icon: React.ReactNode; tone: 'e
   { id: 'agent', label: 'Agent', tone: 'frost', icon: <Bot className="h-3.5 w-3.5" aria-hidden /> },
   { id: 'brain', label: 'Brain', tone: 'frost', icon: <Brain className="h-3.5 w-3.5" aria-hidden /> },
   { id: 'motion', label: 'Motion', tone: 'frost', icon: <PersonStanding className="h-3.5 w-3.5" aria-hidden /> },
+  { id: 'vfx', label: 'VFX', tone: 'ember', icon: <Flame className="h-3.5 w-3.5" aria-hidden /> },
   { id: 'reference', label: 'Reference', tone: 'ember', icon: <Images className="h-3.5 w-3.5" aria-hidden /> },
 ]
 
 const RIGHT_TAB_GROUPS = [
   { label: 'Artwork', tabs: ['layers', 'reference'] as RightTab[] },
-  { label: 'Animate', tabs: ['motion'] as RightTab[] },
+  { label: 'Animate', tabs: ['motion', 'vfx'] as RightTab[] },
   { label: 'Assist', tabs: ['agent', 'brain'] as RightTab[] },
 ] as const
 
@@ -211,6 +213,7 @@ function RightDock({ mobile }: { mobile: boolean }) {
           ['reference', <ReferenceCreator key="reference" />],
           ['brain', <SecondBrain key="brain" />],
           ['motion', <MotionPanel key="motion" />],
+          ['vfx', <VfxPanel key="vfx" />],
           ['agent', <AgentPanel key="agent" />],
         ] as Array<[RightTab, React.ReactNode]>).map(([id, element]) => (
           <div

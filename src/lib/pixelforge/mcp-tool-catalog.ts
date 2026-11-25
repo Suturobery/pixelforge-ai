@@ -75,8 +75,8 @@ export const MCP_TOOLS: McpToolInfo[] = [
   {
     name: 'generate_vfx',
     tier: 'L1',
-    description: 'Render a procedural VFX effect (from list_vfx) into a NEW clip — deterministic (seeded), free, one undo transaction, optional dark→bright project-palette ramp. Runs fully inside PixelForge: no image-provider request.',
-    example: { effect: 'fire/campfire', light: 0.6, palette: 'project' },
+    description: 'Render any of the 244 built-in pixelfx procedural VFX effects into a NEW clip OR directly onto the CURRENT sprite clip as split Back + Front depth layers — crisp pixel-art quantization, palette lock, looping warmup, deterministic seed, one undo transaction.',
+    example: { effect: 'arcane/rune-circle', target: 'current_clip', depth: 'split', crispPixelArt: true, light: 0.72, palette: 'project' },
   },
   {
     name: 'preview_animation',

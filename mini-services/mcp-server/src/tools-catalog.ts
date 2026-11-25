@@ -180,27 +180,33 @@ export const TOOL_CATALOG: ToolDef[] = [
   },
   {
     name: 'generate_vfx',
-    title: 'Generate procedural VFX clip',
+    title: 'Generate or overlay procedural VFX',
     description:
-      'Render a procedural VFX effect (from list_vfx) into a NEW clip on the canvas — deterministic (seeded), ' +
-      'free, one undo transaction. Optional dark→bright palette ramp overrides the effect colors. After ' +
-      'generating, verify with preview_animation (invariants) and validate_style (VFX often touches canvas ' +
-      'edges — pass allowEdgeTouch:true there when appropriate).',
+      'Render a procedural VFX effect (from list_vfx, 244 built-in pixelfx effects) into a NEW clip OR ' +
+      'directly onto the CURRENT sprite clip as depth-wrapped Back + Front layers (target:"current_clip", ' +
+      'depth:"split") — deterministic (seeded), free, crisp pixel-art quantized by default, auto-warmed for ' +
+      'looping effects, one undo transaction. Always prefer this over drawing manual sparkles/auras on sprites.',
     tier: 'L1',
     relay: true,
     inputSchema: {
-      effect: z.string().min(1).max(80).describe('Effect id from list_vfx, e.g. "fire/campfire".'),
+      effect: z.string().min(1).max(80).describe('Effect id from list_vfx, e.g. "arcane/rune-circle" or "fire/campfire".'),
+      target: z.enum(['new_clip', 'current_clip']).optional().describe("'new_clip' creates a standalone clip (default); 'current_clip' overlays VFX layers directly onto the active/specified sprite clip."),
+      clipId: z.string().min(1).max(80).optional().describe('Optional target clip id when target is "current_clip". Defaults to the active clip.'),
+      depth: z.enum(['split', 'front', 'back', 'combined']).optional().describe("Layer placement: 'split' adds separate Back (behind sprite) and Front (over sprite) layers (default for current_clip); 'front', 'back', or 'combined' add a single layer."),
+      crispPixelArt: z.boolean().optional().describe('Authentic pixel-art post-processing (nearest sampling + alpha cutoff + palette lock). Default true; set false for soft anti-aliased glow.'),
+      alphaThreshold: z.number().int().min(1).max(254).optional().describe('Alpha cutoff (1..254) when crispPixelArt is true. Default 96.'),
+      warmup: z.union([z.literal('auto'), z.number().int().min(0).max(64)]).optional().describe("Pre-roll update ticks before frame 0 so looping effects start alive. Default 'auto' (12 ticks for loop:true, 0 for one-shots)."),
       seed: z.number().int().min(0).max(999999).optional().describe('Random seed. Same seed + options = identical frames.'),
-      frames: z.number().int().min(1).max(64).optional().describe('Frame count. Default: covers the effect duration at the chosen fps.'),
-      fps: z.number().int().min(1).max(60).optional().describe('Clip fps. Default 12.'),
-      fit: z.enum(['fit', 'crop']).optional().describe("'fit' = full effect downscaled to canvas (default). 'crop' = direct canvas render — original tighter, crisper composition."),
-      light: z.number().min(0).max(1).optional().describe('Additive-light intensity 0..1. Default 1. Lower = subtler glow and more transparency.'),
-      x: z.number().int().min(-4096).max(4096).optional().describe('Effect center X on canvas. Default: canvas center.'),
-      y: z.number().int().min(-4096).max(4096).optional().describe('Effect center Y on canvas. Default: canvas center.'),
+      frames: z.number().int().min(1).max(64).optional().describe('Frame count. Default: matches current clip length for current_clip, or covers effect duration at chosen fps.'),
+      fps: z.number().int().min(1).max(60).optional().describe('Clip fps. Default matches current clip or 12.'),
+      fit: z.enum(['fit', 'crop']).optional().describe("'fit' = full effect scaled to canvas (default). 'crop' = direct canvas render — tighter composition."),
+      light: z.number().min(0).max(1).optional().describe('Additive-light intensity 0..1. Default 0.72 in crisp mode, 1 in soft mode.'),
+      x: z.number().int().min(-4096).max(4096).optional().describe('Effect center X on canvas. Default: effect origin.'),
+      y: z.number().int().min(-4096).max(4096).optional().describe('Effect center Y on canvas. Default: effect origin.'),
       palette: z.union([z.literal('project'), z.array(z.string().regex(/^#[0-9a-fA-F]{3,8}$/)).min(2).max(16)]).optional().describe(
-        'Optional dark→bright hex ramp replacing the effect colors.',
+        'Optional dark→bright hex ramp (or "project") replacing the effect colors.',
       ),
-      name: z.string().min(1).max(120).optional().describe('New clip name. Default "vfx-<effect>".'),
+      name: z.string().min(1).max(120).optional().describe('New clip name (new_clip) or base layer name (current_clip).'),
     },
   },
   {

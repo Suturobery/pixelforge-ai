@@ -617,6 +617,17 @@ const handlers: Record<string, ToolHandler> = {
 
   async generate_vfx(args, ctx) {
     const { generateVfx } = await import('./vfx')
+    const target = args.target === 'current_clip' ? 'current_clip' : 'new_clip'
+    const depth =
+      args.depth === 'split' || args.depth === 'front' || args.depth === 'back' || args.depth === 'combined'
+        ? args.depth
+        : undefined
+    const warmup =
+      typeof args.warmup === 'number'
+        ? Math.max(0, Math.min(64, Math.round(args.warmup)))
+        : args.warmup === 'auto'
+          ? 'auto'
+          : undefined
     const res = await generateVfx({
       effect: asString(args.effect, 'effect', 80),
       seed: typeof args.seed === 'number' ? args.seed : undefined,
@@ -628,22 +639,38 @@ const handlers: Record<string, ToolHandler> = {
       y: typeof args.y === 'number' ? args.y : undefined,
       palette: args.palette === 'project' ? 'project' : Array.isArray(args.palette) ? (args.palette as string[]) : undefined,
       name: typeof args.name === 'string' ? args.name : undefined,
+      target,
+      clipId: typeof args.clipId === 'string' ? args.clipId : undefined,
+      depth,
+      crispPixelArt: typeof args.crispPixelArt === 'boolean' ? args.crispPixelArt : undefined,
+      alphaThreshold: optInt(args.alphaThreshold, 'alphaThreshold', 1, 254) ?? undefined,
+      warmup,
+      origin: 'mcp',
     }, () => assertTaskProject(ctx))
     if (!res.ok) {
       return fail('vfx_failed', res.error?.message ?? 'VFX render failed.', res.error?.hint)
     }
+    const targetDesc =
+      res.target === 'current_clip'
+        ? `overlaid onto clip "${res.clipName}" (${res.createdLayerIds?.length ?? 1} ${res.depth} layer(s))`
+        : `rendered into new clip "${res.clipName}"`
     return withStateHash(
       {
         clipId: res.clipId,
         clipName: res.clipName,
+        target: res.target ?? target,
+        depth: res.depth ?? depth ?? 'combined',
+        createdLayerIds: res.createdLayerIds ?? [],
         frames: res.frames,
         fps: res.fps,
         previewPng: res.previewPng ?? null,
         resolvedEffect: res.resolvedEffect ?? null,
         paletteApplied: res.paletteApplied ?? null,
+        crispPixelArt: res.crispPixelArt ?? true,
+        warmupUsed: res.warmupUsed ?? 0,
       },
       {
-        summary: `VFX "${args.effect}" rendered into new clip "${res.clipName}" (${res.frames}f @ ${res.fps}fps) — verify with preview_animation invariants, then validate_style`,
+        summary: `VFX "${res.resolvedEffect ?? args.effect}" ${targetDesc} (${res.frames}f @ ${res.fps}fps) — verify with preview_animation invariants, then validate_style`,
       },
     )
   },
