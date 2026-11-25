@@ -1,7 +1,6 @@
 {
   "/_global-error/page": "app/_global-error/page.js",
   "/_not-found/page": "app/_not-found/page.js",
-  "/api/generate/route": "app/api/generate/route.js",
   "/api/mcp/editor-key/route": "app/api/mcp/editor-key/route.js",
   "/api/mcp/ops/route": "app/api/mcp/ops/route.js",
   "/api/mcp/run/route": "app/api/mcp/run/route.js",

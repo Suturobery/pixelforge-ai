@@ -57,12 +57,6 @@
       "namedRegex": "^/api(?:/)?$"
     },
     {
-      "page": "/api/generate",
-      "regex": "^/api/generate(?:/)?$",
-      "routeKeys": {},
-      "namedRegex": "^/api/generate(?:/)?$"
-    },
-    {
       "page": "/api/mcp/editor-key",
       "regex": "^/api/mcp/editor\\-key(?:/)?$",
       "routeKeys": {},
