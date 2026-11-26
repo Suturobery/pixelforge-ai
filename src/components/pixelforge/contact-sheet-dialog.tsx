@@ -98,24 +98,25 @@ function ClipSheetCard({
 
   const displayW = w * scale
   const displayH = h * scale
+  const stageHeight = Math.max(168, displayH + 32)
 
   return (
     <button
       type="button"
       onClick={onSelect}
-      className={`group flex flex-col overflow-hidden rounded-lg border text-left transition ${
+      className={`group flex flex-col overflow-hidden rounded-lg border text-left transition-colors ${
         isActive
           ? 'border-teal-400/80 bg-zinc-900/90 ring-1 ring-teal-400/40'
           : 'border-zinc-800 bg-zinc-900/60 hover:border-zinc-600'
       }`}
     >
-      {/* Header row */}
-      <div className="flex items-center justify-between gap-2 border-b border-zinc-800/80 px-2.5 py-1.5">
+      {/* Header row — fixed height so animating frame numbers never shift layout */}
+      <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-zinc-800/80 px-3">
         <div className="min-w-0">
-          <div className="truncate font-mono text-[11px] font-semibold text-zinc-100">
+          <div className="truncate font-mono text-xs font-semibold text-zinc-100">
             {clip.name}
           </div>
-          <div className="font-mono text-[9px] text-zinc-500">
+          <div className="font-mono text-[10px] tabular-nums text-zinc-500">
             f{metrics.frameIndex + 1}/{clip.frames.length} · {clip.fps}fps
           </div>
         </div>
@@ -123,23 +124,26 @@ function ClipSheetCard({
           {hasPaletteIssue ? (
             <span
               title={`${metrics.outOfPaletteColors} color(s) outside active palette`}
-              className="inline-flex items-center gap-0.5 rounded bg-amber-500/15 px-1.5 py-0.5 font-mono text-[9px] text-amber-300"
+              className="inline-flex items-center gap-0.5 rounded bg-amber-500/15 px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-amber-300"
             >
-              <AlertTriangle className="h-2.5 w-2.5" />+{metrics.outOfPaletteColors}
+              <AlertTriangle className="h-3 w-3" />+{metrics.outOfPaletteColors}
             </span>
           ) : (
             <span
               title="100% locked to project palette"
-              className="inline-flex items-center rounded bg-emerald-500/10 p-0.5 text-emerald-400"
+              className="inline-flex items-center rounded bg-emerald-500/10 p-1 text-emerald-400"
             >
-              <CheckCircle2 className="h-3 w-3" />
+              <CheckCircle2 className="h-3.5 w-3.5" />
             </span>
           )}
         </div>
       </div>
 
-      {/* Scaled Pixel Viewport */}
-      <div className={`relative flex min-h-[120px] flex-1 items-center justify-center p-3 ${stageClass}`}>
+      {/* Scaled Pixel Viewport — locked exact height so animated frames NEVER bounce/resize */}
+      <div
+        className={`relative flex w-full shrink-0 items-center justify-center overflow-auto p-4 ${stageClass}`}
+        style={{ height: stageHeight }}
+      >
         <div
           className="relative shrink-0"
           style={{ width: displayW, height: displayH }}
@@ -155,7 +159,7 @@ function ClipSheetCard({
           {showGroundLine && refBottomMargin !== null && (
             <div
               aria-hidden
-              className="pointer-events-none absolute inset-x-[-8px] border-t border-dashed border-teal-400/80"
+              className="pointer-events-none absolute inset-x-[-10px] border-t border-dashed border-teal-400/85"
               style={{ top: `${((h - refBottomMargin) / h) * 100}%` }}
             />
           )}
@@ -163,7 +167,7 @@ function ClipSheetCard({
           {showBounds && metrics.bounds && (
             <div
               aria-hidden
-              className="pointer-events-none absolute border border-amber-400/80"
+              className="pointer-events-none absolute border border-amber-400/85"
               style={{
                 left: `${(metrics.bounds.x / w) * 100}%`,
                 top: `${(metrics.bounds.y / h) * 100}%`,
@@ -175,10 +179,10 @@ function ClipSheetCard({
         </div>
       </div>
 
-      {/* Proportions + Palette Swatches Footer */}
-      <div className="space-y-1.5 border-t border-zinc-800/80 bg-zinc-950/70 px-2.5 py-2">
-        <div className="flex flex-wrap items-center justify-between gap-1 font-mono text-[9px]">
-          <span className="text-zinc-300">
+      {/* Proportions + Palette Swatches Footer — strict fixed single-line heights (zero jitter!) */}
+      <div className="flex h-[54px] shrink-0 flex-col justify-center gap-1.5 border-t border-zinc-800/80 bg-zinc-950/75 px-3">
+        <div className="flex h-4 items-center justify-between gap-2 overflow-hidden whitespace-nowrap font-mono text-[10px] tabular-nums">
+          <span className="truncate text-zinc-300">
             {metrics.bounds ? `${metrics.spriteWidth}×${metrics.spriteHeight}px` : 'empty'}
             {heightDelta !== null && heightDelta !== 0 && (
               <span className="ml-1 text-zinc-500">
@@ -186,7 +190,7 @@ function ClipSheetCard({
               </span>
             )}
           </span>
-          <span className={hasGroundDrift ? 'text-amber-300' : 'text-zinc-400'}>
+          <span className={`shrink-0 ${hasGroundDrift ? 'text-amber-300' : 'text-zinc-400'}`}>
             base {metrics.bottomMargin}px
             {hasGroundDrift && groundDelta !== null
               ? ` (${groundDelta > 0 ? `+${groundDelta}` : groundDelta})`
@@ -194,23 +198,25 @@ function ClipSheetCard({
           </span>
         </div>
 
-        {/* Swatch bar for quick color consistency checks */}
-        <div className="flex items-center gap-1">
-          <div className="flex flex-1 flex-wrap gap-0.5">
+        {/* Single-row non-wrapping swatch bar */}
+        <div className="flex h-3.5 items-center gap-1.5 overflow-hidden">
+          <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden">
             {metrics.topColors.length === 0 ? (
-              <span className="font-mono text-[8px] text-zinc-600">no colors</span>
+              <span className="font-mono text-[9px] text-zinc-600">no colors</span>
             ) : (
               metrics.topColors.map((hex) => (
                 <span
                   key={hex}
                   title={hex}
-                  className="h-2.5 w-2.5 rounded-[2px] border border-black/40"
+                  className="h-3 w-3 shrink-0 rounded-[2px] border border-black/40"
                   style={{ backgroundColor: hex }}
                 />
               ))
             )}
           </div>
-          <span className="font-mono text-[8px] text-zinc-500">{metrics.uniqueColors}c</span>
+          <span className="shrink-0 font-mono text-[9px] tabular-nums text-zinc-500">
+            {metrics.uniqueColors}c
+          </span>
         </div>
       </div>
     </button>
@@ -226,8 +232,12 @@ export function ClipsContactSheetDialog() {
   const renderTick = useEditor((s) => s.renderTick)
   const { toast } = useToast()
 
-  const autoScale = Math.max(1, Math.min(6, Math.floor(120 / Math.max(project.width, project.height)) || 1))
-  const [scale, setScale] = useState<number>(autoScale)
+  // Recompute a generous default zoom (~160px sprite display) whenever canvas size changes
+  const defaultScale = Math.max(1, Math.min(8, Math.floor(176 / Math.max(project.width, project.height)) || 1))
+  const [userScale, setUserScale] = useState<{ key: string; value: number } | null>(null)
+  const sizeKey = `${project.width}x${project.height}`
+  const scale = userScale && userScale.key === sizeKey ? userScale.value : defaultScale
+  const setScale = (value: number) => setUserScale({ key: sizeKey, value })
   const [bg, setBg] = useState<SheetBg>('checker')
   const [showGroundLine, setShowGroundLine] = useState(true)
   const [showBounds, setShowBounds] = useState(false)
@@ -306,9 +316,11 @@ export function ClipsContactSheetDialog() {
     }
   }
 
+  const cardMinWidth = Math.max(240, project.width * scale + 48)
+
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogContent className="flex max-h-[86vh] max-w-4xl flex-col gap-3 border-zinc-800 bg-zinc-950 p-4 text-zinc-100">
+      <DialogContent className="flex h-[86vh] w-[94vw] max-w-[94vw] flex-col gap-3 border-zinc-800 bg-zinc-950 p-4 text-zinc-100 sm:max-w-6xl">
         <DialogHeader className="shrink-0 space-y-1">
           <div className="flex flex-wrap items-center justify-between gap-2 pr-6">
             <DialogTitle className="flex items-center gap-2 font-mono text-sm">
@@ -341,7 +353,7 @@ export function ClipsContactSheetDialog() {
           </Button>
 
           <div className="flex overflow-hidden rounded border border-zinc-800 bg-zinc-950">
-            {[1, 2, 3, 4, 6].map((z) => (
+            {[1, 2, 3, 4, 6, 8].map((z) => (
               <button
                 key={z}
                 type="button"
@@ -408,9 +420,12 @@ export function ClipsContactSheetDialog() {
           </Button>
         </div>
 
-        {/* Clips Comparison Grid */}
+        {/* Clips Comparison Grid — adaptive card min-width so big zooms never squish */}
         <div className="pixelforge-scroll min-h-0 flex-1 overflow-y-auto pr-1">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+          <div
+            className="grid gap-3"
+            style={{ gridTemplateColumns: `repeat(auto-fill, minmax(min(100%, ${cardMinWidth}px), 1fr))` }}
+          >
             {project.clips.map((c) => (
               <ClipSheetCard
                 key={c.id}
