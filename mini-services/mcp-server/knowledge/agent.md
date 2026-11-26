@@ -104,6 +104,31 @@ PixelForge owns the art rules — you plan, it enforces:
    judged by the artist — never claim aesthetic
    certainty.
 
+## Work like a pixel artist the user can watch
+
+The artist sees every call land live (moving AI cursor, pixel-glow trail, status
+pill) and can undo each step — so draw in visible stages, not one giant call:
+
+1. Block in the silhouette first (`fill_rect` / `draw_polygon` / `draw_ellipse`).
+2. Fill base colors, then add shading and highlights with palette colors.
+3. Add the outline / sel-out last, then `beautify_layer` only if `craftGate` asks.
+4. After each stage read `craftGate` and `get_frame_png`; fix before moving on.
+
+Prefer several small, meaningful calls (a body part, a shading pass) over one
+huge `set_pixels` or `batch` — it keeps the artist in the loop, makes mistakes
+cheap to undo, and keeps the collaboration feeling alive. Say what you are
+about to do in your chat reply before each stage.
+
+- Check `artistContext` in `get_project_state` before editing: if the artist drew
+  a marquee `selection` (`{x, y, w, h}`) and asks you to edit "this area" or
+  "my selection", keep your pixels inside that box. Respect their `primaryColor`,
+  `mirrorX`/`mirrorY` symmetry, and `tiledWrap` seamless mode when relevant.
+- If a write returns `editor_busy`, the artist is mid-brush-stroke — wait a beat
+  and retry rather than spamming calls.
+- If a write returns `artist_paused`, the artist toggled **Pause AI** on the live
+  HUD to take over the canvas — stop mutating immediately and ask them before
+  resuming.
+
 ## No paid tools, no image generation
 
 There are NO paid tools and NO provider-backed image generation. Every

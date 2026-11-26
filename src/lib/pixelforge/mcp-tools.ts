@@ -71,6 +71,17 @@ import {
 import { generateGodot4AtlasTres, type ExportScale } from './export'
 import { reviewAssetSet } from './asset-set-review'
 import { materializeSkinVariants, type SkinVariantRequest } from './skin-variants'
+import {
+  beginAiToolActivity,
+  describeAiTool,
+  diffChangedPixels,
+  emitAiDrawPulse,
+  emitAiNotice,
+  endAiToolActivity,
+  isAiAutoFollow,
+  isAiPaused,
+  recordAiActivityEntry,
+} from './ai-live-activity'
 import { getBus, useEditor } from './store'
 import { MCP_TOOLS } from './mcp-tool-catalog'
 import { hexToRgba } from './color'
@@ -215,6 +226,7 @@ function fail(code: string, message: string, hint?: string): ToolExecResult {
 
 /** Real editor tool names — registry-lite source for interpreter recommendations. */
 const MCP_TOOL_NAMES = MCP_TOOLS.map((t) => t.name)
+const MCP_TOOL_TIERS = new Map(MCP_TOOLS.map((t) => [t.name, t.tier]))
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -549,6 +561,16 @@ const handlers: Record<string, ToolHandler> = {
         clipId: state.activeClipId,
         frameIndex: state.activeFrameIndex,
         layerId: state.activeLayerId,
+      },
+      artistContext: {
+        selection: state.selection ? { ...state.selection } : null,
+        primaryColor: state.primary,
+        secondaryColor: state.secondary,
+        tool: state.tool,
+        mirrorX: state.mirrorX,
+        mirrorY: state.mirrorY,
+        tiledWrap: state.tiledWrap,
+        aiPaused: isAiPaused(),
       },
       history: { canUndo: bus.canUndo(), canRedo: bus.canRedo() },
     }
@@ -2524,13 +2546,143 @@ function finishToolReview(before: ReturnType<typeof captureToolReview>): ToolRev
   }
 }
 
+const VISUAL_DRAW_TOOLS = new Set([
+  'set_pixels',
+  'fill_rect',
+  'draw_line',
+  'draw_ellipse',
+  'draw_polygon',
+  'flood_fill',
+  'replace_color',
+  'flip_frame',
+  'rotate_frame',
+  'shift_frame',
+  'center_content',
+  'remap_palette',
+  'beautify_layer',
+  'generate_template',
+  'generate_vfx',
+  'apply_motion_preset',
+  'import_image_as_layer',
+  'import_frame_strip',
+  'create_skin_variants',
+  'batch',
+])
+
+interface VisualBefore {
+  clipIds: Set<string>
+  width: number
+  height: number
+  target: { clipId: string; frameId: string; buffer: Uint8ClampedArray } | null
+}
+
+/** Snapshot the frame the tool will actually edit (from its clip/frame args), not just the active one. */
+function snapshotToolTarget(args: Record<string, unknown>): VisualBefore {
+  const project = getBus().getProject()
+  const base = { clipIds: new Set(project.clips.map((c) => c.id)), width: project.width, height: project.height }
+  try {
+    const clip = resolveClipRef(project, args)
+    const { frame } = resolveFrameRef(clip, args)
+    return { ...base, target: { clipId: clip.id, frameId: frame.id, buffer: composeFrameRgba(project, clip, frame) } }
+  } catch {
+    return { ...base, target: null }
+  }
+}
+
+/** Diff what the tool changed: a brand-new clip (VFX / strips / skins) sweeps in from empty; otherwise the edited frame. */
+function collectVisualDiff(before: VisualBefore): {
+  clipId: string
+  frameId: string
+  clipName: string
+  frameNumber: number
+  width: number
+  height: number
+  beforeBuffer: Uint8ClampedArray
+  afterBuffer: Uint8ClampedArray
+  diff: ReturnType<typeof diffChangedPixels>
+} | null {
+  const project = getBus().getProject()
+  const created = project.clips.filter((c) => !before.clipIds.has(c.id))
+  if (created.length > 0) {
+    const activeId = useEditor.getState().activeClipId
+    const clip = created.find((c) => c.id === activeId) ?? created[created.length - 1]!
+    const frame = clip.frames[0]
+    if (frame) {
+      const afterBuffer = composeFrameRgba(project, clip, frame)
+      const beforeBuffer = new Uint8ClampedArray(afterBuffer.length)
+      const diff = diffChangedPixels(beforeBuffer, afterBuffer, project.width, project.height)
+      if (diff.totalChanged > 0) {
+        return {
+          clipId: clip.id,
+          frameId: frame.id,
+          clipName: clip.name,
+          frameNumber: 1,
+          width: project.width,
+          height: project.height,
+          beforeBuffer,
+          afterBuffer,
+          diff,
+        }
+      }
+    }
+  }
+  if (before.target && before.width === project.width && before.height === project.height) {
+    const clip = project.clips.find((c) => c.id === before.target!.clipId)
+    const frameIdx = clip?.frames.findIndex((f) => f.id === before.target!.frameId) ?? -1
+    const frame = clip && frameIdx >= 0 ? clip.frames[frameIdx] : undefined
+    if (clip && frame) {
+      const afterBuffer = composeFrameRgba(project, clip, frame)
+      const beforeBuffer = before.target.buffer
+      const diff = diffChangedPixels(beforeBuffer, afterBuffer, project.width, project.height)
+      if (diff.totalChanged > 0) {
+        return {
+          clipId: clip.id,
+          frameId: frame.id,
+          clipName: clip.name,
+          frameNumber: frameIdx + 1,
+          width: project.width,
+          height: project.height,
+          beforeBuffer,
+          afterBuffer,
+          diff,
+        }
+      }
+    }
+  }
+  return null
+}
+
 export async function executeMcpTool(tool: string, args: unknown, ctx: ToolExecContext): Promise<ToolExecResult> {
   const handler = handlers[tool]
   if (!handler) {
     return fail('unknown_tool', `Tool "${tool}" is not implemented by this editor (it may be deferred to a later phase).`)
   }
+  const agentName = ctx.clientName || 'AI Agent'
+  const showLive = ctx.clientId !== 'macro' && tool !== 'get_quota' && tool !== 'get_operation_log'
+  const isWriteTool = (MCP_TOOL_TIERS.get(tool) ?? ctx.tier) !== 'L0'
+
+  // Artist Priority Pause: let read-only inspection continue, hold mutations until resumed
+  if (showLive && isWriteTool && isAiPaused()) {
+    emitAiNotice(agentName, tool, 'Paused — artist holds canvas', 'waiting')
+    recordAiActivityEntry({
+      clientName: agentName,
+      tool,
+      label: `Held: ${describeAiTool(tool)}`,
+      ok: false,
+      status: 'paused',
+    })
+    return fail(
+      'artist_paused',
+      'The artist paused live AI edits — wait until they resume before modifying the canvas.',
+      'Check with the artist and retry once they click Resume on the live AI HUD.',
+    )
+  }
+
   const bus = getBus()
   if (bus.activeStroke) {
+    if (showLive) {
+      emitAiNotice(agentName, tool, 'Waiting — you are painting', 'waiting')
+    }
     return fail('editor_busy', 'A manual stroke is in progress — retry in a moment.', 'The tool will run as soon as the pointer interaction ends.')
   }
   if (ctx.expectedProjectKey !== undefined && ctx.expectedLoadEpoch === undefined) {
@@ -2545,6 +2697,9 @@ export async function executeMcpTool(tool: string, args: unknown, ctx: ToolExecC
       return fail('stale_document', 'The document changed since you read it (expectedStateHash mismatch).', 'Re-read get_project_state and retry with the fresh stateHash.')
     }
   }
+  if (showLive) beginAiToolActivity(agentName, tool)
+  const undoDepthBefore = bus.historyStats().undoDepth
+  const beforeVisual = VISUAL_DRAW_TOOLS.has(tool) ? snapshotToolTarget(safeArgs) : null
   try {
     assertTaskProject(ctx)
     if (ctx.expectedProjectKey && (tool === 'create_project' || tool === 'open_project')) {
@@ -2554,12 +2709,101 @@ export async function executeMcpTool(tool: string, args: unknown, ctx: ToolExecC
     const pending = handler(safeArgs, ctx)
     const review = before ? finishToolReview(before) : null
     const res = await pending
+
+    const undoDepthAfter = bus.historyStats().undoDepth
+    const loadEpoch = useEditor.getState().loadEpoch
+    const hit = res.ok && beforeVisual ? collectVisualDiff(beforeVisual) : null
+    let offView = false
+
+    if (hit) {
+      if (isAiAutoFollow()) {
+        // make sure the artist is looking at the clip/frame the agent just painted
+        followCommandTarget({ clipId: hit.clipId, frameId: hit.frameId })
+      } else {
+        const stNow = useEditor.getState()
+        const curClip = stNow.project.clips.find((c) => c.id === stNow.activeClipId) ?? stNow.project.clips[0]
+        const curFrame = curClip?.frames[Math.min(stNow.activeFrameIndex, (curClip.frames.length || 1) - 1)]
+        offView = stNow.activeClipId !== hit.clipId || curFrame?.id !== hit.frameId
+      }
+      emitAiDrawPulse({
+        clientName: agentName,
+        tool,
+        label: res.summary ?? `Updated ${hit.diff.totalChanged} px`,
+        clipId: hit.clipId,
+        frameId: hit.frameId,
+        pixels: hit.diff.pixels,
+        totalChanged: hit.diff.totalChanged,
+        bbox: hit.diff.bbox,
+        reveal: {
+          clipId: hit.clipId,
+          frameId: hit.frameId,
+          width: hit.width,
+          height: hit.height,
+          before: hit.beforeBuffer,
+          after: hit.afterBuffer,
+          orderedIndices: hit.diff.orderedIndices,
+        },
+      })
+    }
+
+    let entryId: number | undefined
+    if (showLive && (isWriteTool || !res.ok || hit)) {
+      const undoableStep = res.ok && res.undoable !== false && undoDepthAfter > undoDepthBefore
+      entryId = recordAiActivityEntry({
+        clientName: agentName,
+        tool,
+        label: res.ok ? (res.summary ?? describeAiTool(tool)) : (res.error?.message ?? 'Tool error'),
+        ok: res.ok,
+        status: res.ok ? 'ok' : 'error',
+        totalChanged: hit?.diff.totalChanged ?? 0,
+        clipId: hit?.clipId,
+        frameId: hit?.frameId,
+        clipName: hit?.clipName,
+        frameNumber: hit?.frameNumber,
+        bbox: hit?.diff.bbox ?? null,
+        undoDepthAfter: undoableStep ? undoDepthAfter : undefined,
+        loadEpoch,
+        compare: hit
+          ? {
+              clipId: hit.clipId,
+              frameId: hit.frameId,
+              width: hit.width,
+              height: hit.height,
+              before: hit.beforeBuffer,
+            }
+          : undefined,
+      })
+    }
+
+    if (showLive) {
+      endAiToolActivity(agentName, tool, res.ok ? res.summary : res.error?.message, {
+        tone: res.ok ? 'live' : 'error',
+        totalChanged: hit?.diff.totalChanged,
+        clipId: hit?.clipId,
+        frameId: hit?.frameId,
+        clipName: hit?.clipName,
+        frameNumber: hit?.frameNumber,
+        offView,
+        entryId,
+      })
+    }
     if (res.ok && review) ctx.onReview?.(review)
     if (res.ok && tool !== 'get_project_state' && tool !== 'get_clip' && tool !== 'get_palette' && tool !== 'get_frame_png') {
       recordAgentContextEvent(ctx.clientName || 'mcp-agent', tool, res.summary ?? `Executed ${tool}`)
     }
     return res
   } catch (err) {
+    if (showLive) {
+      const msg = err instanceof Error ? err.message : 'Tool error'
+      const entryId = recordAiActivityEntry({
+        clientName: agentName,
+        tool,
+        label: msg,
+        ok: false,
+        status: 'error',
+      })
+      endAiToolActivity(agentName, tool, msg, { tone: 'error', entryId })
+    }
     if (err instanceof TaskProjectMismatch) return fail('task_project_mismatch', err.message)
     if (err instanceof CommandError) {
       return fail(err.code.toLowerCase(), err.message)

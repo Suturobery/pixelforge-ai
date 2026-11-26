@@ -56,7 +56,7 @@ export function materializeSkinVariants(
       if (!plan.loop || plan.loopMode !== 'forward') {
         bus.execute(
           'clip.setProps',
-          { clipId: newClip.id, loop: plan.loop, loopMode: plan.loopMode },
+          { clipId: newClip.id, patch: { loop: plan.loop, loopMode: plan.loopMode } },
           origin,
         )
       }
@@ -70,10 +70,12 @@ export function materializeSkinVariants(
           {
             clipId: newClip.id,
             layerId: firstLayer.id,
-            name: planFirstLayer.name,
-            visible: planFirstLayer.visible,
-            opacity: planFirstLayer.opacity,
-            ...(planFirstLayer.blend ? { blend: planFirstLayer.blend } : {}),
+            patch: {
+              name: planFirstLayer.name,
+              visible: planFirstLayer.visible,
+              opacity: planFirstLayer.opacity,
+              ...(planFirstLayer.blend ? { blend: planFirstLayer.blend } : {}),
+            },
           },
           origin,
         )
@@ -89,9 +91,11 @@ export function materializeSkinVariants(
             {
               clipId: newClip.id,
               layerId: addedLayer.id,
-              visible: srcL.visible,
-              opacity: srcL.opacity,
-              ...(srcL.blend ? { blend: srcL.blend } : {}),
+              patch: {
+                visible: srcL.visible,
+                opacity: srcL.opacity,
+                ...(srcL.blend ? { blend: srcL.blend } : {}),
+              },
             },
             origin,
           )
@@ -134,7 +138,11 @@ export function materializeSkinVariants(
       plan.layers.forEach((srcL, li) => {
         const ly = freshClip.layers[li]
         if (ly && srcL.locked) {
-          bus.execute('layer.setProps', { clipId: freshClip.id, layerId: ly.id, locked: true }, origin)
+          bus.execute(
+            'layer.setProps',
+            { clipId: freshClip.id, layerId: ly.id, patch: { locked: true } },
+            origin,
+          )
         }
       })
 

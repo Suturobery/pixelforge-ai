@@ -45,6 +45,13 @@ import type { ToolId } from '@/lib/pixelforge/types'
 import { PreviewOverlay } from '@/components/pixelforge/preview-overlay'
 import { ViewToolbar } from '@/components/pixelforge/view-toolbar'
 import { ToolOptionsBar } from '@/components/pixelforge/tool-options-bar'
+import { AiLiveCanvasOverlay, AiLiveStatusPill } from '@/components/pixelforge/ai-live-overlay'
+import {
+  composeProgressiveReveal,
+  finishActiveReveals,
+  getAiActivitySnapshot,
+  subscribeAiActivity,
+} from '@/lib/pixelforge/ai-live-activity'
 import { PalettePanel } from '@/components/pixelforge/palette-panel'
 import { ReferenceOverlay } from '@/components/pixelforge/reference-overlay'
 
@@ -134,6 +141,10 @@ export function CanvasStage() {
   const tileWrapRef = useRef<HTMLCanvasElement>(null)
   const boardRef = useRef<HTMLDivElement>(null)
   const offRef = useRef<HTMLCanvasElement | null>(null)
+  const revealOffRef = useRef<HTMLCanvasElement | null>(null)
+  const revealImageDataRef = useRef<ImageData | null>(null)
+  const paintBoardRef = useRef<((source: HTMLCanvasElement) => void) | null>(null)
+  const aiDisplayOverrideRef = useRef(false)
   const interactionRef = useRef<Interaction | null>(null)
   const wheelZoomRef = useRef<{ factor: number; cx: number; cy: number } | null>(null)
   const wheelZoomRafRef = useRef<number | null>(null)
@@ -206,6 +217,11 @@ export function CanvasStage() {
   }, [])
 
   const { width: W, height: H } = project
+  const activeClipForOverlay = getActiveClip({ project, activeClipId })
+  const activeFrameForOverlay =
+    activeClipForOverlay.frames[Math.min(activeFrameIndex, activeClipForOverlay.frames.length - 1)] ??
+    activeClipForOverlay.frames[0]
+  const activeFrameId = activeFrameForOverlay?.id ?? ''
 
   // ------------------------------------------------------------- composite
   useEffect(() => {
@@ -281,226 +297,233 @@ export function CanvasStage() {
     const canvas = canvasRef.current
     const board = boardRef.current
     if (!canvas || !board || !offRef.current) return
-    const dpr = window.devicePixelRatio || 1
-    const cw = W * zoom
-    const ch = H * zoom
-    const bw = Math.max(1, Math.round(cw * dpr))
-    const bh = Math.max(1, Math.round(ch * dpr))
-    if (canvas.width !== bw || canvas.height !== bh) {
-      canvas.width = bw
-      canvas.height = bh
-    }
-    canvas.style.width = `${cw}px`
-    canvas.style.height = `${ch}px`
-    board.style.width = `${cw}px`
-    board.style.height = `${ch}px`
-    board.style.transform = `translate(${panX}px, ${panY}px)`
 
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    ctx.imageSmoothingEnabled = false
-    ctx.clearRect(0, 0, cw, ch)
-    ctx.drawImage(offRef.current, 0, 0, cw, ch)
-
-    // 3×3 live seamless tile wrap preview (native 3W×3H backing store -> sharp at any zoom)
-    const wrapCanvas = tileWrapRef.current
-    if (tiledWrap && wrapCanvas) {
-      const tw = W * 3
-      const th = H * 3
-      if (wrapCanvas.width !== tw || wrapCanvas.height !== th) {
-        wrapCanvas.width = tw
-        wrapCanvas.height = th
+    const paintFromSource = (source: HTMLCanvasElement) => {
+      const dpr = window.devicePixelRatio || 1
+      const cw = W * zoom
+      const ch = H * zoom
+      const bw = Math.max(1, Math.round(cw * dpr))
+      const bh = Math.max(1, Math.round(ch * dpr))
+      if (canvas.width !== bw || canvas.height !== bh) {
+        canvas.width = bw
+        canvas.height = bh
       }
-      wrapCanvas.style.width = `${cw * 3}px`
-      wrapCanvas.style.height = `${ch * 3}px`
-      wrapCanvas.style.left = `${-cw}px`
-      wrapCanvas.style.top = `${-ch}px`
-      const wctx = wrapCanvas.getContext('2d')
-      if (wctx) {
-        wctx.imageSmoothingEnabled = false
-        wctx.clearRect(0, 0, tw, th)
-        for (let ty = 0; ty < 3; ty++) {
-          for (let tx = 0; tx < 3; tx++) {
-            if (tx === 1 && ty === 1) continue
-            wctx.drawImage(offRef.current, tx * W, ty * H)
+      canvas.style.width = `${cw}px`
+      canvas.style.height = `${ch}px`
+      board.style.width = `${cw}px`
+      board.style.height = `${ch}px`
+      board.style.transform = `translate(${panX}px, ${panY}px)`
+
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+      ctx.imageSmoothingEnabled = false
+      ctx.clearRect(0, 0, cw, ch)
+      ctx.drawImage(source, 0, 0, cw, ch)
+
+      // 3×3 live seamless tile wrap preview (native 3W×3H backing store -> sharp at any zoom)
+      const wrapCanvas = tileWrapRef.current
+      if (tiledWrap && wrapCanvas) {
+        const tw = W * 3
+        const th = H * 3
+        if (wrapCanvas.width !== tw || wrapCanvas.height !== th) {
+          wrapCanvas.width = tw
+          wrapCanvas.height = th
+        }
+        wrapCanvas.style.width = `${cw * 3}px`
+        wrapCanvas.style.height = `${ch * 3}px`
+        wrapCanvas.style.left = `${-cw}px`
+        wrapCanvas.style.top = `${-ch}px`
+        const wctx = wrapCanvas.getContext('2d')
+        if (wctx) {
+          wctx.imageSmoothingEnabled = false
+          wctx.clearRect(0, 0, tw, th)
+          for (let ty = 0; ty < 3; ty++) {
+            for (let tx = 0; tx < 3; tx++) {
+              if (tx === 1 && ty === 1) continue
+              wctx.drawImage(source, tx * W, ty * H)
+            }
           }
         }
       }
-    }
 
-    // pixel grid
-    // The grid used to wait for 500% zoom, which made the enabled Grid
-    // control look broken at normal editing magnification. At 200% each
-    // cell still has enough room for a crisp one-pixel line.
-    if (showGrid && zoom >= 2) {
-      ctx.lineWidth = 1
-      // Draw each grid weight as ONE path. The previous implementation
-      // stroked every row and column independently (up to 512 strokes per
-      // redraw), which made wheel zoom stutter on larger canvases.
-      for (const strong of [false, true]) {
-        ctx.strokeStyle = strong ? 'rgba(25, 57, 61, 0.62)' : 'rgba(25, 57, 61, 0.28)'
+      // pixel grid
+      // The grid used to wait for 500% zoom, which made the enabled Grid
+      // control look broken at normal editing magnification. At 200% each
+      // cell still has enough room for a crisp one-pixel line.
+      if (showGrid && zoom >= 2) {
+        ctx.lineWidth = 1
+        // Draw each grid weight as ONE path. The previous implementation
+        // stroked every row and column independently (up to 512 strokes per
+        // redraw), which made wheel zoom stutter on larger canvases.
+        for (const strong of [false, true]) {
+          ctx.strokeStyle = strong ? 'rgba(25, 57, 61, 0.62)' : 'rgba(25, 57, 61, 0.28)'
+          ctx.beginPath()
+          for (let x = 0; x <= W; x++) {
+            if ((x % 8 === 0) !== strong) continue
+            const px = Math.round(x * zoom * dpr) / dpr + 0.5 / dpr
+            ctx.moveTo(px, 0)
+            ctx.lineTo(px, ch)
+          }
+          for (let y = 0; y <= H; y++) {
+            if ((y % 8 === 0) !== strong) continue
+            const py = Math.round(y * zoom * dpr) / dpr + 0.5 / dpr
+            ctx.moveTo(0, py)
+            ctx.lineTo(cw, py)
+          }
+          ctx.stroke()
+        }
+      }
+
+      // Task 10b tilemap grid: teal tile-boundary lines over the pixel grid so
+      // the snap grid is visible even at low zoom (where the pixel grid hides)
+      if (tileSnap && zoom >= 2) {
+        ctx.lineWidth = 1
+        ctx.strokeStyle = 'rgba(45, 212, 191, 0.35)'
         ctx.beginPath()
-        for (let x = 0; x <= W; x++) {
-          if ((x % 8 === 0) !== strong) continue
+        for (let x = 0; x <= W; x += tileSize) {
           const px = Math.round(x * zoom * dpr) / dpr + 0.5 / dpr
           ctx.moveTo(px, 0)
           ctx.lineTo(px, ch)
         }
-        for (let y = 0; y <= H; y++) {
-          if ((y % 8 === 0) !== strong) continue
+        for (let y = 0; y <= H; y += tileSize) {
           const py = Math.round(y * zoom * dpr) / dpr + 0.5 / dpr
           ctx.moveTo(0, py)
           ctx.lineTo(cw, py)
         }
         ctx.stroke()
       }
-    }
 
-    // Task 10b tilemap grid: teal tile-boundary lines over the pixel grid so
-    // the snap grid is visible even at low zoom (where the pixel grid hides)
-    if (tileSnap && zoom >= 2) {
-      ctx.lineWidth = 1
-      ctx.strokeStyle = 'rgba(45, 212, 191, 0.35)'
-      ctx.beginPath()
-      for (let x = 0; x <= W; x += tileSize) {
-        const px = Math.round(x * zoom * dpr) / dpr + 0.5 / dpr
-        ctx.moveTo(px, 0)
-        ctx.lineTo(px, ch)
-      }
-      for (let y = 0; y <= H; y += tileSize) {
-        const py = Math.round(y * zoom * dpr) / dpr + 0.5 / dpr
-        ctx.moveTo(0, py)
-        ctx.lineTo(cw, py)
-      }
-      ctx.stroke()
-    }
-
-    // Symmetry centerline guides (Mirror X / Mirror Y)
-    if ((mirrorX || mirrorY) && !playing) {
-      ctx.save()
-      ctx.lineWidth = 1
-      ctx.setLineDash([4, 4])
-      ctx.strokeStyle = 'rgba(45, 212, 191, 0.65)'
-      ctx.beginPath()
-      if (mirrorX) {
-        const mx = Math.round((W / 2) * zoom * dpr) / dpr + 0.5 / dpr
-        ctx.moveTo(mx, 0)
-        ctx.lineTo(mx, ch)
-      }
-      if (mirrorY) {
-        const my = Math.round((H / 2) * zoom * dpr) / dpr + 0.5 / dpr
-        ctx.moveTo(0, my)
-        ctx.lineTo(cw, my)
-      }
-      ctx.stroke()
-      ctx.restore()
-    }
-
-    // Motion part bounding boxes overlay when the Motion tab is active
-    if (rightTab === 'motion' && !playing) {
-      const clip = getActiveClip(useEditor.getState())
-      const parts = motionDraftParts.length > 0 ? motionDraftParts : clip.parts
-      const partColors = ['#2ce8f5', '#a7f070', '#ffcd75', '#ef7d57', '#f4f4f4', '#73eff7', '#b13e53', '#38b764']
-      ctx.save()
-      parts.forEach((p, idx) => {
-        const r = p.rect ?? { x: 0, y: 0, w: W, h: H }
-        const color = partColors[idx % partColors.length]
-        const rx = r.x * zoom
-        const ry = r.y * zoom
-        const rw = r.w * zoom
-        const rh = r.h * zoom
-        ctx.strokeStyle = color
-        ctx.lineWidth = 1.5
-        ctx.setLineDash([3, 2])
-        ctx.strokeRect(rx + 0.5, ry + 0.5, Math.max(1, rw - 1), Math.max(1, rh - 1))
-        if (zoom >= 4) {
-          ctx.setLineDash([])
-          ctx.font = '600 9px monospace'
-          const tw = ctx.measureText(p.name).width + 6
-          ctx.fillStyle = 'rgba(9, 9, 11, 0.82)'
-          ctx.fillRect(rx, Math.max(0, ry - 12), tw, 12)
-          ctx.fillStyle = color
-          ctx.fillText(p.name, rx + 3, Math.max(9, ry - 3))
-        }
-      })
-      ctx.restore()
-    }
-
-    // Interactive Craft Check defect pins overlay (doubles = amber, orphans = red, jaggies = cyan)
-    if (craftPins.length > 0 && !playing) {
-      ctx.save()
-      const pinColor: Record<'doubles' | 'orphans' | 'jaggies', { stroke: string; fill: string }> = {
-        doubles: { stroke: 'rgba(251, 191, 36, 0.95)', fill: 'rgba(251, 191, 36, 0.28)' },
-        orphans: { stroke: 'rgba(248, 113, 113, 0.95)', fill: 'rgba(248, 113, 113, 0.32)' },
-        jaggies: { stroke: 'rgba(34, 211, 238, 0.95)', fill: 'rgba(34, 211, 238, 0.25)' },
-      }
-      ctx.lineWidth = Math.max(1.5, Math.min(2.5, zoom / 4))
-      for (const pin of craftPins) {
-        const col = pinColor[pin.kind]
-        const px = pin.x * zoom
-        const py = pin.y * zoom
-        ctx.fillStyle = col.fill
-        ctx.fillRect(px, py, zoom, zoom)
-        ctx.strokeStyle = col.stroke
-        ctx.strokeRect(px + 0.5, py + 0.5, Math.max(2, zoom - 1), Math.max(2, zoom - 1))
-      }
-      ctx.restore()
-    }
-
-    // hover cursor (paint tools), grey like the frame-thumb hover border
-    if (
-      hover &&
-      !playing &&
-      tool !== 'eyedropper' &&
-      tool !== 'move' &&
-      tool !== 'marquee' &&
-      tool !== 'wand' &&
-      tool !== 'gradient'
-    ) {
-      const size = tool === 'fill' ? 1 : brushSize
-      const off2 = Math.floor((Math.max(1, size) - 1) / 2)
-      const hx = (hover.x - off2) * zoom
-      const hy = (hover.y - off2) * zoom
-      const hs = Math.max(1, size) * zoom
-      ctx.strokeStyle = tool === 'shade' ? 'rgba(251, 191, 36, 0.9)' : 'rgba(113, 113, 122, 0.9)'
-      ctx.lineWidth = 1
-      if (customBrush && tool !== 'shade') {
-        ctx.strokeRect(
-          (hover.x - Math.floor(customBrush.w / 2)) * zoom + 0.5,
-          (hover.y - Math.floor(customBrush.h / 2)) * zoom + 0.5,
-          customBrush.w * zoom - 1,
-          customBrush.h * zoom - 1,
-        )
-      } else if (brushShape === 'circle') {
+      // Symmetry centerline guides (Mirror X / Mirror Y)
+      if ((mirrorX || mirrorY) && !playing) {
+        ctx.save()
+        ctx.lineWidth = 1
+        ctx.setLineDash([4, 4])
+        ctx.strokeStyle = 'rgba(45, 212, 191, 0.65)'
         ctx.beginPath()
-        ctx.arc(hx + hs / 2, hy + hs / 2, hs / 2, 0, Math.PI * 2)
+        if (mirrorX) {
+          const mx = Math.round((W / 2) * zoom * dpr) / dpr + 0.5 / dpr
+          ctx.moveTo(mx, 0)
+          ctx.lineTo(mx, ch)
+        }
+        if (mirrorY) {
+          const my = Math.round((H / 2) * zoom * dpr) / dpr + 0.5 / dpr
+          ctx.moveTo(0, my)
+          ctx.lineTo(cw, my)
+        }
         ctx.stroke()
-      } else {
-        ctx.strokeRect(hx + 0.5, hy + 0.5, hs - 1, hs - 1)
+        ctx.restore()
+      }
+
+      // Motion part bounding boxes overlay when the Motion tab is active
+      if (rightTab === 'motion' && !playing) {
+        const clip = getActiveClip(useEditor.getState())
+        const parts = motionDraftParts.length > 0 ? motionDraftParts : clip.parts
+        const partColors = ['#2ce8f5', '#a7f070', '#ffcd75', '#ef7d57', '#f4f4f4', '#73eff7', '#b13e53', '#38b764']
+        ctx.save()
+        parts.forEach((p, idx) => {
+          const r = p.rect ?? { x: 0, y: 0, w: W, h: H }
+          const color = partColors[idx % partColors.length]
+          const rx = r.x * zoom
+          const ry = r.y * zoom
+          const rw = r.w * zoom
+          const rh = r.h * zoom
+          ctx.strokeStyle = color
+          ctx.lineWidth = 1.5
+          ctx.setLineDash([3, 2])
+          ctx.strokeRect(rx + 0.5, ry + 0.5, Math.max(1, rw - 1), Math.max(1, rh - 1))
+          if (zoom >= 4) {
+            ctx.setLineDash([])
+            ctx.font = '600 9px monospace'
+            const tw = ctx.measureText(p.name).width + 6
+            ctx.fillStyle = 'rgba(9, 9, 11, 0.82)'
+            ctx.fillRect(rx, Math.max(0, ry - 12), tw, 12)
+            ctx.fillStyle = color
+            ctx.fillText(p.name, rx + 3, Math.max(9, ry - 3))
+          }
+        })
+        ctx.restore()
+      }
+
+      // Interactive Craft Check defect pins overlay (doubles = amber, orphans = red, jaggies = cyan)
+      if (craftPins.length > 0 && !playing) {
+        ctx.save()
+        const pinColor: Record<'doubles' | 'orphans' | 'jaggies', { stroke: string; fill: string }> = {
+          doubles: { stroke: 'rgba(251, 191, 36, 0.95)', fill: 'rgba(251, 191, 36, 0.28)' },
+          orphans: { stroke: 'rgba(248, 113, 113, 0.95)', fill: 'rgba(248, 113, 113, 0.32)' },
+          jaggies: { stroke: 'rgba(34, 211, 238, 0.95)', fill: 'rgba(34, 211, 238, 0.25)' },
+        }
+        ctx.lineWidth = Math.max(1.5, Math.min(2.5, zoom / 4))
+        for (const pin of craftPins) {
+          const col = pinColor[pin.kind]
+          const px = pin.x * zoom
+          const py = pin.y * zoom
+          ctx.fillStyle = col.fill
+          ctx.fillRect(px, py, zoom, zoom)
+          ctx.strokeStyle = col.stroke
+          ctx.strokeRect(px + 0.5, py + 0.5, Math.max(2, zoom - 1), Math.max(2, zoom - 1))
+        }
+        ctx.restore()
+      }
+
+      // hover cursor (paint tools), grey like the frame-thumb hover border
+      if (
+        hover &&
+        !playing &&
+        tool !== 'eyedropper' &&
+        tool !== 'move' &&
+        tool !== 'marquee' &&
+        tool !== 'wand' &&
+        tool !== 'gradient'
+      ) {
+        const size = tool === 'fill' ? 1 : brushSize
+        const off2 = Math.floor((Math.max(1, size) - 1) / 2)
+        const hx = (hover.x - off2) * zoom
+        const hy = (hover.y - off2) * zoom
+        const hs = Math.max(1, size) * zoom
+        ctx.strokeStyle = tool === 'shade' ? 'rgba(251, 191, 36, 0.9)' : 'rgba(113, 113, 122, 0.9)'
+        ctx.lineWidth = 1
+        if (customBrush && tool !== 'shade') {
+          ctx.strokeRect(
+            (hover.x - Math.floor(customBrush.w / 2)) * zoom + 0.5,
+            (hover.y - Math.floor(customBrush.h / 2)) * zoom + 0.5,
+            customBrush.w * zoom - 1,
+            customBrush.h * zoom - 1,
+          )
+        } else if (brushShape === 'circle') {
+          ctx.beginPath()
+          ctx.arc(hx + hs / 2, hy + hs / 2, hs / 2, 0, Math.PI * 2)
+          ctx.stroke()
+        } else {
+          ctx.strokeRect(hx + 0.5, hy + 0.5, hs - 1, hs - 1)
+        }
+      }
+
+      // marching-ants selection outline (two alternating dashed passes);
+      // while a scale handle is dragged the DRAFT rect is outlined instead
+      if (selection && !playing) {
+        const ants = scaleDraft ?? selection
+        const sx = ants.x * zoom
+        const sy = ants.y * zoom
+        const sw = ants.w * zoom
+        const sh = ants.h * zoom
+        const dash = Math.max(3, Math.round(zoom / 2))
+        ctx.save()
+        ctx.lineWidth = 1
+        ctx.setLineDash([dash, dash])
+        ctx.lineDashOffset = -(antsTick % 2) * dash // crawl
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.95)'
+        ctx.strokeRect(sx + 0.5, sy + 0.5, sw - 1, sh - 1)
+        ctx.lineDashOffset = -(antsTick % 2) * dash + dash / 2
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.95)'
+        ctx.strokeRect(sx + 0.5, sy + 0.5, sw - 1, sh - 1)
+        ctx.restore()
       }
     }
 
-    // marching-ants selection outline (two alternating dashed passes);
-    // while a scale handle is dragged the DRAFT rect is outlined instead
-    if (selection && !playing) {
-      const ants = scaleDraft ?? selection
-      const sx = ants.x * zoom
-      const sy = ants.y * zoom
-      const sw = ants.w * zoom
-      const sh = ants.h * zoom
-      const dash = Math.max(3, Math.round(zoom / 2))
-      ctx.save()
-      ctx.lineWidth = 1
-      ctx.setLineDash([dash, dash])
-      ctx.lineDashOffset = -(antsTick % 2) * dash // crawl
-      ctx.strokeStyle = 'rgba(0, 0, 0, 0.95)'
-      ctx.strokeRect(sx + 0.5, sy + 0.5, sw - 1, sh - 1)
-      ctx.lineDashOffset = -(antsTick % 2) * dash + dash / 2
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.95)'
-      ctx.strokeRect(sx + 0.5, sy + 0.5, sw - 1, sh - 1)
-      ctx.restore()
-    }
+    paintBoardRef.current = paintFromSource
+    const source = aiDisplayOverrideRef.current && revealOffRef.current ? revealOffRef.current : offRef.current
+    paintFromSource(source)
     // NOTE: activeFrameIndex must be a dep — selectFrame() only composites the
     // offscreen buffer; without this dep the visible canvas keeps showing the
     // previous frame until the next hover/tick change ("frame click delay").
@@ -508,6 +531,115 @@ export function CanvasStage() {
     // opacity/tints re-composites the offscreen buffer only; without these deps
     // the visible canvas keeps showing the pre-onion blit (stale ghosts).
   }, [project, W, H, zoom, panX, panY, showGrid, tileSnap, tileSize, tiledWrap, mirrorX, mirrorY, rightTab, motionDraftParts, craftPins, renderTick, hover, tool, brushSize, brushShape, customBrush, playing, activeFrameIndex, selection, scaleDraft, ellipseFilled, antsTick, onionSkin, onionOpacity, onionPrevTint, onionNextTint])
+
+  // ------------------------------------------- live AI progressive reveal + before/after peek
+  // Runs completely outside React state (zero re-renders during the 60fps reveal sweep).
+  // Renders unrevealed pixels from `before` and reveals them progressively along the AI brush
+  // so checkerboard transparency, pixel grid, and hover cursor all stay 100% crisp.
+  useEffect(() => {
+    const reducedMotion =
+      typeof window !== 'undefined' &&
+      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+
+    let raf = 0
+
+    const ensureRevealCanvas = () => {
+      if (!revealOffRef.current) revealOffRef.current = document.createElement('canvas')
+      const rcv = revealOffRef.current
+      if (rcv.width !== W || rcv.height !== H) {
+        rcv.width = W
+        rcv.height = H
+        revealImageDataRef.current = null
+      }
+      const rctx = rcv.getContext('2d')
+      if (!rctx) return null
+      if (!revealImageDataRef.current || revealImageDataRef.current.width !== W || revealImageDataRef.current.height !== H) {
+        revealImageDataRef.current = rctx.createImageData(W, H)
+      }
+      return { rcv, rctx, imgData: revealImageDataRef.current }
+    }
+
+    const restoreRealFrame = () => {
+      if (!aiDisplayOverrideRef.current) return
+      aiDisplayOverrideRef.current = false
+      if (offRef.current) paintBoardRef.current?.(offRef.current)
+    }
+
+    const syncAiFrame = () => {
+      cancelAnimationFrame(raf)
+      raf = 0
+      if (playing || !activeFrameId) {
+        restoreRealFrame()
+        return
+      }
+      const snap = getAiActivitySnapshot()
+
+      // 1. Hold-to-Compare Before/After peek takes precedence
+      const cmp = snap.comparePreview
+      if (cmp && cmp.clipId === activeClipId && cmp.frameId === activeFrameId && cmp.width === W && cmp.height === H) {
+        const target = ensureRevealCanvas()
+        if (!target) return
+        target.imgData.data.set(cmp.before)
+        target.rctx.putImageData(target.imgData, 0, 0)
+        aiDisplayOverrideRef.current = true
+        paintBoardRef.current?.(target.rcv)
+        return
+      }
+
+      // 2. Progressive pixel reveal for the newest active reveal pulse on this frame
+      if (reducedMotion) {
+        restoreRealFrame()
+        return
+      }
+      const revealPulse = [...snap.pulses]
+        .reverse()
+        .find(
+          (p) =>
+            p.reveal &&
+            p.reveal.clipId === activeClipId &&
+            p.reveal.frameId === activeFrameId &&
+            p.reveal.width === W &&
+            p.reveal.height === H,
+        )
+      if (!revealPulse?.reveal) {
+        restoreRealFrame()
+        return
+      }
+
+      const step = () => {
+        const now = Date.now()
+        const reveal = revealPulse.reveal
+        if (!reveal) {
+          restoreRealFrame()
+          return
+        }
+        const elapsed = now - revealPulse.startedAt
+        const t = Math.max(0, Math.min(1, elapsed / revealPulse.durationMs))
+        const sweep = Math.min(1, t / 0.68)
+        if (sweep >= 1) {
+          revealPulse.reveal = undefined
+          restoreRealFrame()
+          return
+        }
+        const target = ensureRevealCanvas()
+        if (!target) return
+        composeProgressiveReveal(reveal, sweep, target.imgData.data)
+        target.rctx.putImageData(target.imgData, 0, 0)
+        aiDisplayOverrideRef.current = true
+        paintBoardRef.current?.(target.rcv)
+        raf = requestAnimationFrame(step)
+      }
+      step()
+    }
+
+    syncAiFrame()
+    const unsub = subscribeAiActivity(syncAiFrame)
+    return () => {
+      unsub()
+      cancelAnimationFrame(raf)
+      aiDisplayOverrideRef.current = false
+    }
+  }, [activeClipId, activeFrameId, W, H, playing])
 
   // ------------------------------------------------------------ fit / zoom
   const fitView = useCallback(() => {
@@ -645,6 +777,8 @@ export function CanvasStage() {
     if (playing) return
     const canvas = canvasRef.current
     if (!canvas) return
+    // Immediately reveal all real pixels if the artist starts interacting mid-AI-sweep
+    finishActiveReveals()
     const st = useEditor.getState()
     const px = toPixel(e.clientX, e.clientY)
     canvas.setPointerCapture(e.pointerId)
@@ -1320,6 +1454,15 @@ export function CanvasStage() {
             }}
           />
 
+          {/* live AI artist cursor + pixel-glow trail while an IDE agent draws */}
+          <AiLiveCanvasOverlay
+            width={W}
+            height={H}
+            zoom={zoom}
+            clipId={activeClipForOverlay.id}
+            frameId={activeFrameId}
+          />
+
           {/* free-scale handles — visual only (pointer-events-none; the canvas
               hit-tests them) — they track the live draft while dragging */}
           {scaleRect && (
@@ -1351,12 +1494,16 @@ export function CanvasStage() {
       {/* contextual tool options (ellipse fill toggle, tilemap toggle, selection actions) */}
       <MemoToolOptionsBar />
 
+      {/* live AI agent status pill while an IDE agent is inspecting or painting */}
+      <AiLiveStatusPill />
+
       {/* empty-frame hint — makes it explicit that pixels were NOT lost when
-          the playhead sits on a blank frame (e.g. right after Add frame) */}
+          the playhead sits on a blank frame (e.g. right after Add frame).
+          Positioned below top-14 so it never overlaps the top-center Live AI HUD pill. */}
       {frameEmpty && !playing && (
         <div
           role="status"
-          className="pointer-events-none absolute left-1/2 top-3 z-10 -translate-x-1/2 rounded-sm border border-zinc-700 bg-zinc-950/95 px-3 py-1.5 text-center shadow-lg"
+          className="pointer-events-none absolute left-1/2 top-14 z-10 -translate-x-1/2 rounded-sm border border-zinc-700 bg-zinc-950/95 px-3 py-1.5 text-center shadow-lg"
         >
           <p className="text-[11px] text-zinc-100">
             Frame {Math.min(activeFrameIndex + 1, getActiveClip(useEditor.getState()).frames.length)} is empty

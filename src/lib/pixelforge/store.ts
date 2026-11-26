@@ -58,6 +58,7 @@ import { DEFAULT_PALETTE } from './palettes'
 import { useAppSettings } from './settings'
 
 import { toast } from '@/hooks/use-toast'
+import { finishActiveReveals, notifyAiHistoryChanged } from './ai-live-activity'
 import { materializeSkinVariants, type CreatedSkinVariant, type SkinVariantRequest } from './skin-variants'
 import { friendlyError } from '@/lib/utils'
 import {
@@ -2025,7 +2026,27 @@ export const useEditor = create<EditorState>()((set, get) => ({
 
 // subscribe the mirror to every bus change (executed commands, undo/redo,
 // stroke flow, document replacement)
-bus.onChange(() => syncFromBus())
+let lastBusUndoDepth = 0
+bus.onChange((ev) => {
+  const prevDepth = lastBusUndoDepth
+  const nextDepth = bus.historyStats().undoDepth
+  lastBusUndoDepth = nextDepth
+  const epoch = useEditor.getState().loadEpoch
+  if (ev.reason === 'document-replaced') {
+    finishActiveReveals()
+    notifyAiHistoryChanged('reset', prevDepth, nextDepth, epoch)
+  } else if (ev.reason === 'undone') {
+    finishActiveReveals()
+    notifyAiHistoryChanged('undone', prevDepth, nextDepth, epoch)
+  } else if (ev.reason === 'redone') {
+    finishActiveReveals()
+    notifyAiHistoryChanged('redone', prevDepth, nextDepth, epoch)
+  } else if (ev.reason === 'executed' || ev.reason === 'stroke-committed') {
+    if (ev.origin === 'ui') finishActiveReveals()
+    if (ev.historyChanged) notifyAiHistoryChanged('push', prevDepth, nextDepth, epoch)
+  }
+  syncFromBus()
+})
 
 // --- selector helpers (with safe fallbacks) --------------------------------
 
