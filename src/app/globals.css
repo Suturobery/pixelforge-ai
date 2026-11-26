@@ -246,6 +246,16 @@
     -16px 0;
 }
 
+/* Integrated desktop titlebar: empty header space drags/maximizes the Electron
+   window, while all interactive controls stay clickable (no-drag). */
+.pf-titlebar-drag {
+  -webkit-app-region: drag;
+  user-select: none;
+}
+.pf-titlebar-drag :is(button, input, select, textarea, a, [role='button'], [role='combobox'], .pf-titlebar-no-drag) {
+  -webkit-app-region: no-drag;
+}
+
 /* Bar-only scrollbars everywhere: slim dark bar, NO arrow buttons
    (::-webkit-scrollbar-button hides the < > caps Chromium shows on Windows).
    Firefox gets the same look via scrollbar-width/color. */

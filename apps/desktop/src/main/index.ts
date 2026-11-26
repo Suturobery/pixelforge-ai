@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 
-import { app, BrowserWindow, dialog, ipcMain } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme } from 'electron';
 
 import { registerBridgeHandlers } from '../bridge/handlers';
 import { registerSettingsHandlers } from '../bridge/settings-handlers';
@@ -17,7 +17,7 @@ import { runSmokeTest } from '../smoke';
 import { installSessionHardening } from '../security';
 import { SettingsStore } from '../settings/store';
 import { UpdateService } from '../update/service';
-import { closeStartupSplash, showStartupSplash } from '../startup-splash';
+import { loadStartupSplash } from '../startup-splash';
 import { createMainWindow, getMainWindow, loadRenderer, persistWindowLayout } from '../window';
 
 // Fix the product name before anything reads userData paths (logs live there).
@@ -169,11 +169,19 @@ if (!gotLock) {
     registerSettingsHandlers(settingsStore, logger);
     updateService.register();
     updateService.scheduleStartupCheck();
+    // Match native Windows/macOS chrome, menus, and dialogs to our dark studio theme.
+    nativeTheme.themeSource = 'dark';
     installApplicationMenu();
-    // The embedded Next renderer has a noticeable cold-start cost. Present a
-    // native, local splash immediately rather than exposing a black window
-    // while the renderer server boots. Smoke mode skips this extra window.
-    const startupSplash = SMOKE ? null : showStartupSplash(logger);
+
+    // Create the main studio window FIRST and show the integrated loading screen
+    // directly inside it (instead of a separate floating popup) while MCP and
+    // the local Next renderer server warm up. Smoke mode skips the splash so
+    // `did-finish-load` fires directly on the real editor renderer.
+    const win = createMainWindow(logger, settingsStore);
+    installSessionHardening(win, logger); // must precede the first navigation
+    if (!SMOKE) {
+      await loadStartupSplash(win, logger);
+    }
 
     // Task 8 (embed v1): supervise the bundled MCP mini-service so the
     // desktop app offers MCP tools without a separate terminal. Packaged
@@ -206,12 +214,6 @@ if (!gotLock) {
     process.env.PF_MCP_DATA_DIR ??= app.isPackaged
       ? path.join(app.getPath('userData'), 'mcp-data')
       : path.resolve(app.getAppPath(), '..', '..', 'db');
-
-    const win = createMainWindow(logger, settingsStore, {
-      onReadyToShow: () => closeStartupSplash(startupSplash, logger),
-    });
-    installSessionHardening(win, logger); // must precede the first navigation
-    win.once('closed', () => closeStartupSplash(startupSplash, logger));
 
     // Task 4: packaged builds serve the REAL editor from the embedded Next
     // standalone server before the window navigates to it. PF_RENDERER=shell

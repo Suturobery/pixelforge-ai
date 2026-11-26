@@ -2,7 +2,7 @@
 
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 import { useEditor, isUsableProject } from '@/lib/pixelforge/store'
 import { importLegacyProjectJson } from '@/lib/pixelforge/project-io'
@@ -157,6 +157,16 @@ function RecentProjects() {
   )
 }
 
+const noopSubscribe = () => () => {}
+function getDesktopChromeSnapshot(): 'none' | 'win' | 'mac' {
+  if (!isDesktop()) return 'none'
+  const isMac = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform || navigator.userAgent)
+  return isMac ? 'mac' : 'win'
+}
+function getDesktopChromeServerSnapshot(): 'none' | 'win' | 'mac' {
+  return 'none'
+}
+
 export function Header() {
   const name = useEditor((s) => s.project.name)
   const setName = useEditor((s) => s.setName)
@@ -171,10 +181,23 @@ export function Header() {
   const [resizeOpen, setResizeOpen] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const desktopChrome = useSyncExternalStore(
+    noopSubscribe,
+    getDesktopChromeSnapshot,
+    getDesktopChromeServerSnapshot,
+  )
 
   return (
     <TooltipProvider delayDuration={200}>
-      <header className="relative z-40 flex h-12 shrink-0 items-center gap-2 overflow-hidden border-b border-zinc-800/80 bg-zinc-950/70 px-3 backdrop-blur-xl">
+      <header
+        className={`relative z-40 flex h-12 shrink-0 items-center gap-2 overflow-hidden border-b border-zinc-800/80 bg-zinc-950/90 px-3 backdrop-blur-xl ${
+          desktopChrome === 'win'
+            ? 'pf-titlebar-drag pr-[144px]'
+            : desktopChrome === 'mac'
+              ? 'pf-titlebar-drag pl-[78px]'
+              : ''
+        }`}
+      >
         {/* logo — Glow Grid mark (matches build/icon.svg): 2×2 tiles, teal glow column */}
         <div className="flex shrink-0 items-center gap-2.5" aria-label="PixelForge AI">
           <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden className="shrink-0">

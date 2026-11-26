@@ -93,6 +93,7 @@ export function createMainWindow(
   const target = resolveRendererTarget();
   const stored = settings?.getInternal().window ?? null;
   const bounds = sanitizeBounds(stored);
+  const isMac = process.platform === 'darwin';
   const win = new BrowserWindow({
     // stored bounds win; defaults apply only when nothing valid is stored
     ...(bounds
@@ -104,6 +105,22 @@ export function createMainWindow(
     title: 'PixelForge AI',
     backgroundColor: '#09090b', // zinc-950 studio dark
     autoHideMenuBar: true,
+    // Integrated dark studio titlebar — replaces the OS accent-colored title bar
+    // (e.g. pink/colored Windows chrome) so minimize/maximize/close blend cleanly
+    // into the 48px studio header on Windows/Linux and traffic lights inset on macOS.
+    ...(isMac
+      ? {
+          titleBarStyle: 'hiddenInset' as const,
+          trafficLightPosition: { x: 14, y: 16 },
+        }
+      : {
+          titleBarStyle: 'hidden' as const,
+          titleBarOverlay: {
+            color: '#09090b',
+            symbolColor: '#a1a1aa',
+            height: 48,
+          },
+        }),
     icon: app.isPackaged ? undefined : path.join(app.getAppPath(), 'build', 'icon.ico'),
     webPreferences: {
       preload: preloadPath(),
