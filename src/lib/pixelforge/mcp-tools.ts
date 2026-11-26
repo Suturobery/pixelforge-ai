@@ -82,6 +82,7 @@ import {
   isAiPaused,
   recordAiActivityEntry,
 } from './ai-live-activity'
+import { buildVisualCheck, recommendedInspectionScale } from './ai-visual-check'
 import { getBus, useEditor } from './store'
 import { MCP_TOOLS } from './mcp-tool-catalog'
 import { hexToRgba } from './color'
@@ -610,6 +611,8 @@ const handlers: Record<string, ToolHandler> = {
             })()
     const showGrid = args.showGrid === true
     const dataUrl = await framePng(project, clip, frame, scale, showGrid)
+    const composed = composeFrameRgba(project, clip, frame)
+    const visualCheck = buildVisualCheck(composed, project.width, project.height, project.palette)
     return withStateHash({
       clipId: clip.id,
       frameId: frame.id,
@@ -618,6 +621,7 @@ const handlers: Record<string, ToolHandler> = {
       scale,
       showGrid,
       png: dataUrl,
+      visualCheck,
     })
   },
 
@@ -2744,6 +2748,29 @@ export async function executeMcpTool(tool: string, args: unknown, ctx: ToolExecC
           orderedIndices: hit.diff.orderedIndices,
         },
       })
+
+      // Auto-Eyes: attach deterministic spatial self-critique (`visualCheck`)
+      // plus a crisp zoomed gridded PNG (`autoPreviewPng`) for external MCP
+      // vision agents so they immediately SEE what they just drew and spot
+      // crooked details, floating dots, or bad proportions without going blind.
+      if (res.data && isRecord(res.data)) {
+        const projNow = bus.getProject()
+        const visualCheck = buildVisualCheck(hit.afterBuffer, hit.width, hit.height, projNow.palette)
+        let autoPreviewPng: string | undefined
+        if (ctx.clientId !== 'macro' && ctx.clientId !== 'agent-console' && ctx.clientId !== 'second-brain') {
+          const targetClip = projNow.clips.find((c) => c.id === hit.clipId)
+          const targetFrame = targetClip?.frames.find((f) => f.id === hit.frameId)
+          if (targetClip && targetFrame) {
+            const zoomScale = recommendedInspectionScale(projNow.width, projNow.height)
+            autoPreviewPng = await framePng(projNow, targetClip, targetFrame, zoomScale, zoomScale >= 4)
+          }
+        }
+        res.data = {
+          ...res.data,
+          visualCheck,
+          ...(autoPreviewPng ? { autoPreviewPng } : {}),
+        }
+      }
     }
 
     let entryId: number | undefined

@@ -840,6 +840,35 @@ describe('skill knowledge (get_knowledge / study_reference)', () => {
     }
   });
 
+  test('Auto-Eyes: autoPreviewPng on drawing tools becomes a native MCP image block and is stripped from text JSON', async () => {
+    const png = await encodePng(1, 1, new Uint8ClampedArray([20, 184, 166, 255]));
+    const url = 'data:image/png;base64,' + Buffer.from(png).toString('base64');
+    toolResponders.set('fill_rect', () => ({
+      changed: 16,
+      visualCheck: { opaquePixels: 16, warnings: [] },
+      autoPreviewPng: url,
+    }));
+    const client = await pairedClient('L1', 'auto-eyes-client');
+    try {
+      const result = await client.callTool({
+        name: 'fill_rect',
+        arguments: { from: { x: 0, y: 0 }, to: { x: 3, y: 3 }, color: '#14b8a6' },
+      });
+      const env = textEnvelope(result);
+      expect(result.structuredContent).toEqual(env);
+      const data = env.data as Record<string, unknown>;
+      expect(data.autoPreviewPng).toBeUndefined();
+      expect(data.visualPreviewAttached).toBe(true);
+      expect(result.content).toEqual([
+        expect.objectContaining({ type: 'text' }),
+        { type: 'image', mimeType: 'image/png', data: url.split(',')[1] },
+      ]);
+    } finally {
+      toolResponders.delete('fill_rect');
+      await client.close();
+    }
+  });
+
   test('save_project is L2-gated and relays to the editor', async () => {
     // L0 pairing: tier check rejects before any relay happens.
     const l0 = await pairedClient('L0', 'save-reader');

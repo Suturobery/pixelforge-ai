@@ -35,13 +35,34 @@ export interface HostDeps {
 /** The editor already encodes previews as PNGs. Expose those same bytes to vision clients. */
 function previewImages(tool: string, data: unknown) {
   if (!data || typeof data !== 'object') return [];
-  const urls = tool === 'get_frame_png' && 'png' in data ? [data.png]
-    : tool === 'preview_animation' && 'frames' in data && Array.isArray(data.frames) ? data.frames : [];
+  const rec = data as Record<string, unknown>;
+  const urls: unknown[] =
+    tool === 'get_frame_png' && 'png' in rec
+      ? [rec.png]
+      : tool === 'preview_animation' && Array.isArray(rec.frames)
+        ? rec.frames
+        : 'autoPreviewPng' in rec
+          ? [rec.autoPreviewPng]
+          : [];
   const prefix = 'data:image/png;base64,';
   return urls.flatMap((url: unknown) =>
     typeof url === 'string' && url.startsWith(prefix) && url.length > prefix.length
       ? [{ type: 'image' as const, mimeType: 'image/png', data: url.slice(prefix.length) }]
       : []);
+}
+
+/**
+ * Strip raw base64 `autoPreviewPng` from the JSON envelope before serializing text,
+ * because the exact bytes are already delivered as a native MCP `image/png` content
+ * block (keeps LLM text token usage lean while still giving vision clients full eyes).
+ */
+function stripAutoPreview(envelope: ToolEnvelope): ToolEnvelope {
+  if (!envelope.ok || !envelope.data || typeof envelope.data !== 'object') return envelope;
+  const rec = envelope.data as Record<string, unknown>;
+  if (!('autoPreviewPng' in rec)) return envelope;
+  const { autoPreviewPng: _omitted, ...rest } = rec;
+  void _omitted;
+  return { ...envelope, data: { ...rest, visualPreviewAttached: true } };
 }
 
 interface SessionIdentity {
@@ -209,15 +230,17 @@ export class McpHost {
       { name: 'pixelforge-ai', version: '1.0.0' },
       {
         instructions:
-          'PixelForge AI pixel art & animation editor. Read get_project_state first; ids and stateHash from it ' +
-          'feed the other tools. Follow the project palette and Style Lock. For drawing, read get_knowledge ' +
-          'on methodology, shade, and the matching subject topic (characters, tileset, vfx). Block organic silhouettes ' +
-          'with draw_ellipse, draw_polygon, draw_line, flood_fill, and set_pixels (avoid boxy rectangles). Inspect ' +
-          'get_frame_png at scale=8 with showGrid=true plus native scale=1, run analyze_pixel_craft to catch doubles, ' +
-          'orphans, jaggies, and pillow shading, and polish with beautify_layer (selOut=true, cleanDoubles=true, paletteLock=true). ' +
+          'PixelForge AI pixel art & animation editor. Read get_project_state first; ids, stateHash, and artistContext ' +
+          '(live marquee selection, colors, symmetry, tiledWrap) feed every tool. Follow the project palette and Style Lock. ' +
+          'For drawing, read get_knowledge on methodology, shade, and the matching subject topic (characters, tileset, vfx). ' +
+          'Block organic silhouettes with draw_ellipse, draw_polygon, draw_line, flood_fill, and set_pixels (avoid boxy rectangles). ' +
+          'AUTO-EYES SELF-CRITIQUE: every pixel-writing tool returns a live zoomed gridded preview image plus visualCheck ' +
+          '(cropped asciiGrid pixel map with exact y rows, bounds, floatingFragments, symmetryX, and warnings) and craftGate. ' +
+          'Inspect both after every stage to catch crooked eyes, detached parts, stray pixels, flat shading, or bad proportions ' +
+          'and fix them immediately before continuing. You can also call get_frame_png at scale=8 with showGrid=true. ' +
+          'Polish with beautify_layer (selOut=true, cleanDoubles=true, paletteLock=true). ' +
           'For animation read the animation topic, inspect preview_animation frames, and check timing and emptyFrames. ' +
-          'Run validate_style for technical checks. If your client cannot display images, report that visual review is pending. ' +
-          'Respect dirty_project when replacing a document.',
+          'Run validate_style for technical checks. Respect dirty_project, editor_busy, and artist_paused.',
       }
     );
 
@@ -235,17 +258,19 @@ export class McpHost {
           const entry = sid ? this.sessions.get(sid) : undefined;
           const identity = entry?.identity ?? this.initializing;
           const envelope = await this.runTool(def, args, identity);
-          const text = JSON.stringify(envelope, null, 2);
           this.auditTool(def, args, identity, envelope, Date.now() - started);
           if (!envelope.ok) {
             return {
               isError: true,
-              content: [{ type: 'text' as const, text }],
+              content: [{ type: 'text' as const, text: JSON.stringify(envelope, null, 2) }],
             };
           }
+          const images = previewImages(def.name, envelope.data);
+          const cleanEnvelope = stripAutoPreview(envelope);
+          const text = JSON.stringify(cleanEnvelope, null, 2);
           return {
-            content: [{ type: 'text' as const, text }, ...previewImages(def.name, envelope.data)],
-            structuredContent: envelope as unknown as Record<string, unknown>,
+            content: [{ type: 'text' as const, text }, ...images],
+            structuredContent: cleanEnvelope as unknown as Record<string, unknown>,
           };
         }
       );

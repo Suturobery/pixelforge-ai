@@ -420,6 +420,7 @@ While an IDE agent is connected or actively editing over MCP, PixelForge renders
 - **1-Click & Per-Step Undo:** Undo the latest AI edit from the pill, or expand the **AI Activity Feed** (up to 16 recent steps) to jump to any edited clip/frame, flash its region, or safely undo to a specific step. Press `Escape` or click outside to close the feed.
 - **Artist Priority Pause & Auto-Follow:** Click **Pause** on the pill to hold mutating MCP writes (`artist_paused`) while keeping `L0` inspection available. Toggle **Follow** off in the feed to stay on your current clip/frame; off-view edits show a clickable **Jump** button instead.
 - **Two-Way `artistContext`:** `get_project_state` includes `artistContext` (`selection`, `primaryColor`, `secondaryColor`, `tool`, `mirrorX`, `mirrorY`, `tiledWrap`, `aiPaused`) so an agent can respect the artist's marquee selection and active canvas settings.
+- **Auto-Eyes Self-Critique:** Every pixel-writing MCP call automatically returns a native zoomed gridded `image/png` preview block (auto-scaled up to 8× for small sprites, base64 stripped from text JSON to save tokens) PLUS `visualCheck` (exact sprite bounds, margins, 4-connected parts, tiny floating fragment coordinates, horizontal symmetry %, off-palette color count, a cropped color-indexed `asciiGrid` with exact `y` row numbers, and common-sense warnings) so agents immediately notice and fix misplaced eyes, floating pixels, or bad proportions.
 
 ## Second Brain panel
 

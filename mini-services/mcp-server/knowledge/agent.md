@@ -112,7 +112,14 @@ pill) and can undo each step — so draw in visible stages, not one giant call:
 1. Block in the silhouette first (`fill_rect` / `draw_polygon` / `draw_ellipse`).
 2. Fill base colors, then add shading and highlights with palette colors.
 3. Add the outline / sel-out last, then `beautify_layer` only if `craftGate` asks.
-4. After each stage read `craftGate` and `get_frame_png`; fix before moving on.
+4. **Use Auto-Eyes after EVERY stage:** every pixel-writing tool automatically
+   returns a crisp zoomed gridded preview image PLUS `visualCheck` (exact cropped
+   `asciiGrid` with `y` row numbers and color legend, `bounds`, `floatingFragments`,
+   `symmetryX`, and common-sense `warnings`) alongside `craftGate`. Look at the
+   returned image and `asciiGrid` after each pass to catch crooked eyes, detached
+   limbs, stray floating dots, flat shading, or bad proportions and fix them
+   before moving to the next stage. For extra zoom inspection, call
+   `get_frame_png { scale: 8, showGrid: true }`.
 
 Prefer several small, meaningful calls (a body part, a shading pass) over one
 huge `set_pixels` or `batch` — it keeps the artist in the loop, makes mistakes

@@ -39,9 +39,7 @@ Web/dev: `bun src/index.ts` inside `mini-services/mcp-server`.
 5. Call `preview_animation` to inspect the rendered frames in order. Use its schedule
    for playback order and timing, and its invariants to identify empty frames.
 
-Both preview tools return native MCP PNG images alongside the original result envelope.
-Visual review requires an IDE that forwards image content to a model with vision.
-Text-only clients can still read frame metadata, timing and technical checks.
+Both preview tools — and every pixel-writing tool via **Auto-Eyes** — return native MCP PNG images (auto-zoomed with grid for small sprites) plus `visualCheck` (cropped `asciiGrid` pixel map, bounds, floating fragments, symmetry %, and warnings). Visual review requires an IDE that forwards image content to a model with vision; text-only clients still get exact pixel coordinates via `visualCheck.asciiGrid`.
 
 ## Task board
 
