@@ -55,8 +55,8 @@ describe('Phase 3: Tileset Slicer, Transforms & Animated Level Mockup', () => {
     // (1, 0) flipped H in 8x8 -> (6, 0)
     expect(fh[(0 * t + 6) * 4 + 1]).toBe(200);
 
-    let cur = tile;
-    let rot = rotateTileCW(0);
+    let cur: Uint8ClampedArray = tile;
+    const rot = rotateTileCW(0);
     expect(rot).toBe(90);
     for (let i = 0; i < 4; i++) {
       cur = transformTileBuffer(cur, t, { rotation: 90 });
