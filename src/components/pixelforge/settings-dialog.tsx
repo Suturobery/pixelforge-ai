@@ -369,6 +369,7 @@ export function SettingsDialog({
                 <ShortcutItem action="Swatch → secondary color" keys={['right-click']} />
                 <p className="pt-1 font-mono text-[10px] uppercase tracking-wider text-zinc-400">Tilemap &amp; Wrap</p>
                 <ShortcutItem action="Tile snap / Tile stamp" keys={['K', 'Shift+K']} />
+                <ShortcutItem action="Rotate tileset stamp 90° CW" keys={['Q']} />
                 <ShortcutItem action="Seamless 3×3 tile wrap" keys={['W']} />
               </div>
               <div className="space-y-2">
@@ -383,6 +384,7 @@ export function SettingsDialog({
                 <p className="pt-1 font-mono text-[10px] uppercase tracking-wider text-zinc-400">View</p>
                 <ShortcutItem action="Toggle grid / onion skin" keys={['G', 'O']} />
                 <ShortcutItem action="Toggle palette panel" keys={['P']} />
+                <ShortcutItem action="Clips Contact Sheet (compare all)" keys={['Shift+C']} />
                 <ShortcutItem action="Collapse frames strip" keys={['T']} />
                 <ShortcutItem action="Zoom in / out" keys={['+', '–']} />
                 <ShortcutItem action="Pan canvas" keys={['middle drag']} />

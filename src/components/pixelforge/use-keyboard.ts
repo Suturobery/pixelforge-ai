@@ -143,6 +143,18 @@ export function useKeyboardShortcuts(onSave: () => void) {
       if (e.ctrlKey || e.metaKey || e.altKey) return
 
       const k = e.key.toLowerCase()
+      // Phase 3: Shift+C opens Clips Contact Sheet (checked before plain C = Ellipse)
+      if (e.shiftKey && k === 'c') {
+        e.preventDefault()
+        st.setContactSheetOpen(!st.contactSheetOpen)
+        return
+      }
+      // Phase 3: Q rotates active Tileset Stamp 90° CW
+      if (k === 'q' && st.tileBrush) {
+        e.preventDefault()
+        st.rotateTileBrushCW()
+        return
+      }
       if (TOOL_KEYS[k]) {
         st.setTool(TOOL_KEYS[k])
         return

@@ -272,6 +272,26 @@ export {
   type PixelRect,
 } from './pixels/region';
 export {
+  IDENTITY_TILE_TRANSFORM,
+  composeLevelMockup,
+  extractTilesetGrid,
+  rotateTileCW,
+  stampTileOntoBuffer,
+  transformTileBuffer,
+  type LevelMockupCell,
+  type SlicedTile,
+  type SlicedTileset,
+  type TileRotation,
+  type TileTransform,
+} from './pixels/tileset';
+export {
+  composeClipsContactSheet,
+  measureClipContactMetrics,
+  type ComposedContactSheet,
+  type ContactSheetClipMetrics,
+  type ContactSheetOptions,
+} from './export/contact-sheet';
+export {
   TILE_BYTES,
   TILE_PIXELS,
   TILE_SIZE,

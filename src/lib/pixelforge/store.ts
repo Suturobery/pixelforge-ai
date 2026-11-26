@@ -38,7 +38,9 @@ import {
   remapBufferToPalette,
   renderSpriteTemplate,
   replaceColorInBuffer,
+  rotateTileCW,
   sortPaletteColors,
+  transformTileBuffer,
   uid,
   writeExportPlan,
   type CommandOrigin,
@@ -56,6 +58,7 @@ import {
   type StyleAnchor,
   type StyleProfile,
   type StrokeHandle as CoreStrokeHandle,
+  type TileRotation,
   type VectorShape,
   type VectorShapeKind,
 } from '@pixelforge/core'
@@ -84,7 +87,21 @@ export type { SelectionRect, ClipboardContent, TransformKind }
 export const MIN_ZOOM = 0.25 // 25% — lets big canvases fit small screens
 export const MAX_ZOOM = 64 // 6400% — 1 canvas px = 64 screen px
 
-export type RightTab = 'layers' | 'reference' | 'brain' | 'motion' | 'vfx' | 'agent'
+export type RightTab = 'layers' | 'tiles' | 'reference' | 'brain' | 'motion' | 'vfx' | 'agent'
+
+/** Active tileset stamp brush (Phase 3 — Tileset Stamp Picker). */
+export interface TileBrush {
+  sourceClipId: string
+  tileIndex: number
+  tileSize: 8 | 16 | 32
+  rotation: TileRotation
+  flipH: boolean
+  flipV: boolean
+  /** Untransformed source tile pixels (tileSize × tileSize RGBA) */
+  rawData: Uint8ClampedArray
+  /** Transformed tile pixels ready for stamping & ghost preview */
+  data: Uint8ClampedArray
+}
 
 /** Draft motion part (Motion Composer panel → part.set command). */
 export interface MotionPartDraft {
@@ -306,6 +323,10 @@ export interface EditorState {
   tileSize: 8 | 16 | 32
   tileSnap: boolean
   tileStamp: boolean
+  /** Phase 3 — active tileset stamp artwork (null = legacy solid-color tile stamp) */
+  tileBrush: TileBrush | null
+  /** Phase 3 — Clips Contact Sheet modal visibility */
+  contactSheetOpen: boolean
   /** 3×3 live seamless tile preview + toroidal wrap painting (W shortcut) */
   tiledWrap: boolean
   /** value-preview: render the whole document desaturated */
@@ -525,6 +546,13 @@ export interface EditorState {
   setTileSize: (v: 8 | 16 | 32) => void
   setTileSnap: (v: boolean) => void
   setTileStamp: (v: boolean) => void
+  setTileBrush: (b: TileBrush | null) => void
+  rotateTileBrushCW: () => void
+  flipTileBrushH: () => void
+  flipTileBrushV: () => void
+  resetTileBrushTransform: () => void
+  setContactSheetOpen: (v: boolean) => void
+  bakeMockupToNewClip: (params: { name: string; frames: Uint8ClampedArray[]; width: number; height: number; fps: number }) => string | null
   setTiledWrap: (v: boolean) => void
   setGrayscale: (v: boolean) => void
   setOnionSkin: (v: boolean) => void
@@ -639,6 +667,8 @@ export const useEditor = create<EditorState>()((set, get) => ({
   tileSize: 16,
   tileSnap: false,
   tileStamp: false,
+  tileBrush: null,
+  contactSheetOpen: false,
   tiledWrap: false,
   grayscale: false,
   onionSkin: true,
@@ -2157,9 +2187,109 @@ export const useEditor = create<EditorState>()((set, get) => ({
   setZoom: (z) => set({ zoom: Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z)) }),
   setPan: (x, y) => set({ panX: x, panY: y }),
   setShowGrid: (v) => set({ showGrid: v }),
-  setTileSize: (v) => set({ tileSize: v }),
+  setTileSize: (v) => set((s) => ({
+    tileSize: v,
+    tileBrush: s.tileBrush && s.tileBrush.tileSize !== v ? null : s.tileBrush,
+  })),
   setTileSnap: (v) => set({ tileSnap: v }),
   setTileStamp: (v) => set({ tileStamp: v }),
+  setTileBrush: (b) => set({ tileBrush: b }),
+  rotateTileBrushCW: () =>
+    set((s) => {
+      if (!s.tileBrush) return s
+      const rotation = rotateTileCW(s.tileBrush.rotation)
+      const data = transformTileBuffer(s.tileBrush.rawData, s.tileBrush.tileSize, {
+        rotation,
+        flipH: s.tileBrush.flipH,
+        flipV: s.tileBrush.flipV,
+      })
+      return { tileBrush: { ...s.tileBrush, rotation, data } }
+    }),
+  flipTileBrushH: () =>
+    set((s) => {
+      if (!s.tileBrush) return s
+      const flipH = !s.tileBrush.flipH
+      const data = transformTileBuffer(s.tileBrush.rawData, s.tileBrush.tileSize, {
+        rotation: s.tileBrush.rotation,
+        flipH,
+        flipV: s.tileBrush.flipV,
+      })
+      return { tileBrush: { ...s.tileBrush, flipH, data } }
+    }),
+  flipTileBrushV: () =>
+    set((s) => {
+      if (!s.tileBrush) return s
+      const flipV = !s.tileBrush.flipV
+      const data = transformTileBuffer(s.tileBrush.rawData, s.tileBrush.tileSize, {
+        rotation: s.tileBrush.rotation,
+        flipH: s.tileBrush.flipH,
+        flipV,
+      })
+      return { tileBrush: { ...s.tileBrush, flipV, data } }
+    }),
+  resetTileBrushTransform: () =>
+    set((s) => {
+      if (!s.tileBrush) return s
+      const data = new Uint8ClampedArray(s.tileBrush.rawData)
+      return { tileBrush: { ...s.tileBrush, rotation: 0, flipH: false, flipV: false, data } }
+    }),
+  setContactSheetOpen: (v) => set({ contactSheetOpen: v }),
+  bakeMockupToNewClip: ({ name, frames, width, height, fps }) => {
+    if (frames.length === 0) return null
+    const proj = bus.getProject()
+    const pw = proj.width
+    const ph = proj.height
+    let createdClipId: string | null = null
+    try {
+      bus.transaction(`Bake level mockup "${name}"`, ORIGIN, () => {
+        bus.execute('clip.add', { name, fps: Math.max(1, Math.min(60, Math.round(fps || 8))) }, ORIGIN)
+        const afterAdd = bus.getProject()
+        const newClip = afterAdd.clips.at(-1)
+        if (!newClip) return
+        createdClipId = newClip.id
+        const layerId = newClip.layers[0]?.id
+        if (!layerId) return
+        for (let i = 0; i < frames.length; i++) {
+          if (i > 0) {
+            bus.execute('frame.add', { clipId: newClip.id }, ORIGIN)
+          }
+          const curClip = bus.getProject().clips.find((c) => c.id === newClip.id)
+          const frame = curClip?.frames[i]
+          if (!frame) continue
+          const fitted = new Uint8ClampedArray(pw * ph * 4)
+          const copyW = Math.min(pw, width)
+          const copyH = Math.min(ph, height)
+          for (let y = 0; y < copyH; y++) {
+            fitted.set(frames[i]!.subarray(y * width * 4, (y * width + copyW) * 4), y * pw * 4)
+          }
+          bus.execute(
+            'pixels.applyOp',
+            {
+              clipId: newClip.id,
+              frameId: frame.id,
+              layerId,
+              ops: [{ op: 'setBuffer' as const, buffer: fitted }],
+            },
+            ORIGIN,
+          )
+        }
+      })
+    } catch (err) {
+      toast({ title: 'Bake failed', description: friendlyError(err), variant: 'destructive' })
+      return null
+    }
+    if (!createdClipId) return null
+    const latest = bus.getProject()
+    const created = latest.clips.find((c) => c.id === createdClipId)
+    if (created) {
+      syncFromBus({
+        activeClipId: created.id,
+        activeFrameIndex: 0,
+        activeLayerId: created.layers[0]?.id ?? '',
+      })
+    }
+    return createdClipId
+  },
   setTiledWrap: (v) => set({ tiledWrap: v }),
   setGrayscale: (v) => set({ grayscale: v }),
   setOnionSkin: (v) => set({ onionSkin: v }),

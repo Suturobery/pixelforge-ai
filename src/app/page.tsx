@@ -36,12 +36,14 @@ import { isDesktop } from '@/lib/pixelforge/desktop-bridge'
 import { useSaveProject } from '@/components/pixelforge/use-save'
 import { useKeyboardShortcuts } from '@/components/pixelforge/use-keyboard'
 import { useIsMobile } from '@/components/pixelforge/use-is-mobile'
-import { Layers, Brain, Bot, PersonStanding, Images, PanelRightClose, Maximize2, Minimize2, Flame } from 'lucide-react'
+import { Layers, Grid3X3, Brain, Bot, PersonStanding, Images, PanelRightClose, Maximize2, Minimize2, Flame } from 'lucide-react'
 import { Header } from '@/components/pixelforge/header'
 import { ToolRail } from '@/components/pixelforge/tool-rail'
 import { CanvasStage } from '@/components/pixelforge/canvas-stage'
 import { Timeline } from '@/components/pixelforge/timeline'
 import { LayersPanel } from '@/components/pixelforge/layers-panel'
+import { TilesPanel } from '@/components/pixelforge/tiles-panel'
+import { ClipsContactSheetDialog } from '@/components/pixelforge/contact-sheet-dialog'
 import { OnboardingTour } from '@/components/pixelforge/onboarding-tour'
 import { SecondBrain } from '@/components/pixelforge/second-brain'
 import { AgentPanel } from '@/components/pixelforge/agent-panel'
@@ -54,6 +56,7 @@ import { useToast } from '@/hooks/use-toast'
 
 const RIGHT_TABS: { id: RightTab; label: string; icon: React.ReactNode; tone: 'ember' | 'frost' }[] = [
   { id: 'layers', label: 'Layers', tone: 'ember', icon: <Layers className="h-3.5 w-3.5" aria-hidden /> },
+  { id: 'tiles', label: 'Tiles', tone: 'ember', icon: <Grid3X3 className="h-3.5 w-3.5" aria-hidden /> },
   { id: 'agent', label: 'Agent', tone: 'frost', icon: <Bot className="h-3.5 w-3.5" aria-hidden /> },
   { id: 'brain', label: 'Brain', tone: 'frost', icon: <Brain className="h-3.5 w-3.5" aria-hidden /> },
   { id: 'motion', label: 'Motion', tone: 'frost', icon: <PersonStanding className="h-3.5 w-3.5" aria-hidden /> },
@@ -62,7 +65,7 @@ const RIGHT_TABS: { id: RightTab; label: string; icon: React.ReactNode; tone: 'e
 ]
 
 const RIGHT_TAB_GROUPS = [
-  { label: 'Artwork', tabs: ['layers', 'reference'] as RightTab[] },
+  { label: 'Artwork', tabs: ['layers', 'tiles', 'reference'] as RightTab[] },
   { label: 'Animate', tabs: ['motion', 'vfx'] as RightTab[] },
   { label: 'Assist', tabs: ['agent', 'brain'] as RightTab[] },
 ] as const
@@ -212,6 +215,7 @@ function RightDock({ mobile }: { mobile: boolean }) {
             panel. Inactive ones are hidden, not unmounted. */}
         {([
           ['layers', <LayersPanel key="layers" />],
+          ['tiles', <TilesPanel key="tiles" />],
           ['reference', <ReferenceCreator key="reference" />],
           ['brain', <SecondBrain key="brain" />],
           ['motion', <MotionPanel key="motion" />],
@@ -388,6 +392,7 @@ export default function Home() {
 
       {/* first-run onboarding (shown once per browser) */}
       <OnboardingTour />
+      <ClipsContactSheetDialog />
 
       <Footer />
     </div>

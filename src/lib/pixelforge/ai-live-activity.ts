@@ -200,6 +200,8 @@ const TOOL_VERBS: Record<string, string> = {
   set_vectors: 'Editing pixel-perfect vectors',
   bake_vectors: 'Baking vectors to pixels',
   generate_hue_ramp: 'Generating hue-shifted ramp',
+  stamp_tiles: 'Stamping tileset tiles',
+  get_contact_sheet: 'Inspecting Clips Contact Sheet',
   batch: 'Running drawing batch',
   macro_run: 'Running macro',
   get_project_state: 'Inspecting canvas',

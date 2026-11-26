@@ -1106,6 +1106,54 @@ export const TOOL_CATALOG: ToolDef[] = [
     },
   },
   {
+    name: 'get_contact_sheet',
+    title: 'Get Clips Contact Sheet PNG',
+    description:
+      'Clips Contact Sheet (L0, free): render ALL clips in the active project side-by-side at equal pixel scale onto one PNG ' +
+      'with shared ground-line baseline, trimmed sprite bounds, height/ground metrics, and palette compliance checks so you can visually compare proportions and colors across the whole asset set.',
+    tier: 'L0',
+    relay: true,
+    inputSchema: {
+      scale: z.number().int().min(1).max(8).optional().describe('Nearest-neighbor pixel scale per clip (1–8, default auto).'),
+      columns: z.number().int().min(1).max(8).optional().describe('Grid columns (1–8, default auto up to 4).'),
+      showGroundLine: z.boolean().optional().describe('Draw shared teal dashed reference baseline across every clip (default true).'),
+      showBounds: z.boolean().optional().describe('Draw amber trimmed sprite bounding box on each clip (default false).'),
+      background: z.enum(['dark', 'checker', 'light']).optional().describe('Contact sheet backdrop (default dark).'),
+    },
+  },
+  {
+    name: 'stamp_tiles',
+    title: 'Stamp tiles from tileset clip',
+    description:
+      'Tileset Stamp Picker (L1, undoable): slice a source tileset clip into tileSize×tileSize tiles and stamp one or more tiles ' +
+      '(with 0/90/180/270 rotation and H/V flip) onto the target clip/frame/layer grid in one atomic undoable transaction.',
+    tier: 'L1',
+    relay: true,
+    inputSchema: {
+      ...clipRef,
+      ...frameRef,
+      ...layerRef,
+      sourceClipId: z.string().max(64).optional().describe('Source tileset clip id (defaults to target clip).'),
+      sourceClipName: z.string().max(120).optional().describe('Source tileset clip name (defaults to target clip).'),
+      sourceFrameIndex: z.number().int().min(0).optional().describe('0-based frame index of source tileset (default 0).'),
+      tileSize: z.union([z.literal(8), z.literal(16), z.literal(32)]).optional().describe('Square tile size in pixels (8, 16, or 32; default 16).'),
+      stamps: z.array(
+        z.object({
+          tileIndex: z.number().int().min(0).optional().describe('0-based tile index in source tileset (row * cols + col).'),
+          srcCol: z.number().int().min(0).optional().describe('Source tileset column (alternative to tileIndex).'),
+          srcRow: z.number().int().min(0).optional().describe('Source tileset row (alternative to tileIndex).'),
+          destCol: z.number().int().min(0).describe('Destination tile column on target canvas.'),
+          destRow: z.number().int().min(0).describe('Destination tile row on target canvas.'),
+          rotation: z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)]).optional().describe('Clockwise rotation in degrees (default 0).'),
+          flipH: z.boolean().optional().describe('Flip tile horizontally before rotating (default false).'),
+          flipV: z.boolean().optional().describe('Flip tile vertically before rotating (default false).'),
+          mode: z.enum(['replace', 'over']).optional().describe('replace (default) overwrites the tile cell; over alpha-composites onto existing pixels.'),
+        }),
+      ).min(1).max(512).describe('Tile placements to stamp.'),
+      ...staleGuard,
+    },
+  },
+  {
     name: 'brain_interpret_prompt',
     title: 'Second Brain: Interpret & enhance prompt',
     description:

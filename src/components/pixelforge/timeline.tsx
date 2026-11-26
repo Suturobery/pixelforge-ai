@@ -56,6 +56,7 @@ import {
   Images,
   ClipboardPaste,
   Tag,
+  LayoutGrid,
 } from 'lucide-react'
 import { composeFrameRgba } from '@pixelforge/core'
 import type { Clip, Frame } from '@/lib/pixelforge/types'
@@ -843,6 +844,20 @@ export function Timeline() {
                   <Button
                     variant="ghost"
                     size="icon"
+                    className="h-6 w-6 shrink-0 text-zinc-400 hover:text-teal-300"
+                    onClick={() => useEditor.getState().setContactSheetOpen(true)}
+                    aria-label="Open Clips Contact Sheet"
+                  >
+                    <LayoutGrid className="h-3.5 w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Clips Contact Sheet [Shift+C]</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
                     className="h-6 w-6 shrink-0 text-zinc-400"
                     onClick={() => seqInputRef.current?.click()}
                     aria-label="Import PNG sequence"
@@ -938,6 +953,20 @@ export function Timeline() {
               </Button>
             </TooltipTrigger>
             <TooltipContent>New clip</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 shrink-0 text-zinc-400 hover:text-teal-300"
+                onClick={() => useEditor.getState().setContactSheetOpen(true)}
+                aria-label="Open Clips Contact Sheet"
+              >
+                <LayoutGrid className="h-3.5 w-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Clips Contact Sheet [Shift+C]</TooltipContent>
           </Tooltip>
           {project.clips.length > 1 && (
             <Tooltip>

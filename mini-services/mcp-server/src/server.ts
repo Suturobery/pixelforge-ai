@@ -37,7 +37,7 @@ function previewImages(tool: string, data: unknown) {
   if (!data || typeof data !== 'object') return [];
   const rec = data as Record<string, unknown>;
   const urls: unknown[] =
-    tool === 'get_frame_png' && 'png' in rec
+    (tool === 'get_frame_png' || tool === 'get_contact_sheet') && 'png' in rec
       ? [rec.png]
       : tool === 'preview_animation' && Array.isArray(rec.frames)
         ? rec.frames

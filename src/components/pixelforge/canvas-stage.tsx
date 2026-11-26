@@ -16,6 +16,7 @@ import {
   magicWandBounds,
   pixelPerfectStroke,
   stampBrushWrapped,
+  stampTileOntoBuffer,
   uid,
   wrapCoord,
   type PixelPerfectState,
@@ -167,6 +168,8 @@ export function CanvasStage() {
   const showGrid = useEditor((s) => s.showGrid)
   const tileSize = useEditor((s) => s.tileSize)
   const tileSnap = useEditor((s) => s.tileSnap)
+  const tileStamp = useEditor((s) => s.tileStamp)
+  const tileBrush = useEditor((s) => s.tileBrush)
   const tiledWrap = useEditor((s) => s.tiledWrap)
   const onionSkin = useEditor((s) => s.onionSkin)
   const onionOpacity = useAppSettings((s) => s.onionOpacity)
@@ -519,7 +522,26 @@ export function CanvasStage() {
         const hs = Math.max(1, size) * zoom
         ctx.strokeStyle = tool === 'shade' ? 'rgba(251, 191, 36, 0.9)' : 'rgba(113, 113, 122, 0.9)'
         ctx.lineWidth = 1
-        if (customBrush && tool !== 'shade') {
+        if (tileSnap && tileStamp && tool === 'pencil' && tileBrush && tileBrush.tileSize === tileSize) {
+          const tx = Math.floor(hover.x / tileSize) * tileSize
+          const ty = Math.floor(hover.y / tileSize) * tileSize
+          const ghostCanvas = document.createElement('canvas')
+          ghostCanvas.width = tileSize
+          ghostCanvas.height = tileSize
+          const gctx = ghostCanvas.getContext('2d')
+          if (gctx) {
+            gctx.putImageData(new ImageData(new Uint8ClampedArray(tileBrush.data), tileSize, tileSize), 0, 0)
+            ctx.save()
+            ctx.globalAlpha = 0.72
+            ctx.imageSmoothingEnabled = false
+            ctx.drawImage(ghostCanvas, tx * zoom, ty * zoom, tileSize * zoom, tileSize * zoom)
+            ctx.globalAlpha = 1
+            ctx.strokeStyle = 'rgba(45, 212, 191, 0.95)'
+            ctx.lineWidth = 1.5
+            ctx.strokeRect(tx * zoom + 0.5, ty * zoom + 0.5, tileSize * zoom - 1, tileSize * zoom - 1)
+            ctx.restore()
+          }
+        } else if (customBrush && tool !== 'shade') {
           ctx.strokeRect(
             (hover.x - Math.floor(customBrush.w / 2)) * zoom + 0.5,
             (hover.y - Math.floor(customBrush.h / 2)) * zoom + 0.5,
@@ -652,7 +674,7 @@ export function CanvasStage() {
     // NOTE: the onion values must be deps too — toggling the switch or changing
     // opacity/tints re-composites the offscreen buffer only; without these deps
     // the visible canvas keeps showing the pre-onion blit (stale ghosts).
-  }, [project, W, H, zoom, panX, panY, showGrid, tileSnap, tileSize, tiledWrap, mirrorX, mirrorY, rightTab, motionDraftParts, craftPins, renderTick, hover, tool, brushSize, brushShape, customBrush, playing, activeFrameIndex, activeLayerId, selectedVectorId, vectorDraft, selection, scaleDraft, ellipseFilled, antsTick, onionSkin, onionOpacity, onionPrevTint, onionNextTint])
+  }, [project, W, H, zoom, panX, panY, showGrid, tileSnap, tileStamp, tileBrush, tileSize, tiledWrap, mirrorX, mirrorY, rightTab, motionDraftParts, craftPins, renderTick, hover, tool, brushSize, brushShape, customBrush, playing, activeFrameIndex, activeLayerId, selectedVectorId, vectorDraft, selection, scaleDraft, ellipseFilled, antsTick, onionSkin, onionOpacity, onionPrevTint, onionNextTint])
 
   // ------------------------------------------- live AI progressive reveal + before/after peek
   // Runs completely outside React state (zero re-renders during the 60fps reveal sweep).
@@ -947,33 +969,45 @@ export function CanvasStage() {
     const { width: w, height: h } = st.project
     const color = hexToRgba(e.button === 2 ? st.secondary : st.primary)
 
-    // Task 10b: tile stamp — a pencil click fills the ENTIRE tile under the
-    // cursor with the primary (right-click = secondary / eraser clears it).
-    // Works with pencil/eraser tools while tileStamp is on; snap keeps the
-    // tile aligned so every click lands on exact tile boundaries.
+    // Task 10b + Phase 3: tile stamp — stamps either the selected Tileset Stamp
+    // (with rotation/flip) OR a solid-color tile onto exact tile boundaries.
+    // Right-click or Eraser clears the entire tile cell cleanly.
     if (st.tileSnap && st.tileStamp && st.tileSize <= w && st.tileSize <= h && (st.tool === 'pencil' || st.tool === 'eraser')) {
       const t = st.tileSize
       const handle = st.beginStroke()
       if (!handle) return
-      const c: [number, number, number, number] = st.tool === 'eraser' || e.button === 2 ? [0, 0, 0, 0] : color
-      const tile = new Uint8ClampedArray(t * t * 4)
-      for (let i = 0; i < t * t; i++) {
-        tile[i * 4] = c[0]
-        tile[i * 4 + 1] = c[1]
-        tile[i * 4 + 2] = c[2]
-        tile[i * 4 + 3] = c[3]
+      const tx = Math.floor(px.x / t) * t
+      const ty = Math.floor(px.y / t) * t
+      const isClear = st.tool === 'eraser' || e.button === 2
+      let tileData: Uint8ClampedArray
+      if (isClear) {
+        tileData = new Uint8ClampedArray(t * t * 4)
+      } else if (st.tileBrush && st.tileBrush.tileSize === t) {
+        tileData = st.tileBrush.data
+      } else {
+        tileData = new Uint8ClampedArray(t * t * 4)
+        for (let i = 0; i < t * t; i++) {
+          tileData[i * 4] = color[0]
+          tileData[i * 4 + 1] = color[1]
+          tileData[i * 4 + 2] = color[2]
+          tileData[i * 4 + 3] = color[3]
+        }
       }
-      // stampCustomBuffer centers the brush on (cx, cy) — offset to the tile's
-      // center so the whole tile fills exactly
-      stampCustomBuffer(handle.buffer, w, h, px.x + Math.floor(t / 2), px.y + Math.floor(t / 2), { w: t, h: t, data: tile }, st.mirrorX, st.tool === 'eraser')
+      stampTileOntoBuffer(handle.buffer, w, h, tileData, t, tx, ty, { mode: 'replace' })
+      if (st.mirrorX) {
+        stampTileOntoBuffer(handle.buffer, w, h, tileData, t, w - t - tx, ty, { mode: 'replace' })
+      }
       if (st.mirrorY) {
-        stampCustomBuffer(handle.buffer, w, h, px.x + Math.floor(t / 2), h - 1 - (px.y + Math.floor(t / 2)), { w: t, h: t, data: tile }, st.mirrorX, st.tool === 'eraser')
+        stampTileOntoBuffer(handle.buffer, w, h, tileData, t, tx, h - t - ty, { mode: 'replace' })
+        if (st.mirrorX) {
+          stampTileOntoBuffer(handle.buffer, w, h, tileData, t, w - t - tx, h - t - ty, { mode: 'replace' })
+        }
       }
       interactionRef.current = {
         mode: 'paint',
         tool: st.tool,
         start: px,
-        last: px,
+        last: { x: tx, y: ty },
         handle,
         changed: true,
         btn: e.button,
@@ -1446,6 +1480,43 @@ export function CanvasStage() {
     const { width: w, height: h } = st.project
 
     if (it.mode === 'paint' && it.tool) {
+      // Phase 3: drag-stamping tiles snapped to tileSize grid
+      if (st.tileSnap && st.tileStamp && st.tileSize <= w && st.tileSize <= h && (it.tool === 'pencil' || it.tool === 'eraser')) {
+        const t = st.tileSize
+        const tx = Math.floor(px.x / t) * t
+        const ty = Math.floor(px.y / t) * t
+        if (tx === it.last.x && ty === it.last.y) return
+        const isClear = it.tool === 'eraser' || it.btn === 2
+        let tileData: Uint8ClampedArray
+        if (isClear) {
+          tileData = new Uint8ClampedArray(t * t * 4)
+        } else if (st.tileBrush && st.tileBrush.tileSize === t) {
+          tileData = st.tileBrush.data
+        } else {
+          const solid = hexToRgba(it.btn === 2 ? st.secondary : st.primary)
+          tileData = new Uint8ClampedArray(t * t * 4)
+          for (let i = 0; i < t * t; i++) {
+            tileData[i * 4] = solid[0]
+            tileData[i * 4 + 1] = solid[1]
+            tileData[i * 4 + 2] = solid[2]
+            tileData[i * 4 + 3] = solid[3]
+          }
+        }
+        stampTileOntoBuffer(handle.buffer, w, h, tileData, t, tx, ty, { mode: 'replace' })
+        if (st.mirrorX) {
+          stampTileOntoBuffer(handle.buffer, w, h, tileData, t, w - t - tx, ty, { mode: 'replace' })
+        }
+        if (st.mirrorY) {
+          stampTileOntoBuffer(handle.buffer, w, h, tileData, t, tx, h - t - ty, { mode: 'replace' })
+          if (st.mirrorX) {
+            stampTileOntoBuffer(handle.buffer, w, h, tileData, t, w - t - tx, h - t - ty, { mode: 'replace' })
+          }
+        }
+        it.last = { x: tx, y: ty }
+        it.changed = true
+        st.bump()
+        return
+      }
       if (it.tool === 'shade') {
         const mode: ShadeMode = it.shadeMode ?? 'darken'
         const stepChanged = applyShadeLine(

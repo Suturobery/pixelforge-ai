@@ -409,6 +409,18 @@ export const MCP_TOOLS: McpToolInfo[] = [
     example: { baseColor: '#38b764', steps: 5, autoShift: true, addToPalette: true },
   },
   {
+    name: 'get_contact_sheet',
+    tier: 'L0',
+    description: 'Render all project clips side-by-side onto a crisp nearest-neighbor Clips Contact Sheet PNG with shared ground-line guide, trimmed sprite heights, and palette compliance metrics.',
+    example: { scale: 3, showGroundLine: true, showBounds: false },
+  },
+  {
+    name: 'stamp_tiles',
+    tier: 'L1',
+    description: 'Slice a source tileset clip into tileSize×tileSize tiles and stamp one or more tiles (with optional 0/90/180/270 rotation & H/V flip) onto the target layer in one undoable transaction.',
+    example: { tileSize: 16, stamps: [{ tileIndex: 0, destCol: 0, destRow: 0, rotation: 90, flipH: false }] },
+  },
+  {
     name: 'set_style_profile',
     tier: 'L1',
     description: 'Update the shared project Style Lock used by PixelForge, connected IDEs, and AI generation. References are existing project frame ids; inspect them with get_frame_png. Undoable; palette enforcement stays inside PixelForge.',

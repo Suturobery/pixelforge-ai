@@ -23,6 +23,7 @@
 
 import {
   analyzePixelCraft,
+  base64Encode,
   beautifyLayer,
   buildAsepriteJson,
   buildAtlasAsepriteJson,
@@ -30,6 +31,7 @@ import {
   buildPlaybackCycle,
   collectUniqueOpaqueColors,
   composeAtlasRgba,
+  composeClipsContactSheet,
   composeFrameRgba,
   composeSheetRgba,
   computeCenterShift,
@@ -37,6 +39,7 @@ import {
   crc32,
   createProject as coreCreateProject,
   defaultStyleProfile,
+  extractTilesetGrid,
   generateHueShiftedRamp,
   isSpriteTemplateId,
   listSpriteTemplates,
@@ -48,7 +51,9 @@ import {
   renderInspectionRgba,
   renderSpriteTemplate,
   slugify,
+  stampTileOntoBuffer,
   styleProfilePromptTags,
+  transformTileBuffer,
   upscaleRgbaNearest,
   decodePng,
   encodePng,
@@ -70,6 +75,7 @@ import {
   type LoopMode,
   type Project,
   type RGBA,
+  type TileRotation,
   type VectorShape,
 } from '@pixelforge/core'
 import { generateGodot4AtlasTres, type ExportScale } from './export'
@@ -2119,6 +2125,126 @@ const handlers: Record<string, ToolHandler> = {
     )
   },
 
+  async get_contact_sheet(args) {
+    const project = getBus().getProject()
+    const scale = typeof args.scale === 'number' ? Math.max(1, Math.min(8, Math.round(args.scale))) : undefined
+    const columns = typeof args.columns === 'number' ? Math.max(1, Math.min(8, Math.round(args.columns))) : undefined
+    const showGroundLine = args.showGroundLine !== false
+    const showBounds = args.showBounds === true
+    const background = args.background === 'light' || args.background === 'checker' ? args.background : 'dark'
+    const composed = composeClipsContactSheet(project, {
+      scale,
+      columns,
+      showGroundLine,
+      showBounds,
+      background,
+    })
+    const pngBytes = await encodePng(composed.width, composed.height, composed.buffer)
+    const png = `data:image/png;base64,${base64Encode(pngBytes)}`
+    return withStateHash(
+      {
+        png,
+        width: composed.width,
+        height: composed.height,
+        scale: composed.scale,
+        columns: composed.columns,
+        rows: composed.rows,
+        referenceBottomMargin: composed.referenceBottomMargin,
+        referenceHeight: composed.referenceHeight,
+        clips: composed.clips,
+      },
+      { summary: `Rendered Clips Contact Sheet (${composed.clips.length} clips, ${composed.width}×${composed.height}px)` },
+    )
+  },
+
+  async stamp_tiles(args, ctx) {
+    assertTaskProject(ctx)
+    const project = getBus().getProject()
+    const targetClip = resolveClipRef(project, args)
+    const { frame: targetFrame } = resolveFrameRef(targetClip, args)
+    const targetLayer = resolveLayerRef(targetClip, args)
+    if (targetLayer.locked) {
+      throw new CommandError('INVALID_STATE', `layer "${targetLayer.name}" is locked`)
+    }
+    const sourceClip =
+      typeof args.sourceClipId === 'string' || typeof args.sourceClipName === 'string'
+        ? resolveClipRef(project, { clipId: args.sourceClipId, clipName: args.sourceClipName })
+        : targetClip
+    const srcFrameIdx =
+      typeof args.sourceFrameIndex === 'number'
+        ? Math.max(0, Math.min(sourceClip.frames.length - 1, Math.floor(args.sourceFrameIndex)))
+        : 0
+    const srcFrame = sourceClip.frames[srcFrameIdx] ?? sourceClip.frames[0]!
+    const tileSize = typeof args.tileSize === 'number' ? Math.round(args.tileSize) : 16
+    if (tileSize !== 8 && tileSize !== 16 && tileSize !== 32) {
+      throw new CommandError('VALIDATION_FAILED', 'tileSize must be 8, 16, or 32')
+    }
+    if (!Array.isArray(args.stamps) || args.stamps.length === 0 || args.stamps.length > 512) {
+      throw new CommandError('VALIDATION_FAILED', 'stamps must be a non-empty array of 1–512 tile placements')
+    }
+
+    const srcComposed = composeFrameRgba(project, sourceClip, srcFrame)
+    const sliced = extractTilesetGrid(srcComposed, project.width, project.height, tileSize)
+    if (sliced.tiles.length === 0) {
+      throw new CommandError('VALIDATION_FAILED', `canvas ${project.width}×${project.height} is smaller than tileSize ${tileSize}`)
+    }
+
+    const existing = targetFrame.cels[targetLayer.id]?.buffer
+    const working = existing ? new Uint8ClampedArray(existing) : new Uint8ClampedArray(project.width * project.height * 4)
+    let stampedCount = 0
+
+    for (const raw of args.stamps) {
+      if (!raw || typeof raw !== 'object') {
+        throw new CommandError('VALIDATION_FAILED', 'each stamp entry must be an object')
+      }
+      const s = raw as Record<string, unknown>
+      const destCol = typeof s.destCol === 'number' ? Math.floor(s.destCol) : -1
+      const destRow = typeof s.destRow === 'number' ? Math.floor(s.destRow) : -1
+      if (destCol < 0 || destRow < 0) {
+        throw new CommandError('VALIDATION_FAILED', 'each stamp requires non-negative integer destCol and destRow')
+      }
+      let tileIndex = typeof s.tileIndex === 'number' ? Math.floor(s.tileIndex) : -1
+      if (tileIndex < 0 && typeof s.srcCol === 'number' && typeof s.srcRow === 'number') {
+        tileIndex = Math.floor(s.srcRow) * sliced.cols + Math.floor(s.srcCol)
+      }
+      const tile = sliced.tiles[tileIndex]
+      if (!tile) {
+        throw new CommandError('VALIDATION_FAILED', `tile index ${tileIndex} out of range (0..${sliced.tiles.length - 1})`)
+      }
+      const rawRot = typeof s.rotation === 'number' ? Math.round(s.rotation) : 0
+      const rotation: TileRotation = rawRot === 90 || rawRot === 180 || rawRot === 270 ? rawRot : 0
+      const flipH = s.flipH === true
+      const flipV = s.flipV === true
+      const mode = s.mode === 'over' ? 'over' : 'replace'
+      const transformed = transformTileBuffer(tile.buffer, tileSize, { rotation, flipH, flipV })
+      stampTileOntoBuffer(working, project.width, project.height, transformed, tileSize, destCol * tileSize, destRow * tileSize, { mode })
+      stampedCount++
+    }
+
+    execCommand(
+      'pixels.applyOp',
+      {
+        clipId: targetClip.id,
+        frameId: targetFrame.id,
+        layerId: targetLayer.id,
+        ops: [{ op: 'setBuffer' as const, buffer: working }],
+      },
+      `Stamp ${stampedCount} tile${stampedCount === 1 ? '' : 's'}`,
+    )
+
+    return withStateHash(
+      {
+        clipId: targetClip.id,
+        frameId: targetFrame.id,
+        layerId: targetLayer.id,
+        sourceClipId: sourceClip.id,
+        tileSize,
+        stampedCount,
+      },
+      { undoable: true, summary: `Stamped ${stampedCount} tile${stampedCount === 1 ? '' : 's'} (${tileSize}×${tileSize}) onto "${targetLayer.name}"` },
+    )
+  },
+
   async set_style_profile(args) {
     const profile = parseStyleProfile(args.profile)
     if (!profile) {
@@ -2771,6 +2897,7 @@ const VISUAL_DRAW_TOOLS = new Set([
   'delete_layer',
   'set_vectors',
   'bake_vectors',
+  'stamp_tiles',
   'batch',
   'macro_run',
 ])
