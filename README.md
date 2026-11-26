@@ -5,6 +5,8 @@
 [![Latest Release](https://img.shields.io/github/v/release/Suturobery/pixelforge-ai?color=14b8a6&label=Download)](https://github.com/Suturobery/pixelforge-ai/releases/latest)
 [![Discord Community](https://img.shields.io/badge/Discord-Join%20Community-5865F2?logo=discord&logoColor=white)](https://discord.gg/2f5MvmAqF)
 
+![PixelForge AI — Starter Templates & 1-Click Sprite Skins](docs/images/pixelforge-showcase.png)
+
 ---
 
 ## Download
