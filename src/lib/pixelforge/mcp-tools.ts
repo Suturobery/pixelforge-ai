@@ -2176,8 +2176,8 @@ const handlers: Record<string, ToolHandler> = {
         : 0
     const srcFrame = sourceClip.frames[srcFrameIdx] ?? sourceClip.frames[0]!
     const tileSize = typeof args.tileSize === 'number' ? Math.round(args.tileSize) : 16
-    if (tileSize !== 8 && tileSize !== 16 && tileSize !== 32) {
-      throw new CommandError('VALIDATION_FAILED', 'tileSize must be 8, 16, or 32')
+    if (tileSize !== 8 && tileSize !== 16 && tileSize !== 24 && tileSize !== 32 && tileSize !== 48 && tileSize !== 64) {
+      throw new CommandError('VALIDATION_FAILED', 'tileSize must be 8, 16, 24, 32, 48, or 64')
     }
     if (!Array.isArray(args.stamps) || args.stamps.length === 0 || args.stamps.length > 512) {
       throw new CommandError('VALIDATION_FAILED', 'stamps must be a non-empty array of 1–512 tile placements')

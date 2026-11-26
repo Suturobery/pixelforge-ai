@@ -7,6 +7,9 @@
  * target buffers, and composes animated multi-frame test rooms / level mockups.
  */
 
+export const TILE_SIZES = [8, 16, 24, 32, 48, 64] as const;
+export type TileSize = (typeof TILE_SIZES)[number];
+
 export type TileRotation = 0 | 90 | 180 | 270;
 
 export interface TileTransform {
@@ -231,9 +234,9 @@ export function stampTileOntoBuffer(
 }
 
 /**
- * Compose a live Level Mockup / Test Room RGBA buffer from a 2D array of
- * `LevelMockupCell | null` entries and one or more frames of a tileset clip.
- * When `tilesetFrames.length > 1`, `frameIndex` selects the animated tile frame!
+ * Compose a live Level Mockup / Test Room RGBA buffer from a Ground cell layer
+ * plus an optional alpha-composited Overlay/Props cell layer, sampling one or
+ * more frames of a tileset clip so animated tiles play cleanly in sync.
  */
 export function composeLevelMockup(params: {
   tilesetFrames: readonly (Uint8Array | Uint8ClampedArray)[];
@@ -243,6 +246,8 @@ export function composeLevelMockup(params: {
   mapCols: number;
   mapRows: number;
   cells: readonly (LevelMockupCell | null)[];
+  /** Optional second layer (props, torches, trees, furniture) alpha-composited over Ground */
+  overlayCells?: readonly (LevelMockupCell | null)[];
   frameIndex?: number;
 }): { width: number; height: number; buffer: Uint8ClampedArray } {
   const t = Math.max(1, Math.floor(params.tileSize));
@@ -261,25 +266,32 @@ export function composeLevelMockup(params: {
   const sliced = extractTilesetGrid(srcFrame, params.srcW, params.srcH, t);
   const transformedCache = new Map<string, Uint8ClampedArray>();
 
-  for (let row = 0; row < mapRows; row++) {
-    for (let col = 0; col < mapCols; col++) {
-      const cell = params.cells[row * mapCols + col];
-      if (!cell) continue;
-      const tile = sliced.tiles[cell.tileIndex];
-      if (!tile) continue;
+  const stampLayer = (layerCells: readonly (LevelMockupCell | null)[], mode: 'replace' | 'over') => {
+    for (let row = 0; row < mapRows; row++) {
+      for (let col = 0; col < mapCols; col++) {
+        const cell = layerCells[row * mapCols + col];
+        if (!cell) continue;
+        const tile = sliced.tiles[cell.tileIndex];
+        if (!tile) continue;
 
-      const rot: TileRotation = cell.rotation ?? 0;
-      const fh = Boolean(cell.flipH);
-      const fv = Boolean(cell.flipV);
-      const key = `${cell.tileIndex}:${rot}:${fh ? 1 : 0}:${fv ? 1 : 0}`;
-      let transformed = transformedCache.get(key);
-      if (!transformed) {
-        transformed = transformTileBuffer(tile.buffer, t, { rotation: rot, flipH: fh, flipV: fv });
-        transformedCache.set(key, transformed);
+        const rot: TileRotation = cell.rotation ?? 0;
+        const fh = Boolean(cell.flipH);
+        const fv = Boolean(cell.flipV);
+        const key = `${cell.tileIndex}:${rot}:${fh ? 1 : 0}:${fv ? 1 : 0}`;
+        let transformed = transformedCache.get(key);
+        if (!transformed) {
+          transformed = transformTileBuffer(tile.buffer, t, { rotation: rot, flipH: fh, flipV: fv });
+          transformedCache.set(key, transformed);
+        }
+
+        stampTileOntoBuffer(buffer, outW, outH, transformed, t, col * t, row * t, { mode });
       }
-
-      stampTileOntoBuffer(buffer, outW, outH, transformed, t, col * t, row * t, { mode: 'replace' });
     }
+  };
+
+  stampLayer(params.cells, 'replace');
+  if (params.overlayCells && params.overlayCells.length > 0) {
+    stampLayer(params.overlayCells, 'over');
   }
 
   return { width: outW, height: outH, buffer };

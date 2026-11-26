@@ -317,8 +317,8 @@ export function ToolRail() {
               <>
                 <div className="mt-2 flex items-center justify-between">
                   <span className="font-mono text-[11px] text-zinc-300">Tile size</span>
-                  <div role="group" aria-label="Tile size" className="flex items-center gap-0.5">
-                    {([8, 16, 32] as const).map((s) => (
+                  <div role="group" aria-label="Tile size" className="grid grid-cols-3 gap-0.5">
+                    {([8, 16, 24, 32, 48, 64] as const).map((s) => (
                       <button
                         key={s}
                         type="button"

@@ -273,6 +273,7 @@ export {
 } from './pixels/region';
 export {
   IDENTITY_TILE_TRANSFORM,
+  TILE_SIZES,
   composeLevelMockup,
   extractTilesetGrid,
   rotateTileCW,
@@ -282,6 +283,7 @@ export {
   type SlicedTile,
   type SlicedTileset,
   type TileRotation,
+  type TileSize,
   type TileTransform,
 } from './pixels/tileset';
 export {

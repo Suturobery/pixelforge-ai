@@ -119,6 +119,34 @@ describe('Phase 3: Tileset Slicer, Transforms & Animated Level Mockup', () => {
     expect(out1.buffer[0]).toBe(120);
     expect(out1.buffer[15 * 4]).toBe(120);
   });
+
+  test('composeLevelMockup alpha-composites Props Overlay cleanly on top of Ground layer', () => {
+    const src = new Uint8ClampedArray(16 * 8 * 4);
+    // Tile 0 (left 8×8): solid green grass ground
+    for (let y = 0; y < 8; y++) {
+      for (let x = 0; x < 8; x++) setRgba(src, 16, x, y, 40, 160, 60);
+    }
+    // Tile 1 (right 8×8): single red flower pixel at local (3, 3) on transparent bg
+    setRgba(src, 16, 8 + 3, 3, 220, 40, 60);
+
+    const out = composeLevelMockup({
+      tilesetFrames: [src],
+      srcW: 16,
+      srcH: 8,
+      tileSize: 8,
+      mapCols: 1,
+      mapRows: 1,
+      cells: [{ tileIndex: 0 }],
+      overlayCells: [{ tileIndex: 1 }],
+      frameIndex: 0,
+    });
+
+    // Pixel (0, 0) keeps green grass from Ground; pixel (3, 3) shows red flower from Overlay!
+    expect(out.buffer[1]).toBe(160);
+    const flowerIdx = (3 * 8 + 3) * 4;
+    expect(out.buffer[flowerIdx]).toBe(220);
+    expect(out.buffer[flowerIdx + 1]).toBe(40);
+  });
 });
 
 describe('Phase 3: Clips Contact Sheet compositor & metrics', () => {

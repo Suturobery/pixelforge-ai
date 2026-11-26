@@ -1136,7 +1136,7 @@ export const TOOL_CATALOG: ToolDef[] = [
       sourceClipId: z.string().max(64).optional().describe('Source tileset clip id (defaults to target clip).'),
       sourceClipName: z.string().max(120).optional().describe('Source tileset clip name (defaults to target clip).'),
       sourceFrameIndex: z.number().int().min(0).optional().describe('0-based frame index of source tileset (default 0).'),
-      tileSize: z.union([z.literal(8), z.literal(16), z.literal(32)]).optional().describe('Square tile size in pixels (8, 16, or 32; default 16).'),
+      tileSize: z.union([z.literal(8), z.literal(16), z.literal(24), z.literal(32), z.literal(48), z.literal(64)]).optional().describe('Square tile size in pixels (8, 16, 24, 32, 48, or 64; default 16).'),
       stamps: z.array(
         z.object({
           tileIndex: z.number().int().min(0).optional().describe('0-based tile index in source tileset (row * cols + col).'),

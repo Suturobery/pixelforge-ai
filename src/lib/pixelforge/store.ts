@@ -59,6 +59,7 @@ import {
   type StyleProfile,
   type StrokeHandle as CoreStrokeHandle,
   type TileRotation,
+  type TileSize,
   type VectorShape,
   type VectorShapeKind,
 } from '@pixelforge/core'
@@ -93,7 +94,7 @@ export type RightTab = 'layers' | 'tiles' | 'reference' | 'brain' | 'motion' | '
 export interface TileBrush {
   sourceClipId: string
   tileIndex: number
-  tileSize: 8 | 16 | 32
+  tileSize: TileSize
   rotation: TileRotation
   flipH: boolean
   flipV: boolean
@@ -318,9 +319,9 @@ export interface EditorState {
   panX: number
   panY: number
   showGrid: boolean
-  /** Task 10b — tilemap mode: tile size in px (8/16/32), snap toggle, and
-   *  stamp mode (a click fills the whole tile with the primary color). */
-  tileSize: 8 | 16 | 32
+  /** Task 10b + Phase 3 — tilemap mode: tile size in px (8/16/24/32/48/64), snap toggle, and
+   *  stamp mode (stamps active tileset tile or solid color). */
+  tileSize: TileSize
   tileSnap: boolean
   tileStamp: boolean
   /** Phase 3 — active tileset stamp artwork (null = legacy solid-color tile stamp) */
@@ -543,7 +544,7 @@ export interface EditorState {
   setZoom: (z: number) => void
   setPan: (x: number, y: number) => void
   setShowGrid: (v: boolean) => void
-  setTileSize: (v: 8 | 16 | 32) => void
+  setTileSize: (v: TileSize) => void
   setTileSnap: (v: boolean) => void
   setTileStamp: (v: boolean) => void
   setTileBrush: (b: TileBrush | null) => void
@@ -552,7 +553,14 @@ export interface EditorState {
   flipTileBrushV: () => void
   resetTileBrushTransform: () => void
   setContactSheetOpen: (v: boolean) => void
-  bakeMockupToNewClip: (params: { name: string; frames: Uint8ClampedArray[]; width: number; height: number; fps: number }) => string | null
+  bakeMockupToNewClip: (params: {
+    name: string
+    frames: Uint8ClampedArray[]
+    width: number
+    height: number
+    fps: number
+    resizeToFit?: boolean
+  }) => string | null
   setTiledWrap: (v: boolean) => void
   setGrayscale: (v: boolean) => void
   setOnionSkin: (v: boolean) => void
@@ -2234,8 +2242,16 @@ export const useEditor = create<EditorState>()((set, get) => ({
       return { tileBrush: { ...s.tileBrush, rotation: 0, flipH: false, flipV: false, data } }
     }),
   setContactSheetOpen: (v) => set({ contactSheetOpen: v }),
-  bakeMockupToNewClip: ({ name, frames, width, height, fps }) => {
+  bakeMockupToNewClip: ({ name, frames, width, height, fps, resizeToFit }) => {
     if (frames.length === 0) return null
+    if (resizeToFit) {
+      const cur = bus.getProject()
+      const targetW = Math.min(256, Math.max(cur.width, width))
+      const targetH = Math.min(256, Math.max(cur.height, height))
+      if (targetW > cur.width || targetH > cur.height) {
+        get().resizeCanvas(targetW, targetH)
+      }
+    }
     const proj = bus.getProject()
     const pw = proj.width
     const ph = proj.height
