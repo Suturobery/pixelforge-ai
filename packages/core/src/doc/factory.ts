@@ -16,6 +16,7 @@ import type {
 } from '../types/document';
 import { CANVAS_MAX, CANVAS_MIN } from '../types/document';
 import { cloneStyleProfile, defaultStyleProfile } from '../style-profile';
+import { cloneVectorShapes } from '../pixels/vectors';
 
 /** Default palette — the prototype's Forge-16 set (store.ts initialProject). */
 export const DEFAULT_PALETTE: string[] = [
@@ -66,7 +67,12 @@ export function duplicateFrame(frame: Frame, clipLayers: Layer[]): Frame {
   for (const layer of clipLayers) {
     const src = frame.cels[layer.id];
     if (!src) continue; // missing cel stays missing (transparent)
-    cels[layer.id] = layer.linked ? src : { buffer: new Uint8ClampedArray(src.buffer), linked: false };
+    if (layer.linked) {
+      cels[layer.id] = src;
+    } else {
+      const vectors = cloneVectorShapes(src.vectors);
+      cels[layer.id] = { buffer: new Uint8ClampedArray(src.buffer), linked: false, ...(vectors ? { vectors } : {}) };
+    }
   }
   return { id: uid('fr'), durationMs: frame.durationMs, cels };
 }
@@ -152,7 +158,8 @@ export function cloneProject(p: Project): Project {
   const cloneCel = (c: Cel): Cel => {
     const seen = celClones.get(c);
     if (seen) return seen; // linked cels stay shared in the clone
-    const copy: Cel = { buffer: new Uint8ClampedArray(c.buffer), linked: c.linked };
+    const vectors = cloneVectorShapes(c.vectors);
+    const copy: Cel = { buffer: new Uint8ClampedArray(c.buffer), linked: c.linked, ...(vectors ? { vectors } : {}) };
     celClones.set(c, copy);
     return copy;
   };

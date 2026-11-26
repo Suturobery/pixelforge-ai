@@ -13,7 +13,7 @@ import type { ToolId } from '@/lib/pixelforge/types'
 
 // Browser fallback. Electron replaces this with app.getVersion(), so the
 // installed app always identifies its actual packaged version.
-const RELEASE_VERSION = '0.5.5'
+const RELEASE_VERSION = '0.6.0'
 
 interface UpdateState {
   state: 'no-feed' | 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error'
@@ -31,6 +31,7 @@ const TOOL_LABEL: Record<ToolId, string> = {
   line: 'line',
   rect: 'rect',
   ellipse: 'ellipse',
+  vector: 'vector',
   marquee: 'select',
   wand: 'wand',
   eyedropper: 'eyedropper',

@@ -37,6 +37,7 @@ import {
   crc32,
   createProject as coreCreateProject,
   defaultStyleProfile,
+  generateHueShiftedRamp,
   isSpriteTemplateId,
   listSpriteTemplates,
   measureStyleAnchor,
@@ -53,7 +54,9 @@ import {
   encodePng,
   harvestPalette,
   uid,
+  validateLayerModifiers,
   validateStyleCandidate,
+  validateVectorShapes,
   type AtlasLayout,
   type InspectionScale,
   type StyleCheck,
@@ -67,6 +70,7 @@ import {
   type LoopMode,
   type Project,
   type RGBA,
+  type VectorShape,
 } from '@pixelforge/core'
 import { generateGodot4AtlasTres, type ExportScale } from './export'
 import { reviewAssetSet } from './asset-set-review'
@@ -191,10 +195,11 @@ export async function computeStateHash(): Promise<string> {
   if (cached) return cached
   const parts: unknown[] = [p.id, p.name, p.width, p.height, p.palette, p.settings]
   for (const clip of p.clips) {
-    const celCrcs: Record<string, number> = {}
+    const celCrcs: Record<string, unknown> = {}
     for (const frame of clip.frames) {
       for (const [layerId, cel] of Object.entries(frame.cels)) {
-        celCrcs[`${frame.id}:${layerId}`] = cachedCelCrc(cel.buffer)
+        const crc = cachedCelCrc(cel.buffer)
+        celCrcs[`${frame.id}:${layerId}`] = cel.vectors?.length ? [crc, cel.vectors] : crc
       }
     }
     parts.push({
@@ -429,7 +434,14 @@ function clipSummary(clip: Clip): Record<string, unknown> {
 function clipDetail(clip: Clip): Record<string, unknown> {
   return {
     ...clipSummary(clip),
-    layers: clip.layers.map((l) => ({ id: l.id, name: l.name, visible: l.visible, opacity: l.opacity, linked: l.linked })),
+    layers: clip.layers.map((l) => ({
+      id: l.id,
+      name: l.name,
+      visible: l.visible,
+      opacity: l.opacity,
+      linked: l.linked,
+      ...(l.modifiers ? { modifiers: l.modifiers } : {}),
+    })),
     parts: clip.parts.map((p) => ({ id: p.id, name: p.name, layerId: p.layerId, rect: p.rect ?? null, z: p.z })),
     frames: clip.frames.map((f, i) => ({
       id: f.id,
@@ -438,7 +450,11 @@ function clipDetail(clip: Clip): Record<string, unknown> {
       cels: Object.fromEntries(
         Object.entries(f.cels).map(([layerId, cel]) => [
           layerId,
-          { linked: cel.linked, hasPixels: !cel.buffer.every((v) => v === 0) },
+          {
+            linked: cel.linked,
+            hasPixels: !cel.buffer.every((v) => v === 0) || (cel.vectors?.length ?? 0) > 0,
+            ...(cel.vectors && cel.vectors.length > 0 ? { vectorCount: cel.vectors.length, vectors: cel.vectors } : {}),
+          },
         ])
       ),
     })),
@@ -456,17 +472,18 @@ async function framePng(
   frame: Frame,
   scale: InspectionScale,
   showGrid = false,
+  showRulers = false,
 ): Promise<string> {
   let cache = framePngCache.get(project)
   if (!cache) {
     cache = new Map()
     framePngCache.set(project, cache)
   }
-  const key = `${clip.id}:${frame.id}:${scale}:${showGrid ? 1 : 0}`
+  const key = `${clip.id}:${frame.id}:${scale}:${showGrid ? 1 : 0}:${showRulers ? 1 : 0}`
   const hit = cache.get(key)
   if (hit) return hit
   const composed = composeFrameRgba(project, clip, frame)
-  const scaled = renderInspectionRgba(composed, project.width, project.height, scale, showGrid)
+  const scaled = renderInspectionRgba(composed, project.width, project.height, scale, showGrid, { showRulers })
   const url = await pngDataUrl(scaled.w, scaled.h, scaled.rgba)
   if (cache.size > 256) cache.clear()
   cache.set(key, url)
@@ -540,6 +557,10 @@ const handlers: Record<string, ToolHandler> = {
     const bus = getBus()
     const project = bus.getProject()
     const state = useEditor.getState()
+    const activeClip = project.clips.find((c) => c.id === state.activeClipId) ?? project.clips[0]
+    const activeFrame = activeClip?.frames[Math.min(state.activeFrameIndex, (activeClip.frames.length || 1) - 1)]
+    const activeLayer = activeClip?.layers.find((l) => l.id === state.activeLayerId) ?? activeClip?.layers.at(-1)
+    const activeCel = activeLayer && activeFrame ? activeFrame.cels[activeLayer.id] : undefined
     const data = {
       name: project.name,
       projectId: project.id,
@@ -568,6 +589,11 @@ const handlers: Record<string, ToolHandler> = {
         primaryColor: state.primary,
         secondaryColor: state.secondary,
         tool: state.tool,
+        shadeMode: state.shadeMode,
+        vectorKind: state.vectorKind,
+        selectedVectorId: state.selectedVectorId,
+        activeLayerModifiers: activeLayer?.modifiers ?? null,
+        activeCelVectorCount: activeCel?.vectors?.length ?? 0,
         mirrorX: state.mirrorX,
         mirrorY: state.mirrorY,
         tiledWrap: state.tiledWrap,
@@ -859,8 +885,29 @@ const handlers: Record<string, ToolHandler> = {
     if (clip.frames.length === 0) return fail('not_found', `clip "${clip.name}" has no frames`)
     const cycle = buildPlaybackCycle(clip)
     const count = Math.min(clip.frames.length, maxFrames)
+    const ALLOWED_SCALES: ReadonlySet<number> = new Set([0.25, 0.5, 1, 2, 4, 8])
+    const maxDim = Math.max(project.width, project.height)
+    const autoScale: InspectionScale =
+      maxDim <= 32 && count <= 16 ? 4 : maxDim <= 64 && count <= 16 ? 2 : 1
+    const scale: InspectionScale =
+      args.scale === undefined
+        ? autoScale
+        : typeof args.scale === 'number' && ALLOWED_SCALES.has(args.scale)
+          ? (args.scale as InspectionScale)
+          : (() => {
+              throw new CommandError('VALIDATION_FAILED', 'scale must be one of 0.25, 0.5, 1, 2, 4, 8')
+            })()
+    const showGrid = typeof args.showGrid === 'boolean' ? args.showGrid : scale >= 2
+
     const frames: string[] = []
     const emptyFrames: number[] = []
+    const frameBounds: Array<{
+      frameIndex: number
+      opaquePixels: number
+      bounds: { x: number; y: number; w: number; h: number } | null
+      bottomMargin: number | null
+      centerX: number | null
+    }> = []
     let minDuration = Number.POSITIVE_INFINITY
     let maxDuration = 0
     let bytes = 0
@@ -869,25 +916,72 @@ const handlers: Record<string, ToolHandler> = {
       // deterministic animation invariant (audit #6): a fully transparent
       // in-between means the pose was never drawn — surface it, don't guess
       const rgba = composeFrameRgba(project, clip, frame)
-      let opaque = false
-      for (let o = 3; o < rgba.length; o += 4) {
-        if (rgba[o] !== 0) { opaque = true; break }
+      let opaquePixels = 0
+      let minX = project.width
+      let minY = project.height
+      let maxX = -1
+      let maxY = -1
+      for (let y = 0; y < project.height; y++) {
+        for (let x = 0; x < project.width; x++) {
+          if ((rgba[(y * project.width + x) * 4 + 3] ?? 0) === 0) continue
+          opaquePixels += 1
+          if (x < minX) minX = x
+          if (x > maxX) maxX = x
+          if (y < minY) minY = y
+          if (y > maxY) maxY = y
+        }
       }
-      if (!opaque) emptyFrames.push(i)
+      if (opaquePixels === 0) {
+        emptyFrames.push(i)
+        frameBounds.push({ frameIndex: i, opaquePixels: 0, bounds: null, bottomMargin: null, centerX: null })
+      } else {
+        const b = { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 }
+        frameBounds.push({
+          frameIndex: i,
+          opaquePixels,
+          bounds: b,
+          bottomMargin: Math.max(0, project.height - 1 - maxY),
+          centerX: Math.round((minX + maxX) / 2),
+        })
+      }
       minDuration = Math.min(minDuration, frame.durationMs)
       maxDuration = Math.max(maxDuration, frame.durationMs)
-      const dataUrl = await framePng(project, clip, frame, 1)
+      const dataUrl = await framePng(project, clip, frame, scale, showGrid)
       bytes += dataUrl.length
       if (bytes > MAX_PREVIEW_BYTES) {
-        return fail('response_too_large', `Preview exceeded ${MAX_PREVIEW_BYTES} bytes after ${i} frames — use get_frame_png per frame or a smaller canvas.`)
+        return fail('response_too_large', `Preview exceeded ${MAX_PREVIEW_BYTES} bytes after ${i} frames — pass scale:1 or use get_frame_png per frame.`)
       }
       frames.push(dataUrl)
     }
+
+    // Cross-frame consistency warnings (ground-line stability & sudden scale/shift jumps)
+    const consistencyWarnings: string[] = []
+    const drawn = frameBounds.filter((f) => f.bounds !== null)
+    if (drawn.length >= 2) {
+      const bottoms = drawn.map((f) => f.bottomMargin!)
+      const bottomSpread = Math.max(...bottoms) - Math.min(...bottoms)
+      if (bottomSpread > 3) {
+        consistencyWarnings.push(
+          `Ground line (bottomMargin) varies by ${bottomSpread}px across frames (${Math.min(...bottoms)}..${Math.max(...bottoms)}px) — check for unintended floating or sinking feet.`,
+        )
+      }
+      const heights = drawn.map((f) => f.bounds!.h)
+      const minH = Math.min(...heights)
+      const maxH = Math.max(...heights)
+      if (maxH > 0 && (maxH - minH) / maxH > 0.4) {
+        consistencyWarnings.push(
+          `Sprite height shifts sharply across frames (${minH}px..${maxH}px) — verify proportions stay consistent.`,
+        )
+      }
+    }
+
     return withStateHash({
       clipId: clip.id,
       name: clip.name,
       width: project.width,
       height: project.height,
+      scale,
+      showGrid,
       fps: clip.fps,
       loop: clip.loop,
       loopMode: clip.loopMode,
@@ -895,10 +989,12 @@ const handlers: Record<string, ToolHandler> = {
       schedule: cycle.entries,
       renderedFrames: frames.length,
       totalFrames: clip.frames.length,
+      frameBounds,
       invariants: {
         emptyFrames,
         allFramesHaveContent: emptyFrames.length === 0,
         uniformTiming: minDuration === maxDuration,
+        consistencyWarnings,
       },
       frames,
     })
@@ -1869,7 +1965,16 @@ const handlers: Record<string, ToolHandler> = {
       }
       patch.blend = args.blend
     }
-    if (Object.keys(patch).length === 0) throw new CommandError('VALIDATION_FAILED', 'provide at least one of name/visible/opacity/locked/blend')
+    if (args.modifiers !== undefined) {
+      if (args.modifiers === null) {
+        patch.modifiers = null
+      } else {
+        const err = validateLayerModifiers(args.modifiers)
+        if (err) throw new CommandError('VALIDATION_FAILED', `invalid modifiers: ${err}`)
+        patch.modifiers = args.modifiers
+      }
+    }
+    if (Object.keys(patch).length === 0) throw new CommandError('VALIDATION_FAILED', 'provide at least one of name/visible/opacity/locked/blend/modifiers')
     execCommand('layer.setProps', { clipId: clip.id, layerId: layer.id, patch })
     return withStateHash({ clipId: clip.id, layerId: layer.id, patch }, { undoable: true, summary: `Updated layer "${layer.name}"` })
   },
@@ -1904,6 +2009,50 @@ const handlers: Record<string, ToolHandler> = {
     return withStateHash({ clipId: clip.id, mergedLayerId: layer.id }, { undoable: true, summary: `Merged "${layer.name}" down in "${clip.name}"` })
   },
 
+  async set_vectors(args) {
+    const project = getBus().getProject()
+    const clip = resolveClipRef(project, args)
+    const { frame } = resolveFrameRef(clip, args)
+    const layer = resolveLayerRef(clip, args)
+    if (!Array.isArray(args.vectors)) {
+      throw new CommandError('VALIDATION_FAILED', 'vectors must be an array of vector shapes')
+    }
+    const normalized = args.vectors.map((raw) => {
+      if (!isRecord(raw)) return raw
+      return {
+        ...raw,
+        id: typeof raw.id === 'string' && raw.id.trim().length > 0 ? raw.id.trim() : uid('vec'),
+      }
+    })
+    const err = validateVectorShapes(normalized)
+    if (err) throw new CommandError('VALIDATION_FAILED', err)
+    const vectors = normalized as VectorShape[]
+    execCommand('cel.setVectors', { clipId: clip.id, frameId: frame.id, layerId: layer.id, vectors })
+    return withStateHash(
+      { clipId: clip.id, frameId: frame.id, layerId: layer.id, vectorCount: vectors.length, vectors },
+      { undoable: true, summary: `Set ${vectors.length} editable vector shape${vectors.length === 1 ? '' : 's'} on "${layer.name}"` },
+    )
+  },
+
+  async bake_vectors(args) {
+    const project = getBus().getProject()
+    const clip = resolveClipRef(project, args)
+    const { frame } = resolveFrameRef(clip, args)
+    const layer = resolveLayerRef(clip, args)
+    const count = frame.cels[layer.id]?.vectors?.length ?? 0
+    if (count === 0) {
+      return withStateHash(
+        { clipId: clip.id, frameId: frame.id, layerId: layer.id, bakedCount: 0 },
+        { undoable: false, summary: `No vectors to bake on "${layer.name}"` },
+      )
+    }
+    execCommand('cel.bakeVectors', { clipId: clip.id, frameId: frame.id, layerId: layer.id })
+    return withStateHash(
+      { clipId: clip.id, frameId: frame.id, layerId: layer.id, bakedCount: count },
+      { undoable: true, summary: `Baked ${count} vector shape${count === 1 ? '' : 's'} into crisp pixels on "${layer.name}"` },
+    )
+  },
+
   async add_palette_color(args) {
     const hex = asHex(args.hex, 'hex')
     execCommand('palette.addColor', { hex })
@@ -1923,6 +2072,51 @@ const handlers: Record<string, ToolHandler> = {
     const colors = args.colors.map((c) => asHex(c, 'colors[]'))
     execCommand('palette.replaceAll', { colors })
     return withStateHash({ palette: colors }, { undoable: true, summary: `Replaced the palette (${colors.length} colors)` })
+  },
+
+  async generate_hue_ramp(args) {
+    const baseHex = asHex(args.baseColor, 'baseColor')
+    const steps = typeof args.steps === 'number' ? Math.max(3, Math.min(9, Math.round(args.steps))) : 5
+    const autoShift = args.autoShift !== false
+    const shadowHueShift = typeof args.shadowHueShift === 'number' ? Math.max(-90, Math.min(90, args.shadowHueShift)) : -28
+    const highlightHueShift = typeof args.highlightHueShift === 'number' ? Math.max(-90, Math.min(90, args.highlightHueShift)) : 22
+    const contrast = typeof args.contrast === 'number' ? Math.max(0.2, Math.min(1, args.contrast)) : 0.72
+    const saturationShift = typeof args.saturationShift === 'number' ? Math.max(-0.4, Math.min(0.4, args.saturationShift)) : 0.12
+    const ramp = generateHueShiftedRamp({
+      baseHex,
+      steps,
+      autoShift,
+      shadowHueShift,
+      highlightHueShift,
+      contrast,
+      saturationShift,
+    })
+    if (ramp.length === 0) throw new CommandError('VALIDATION_FAILED', 'could not generate hue ramp from baseColor')
+    const addToPalette = args.addToPalette !== false
+    let added: string[] = []
+    if (addToPalette) {
+      const current = getBus().getProject().palette
+      const existing = new Set(current.map((c) => c.toLowerCase()))
+      added = ramp.filter((c) => !existing.has(c.toLowerCase()))
+      if (added.length > 0) {
+        execCommand('palette.replaceAll', { colors: [...current, ...added] }, `Add ${added.length}-color hue ramp`)
+      }
+    }
+    return withStateHash(
+      {
+        baseColor: baseHex,
+        ramp,
+        added,
+        addedCount: added.length,
+        palette: [...getBus().getProject().palette],
+      },
+      {
+        undoable: added.length > 0,
+        summary: added.length > 0
+          ? `Generated ${ramp.length}-color hue ramp from ${baseHex} and added ${added.length} new swatches to palette`
+          : `Generated ${ramp.length}-color hue ramp from ${baseHex}`,
+      },
+    )
   },
 
   async set_style_profile(args) {
@@ -2570,20 +2764,46 @@ const VISUAL_DRAW_TOOLS = new Set([
   'import_image_as_layer',
   'import_frame_strip',
   'create_skin_variants',
+  'resize_canvas',
+  'auto_trim',
+  'merge_down',
+  'set_layer_props',
+  'delete_layer',
+  'set_vectors',
+  'bake_vectors',
   'batch',
+  'macro_run',
 ])
+
+const MAX_BATCH_FRAME_SNAPSHOTS = 24
 
 interface VisualBefore {
   clipIds: Set<string>
   width: number
   height: number
   target: { clipId: string; frameId: string; buffer: Uint8ClampedArray } | null
+  frameSnapshots?: Map<string, { clipId: string; frameId: string; buffer: Uint8ClampedArray }>
 }
 
-/** Snapshot the frame the tool will actually edit (from its clip/frame args), not just the active one. */
-function snapshotToolTarget(args: Record<string, unknown>): VisualBefore {
+/** Snapshot the frame(s) the tool will actually edit (from its clip/frame args, or all frames for batch/macro). */
+function snapshotToolTarget(tool: string, args: Record<string, unknown>): VisualBefore {
   const project = getBus().getProject()
   const base = { clipIds: new Set(project.clips.map((c) => c.id)), width: project.width, height: project.height }
+  if (tool === 'batch' || tool === 'macro_run') {
+    const frameSnapshots = new Map<string, { clipId: string; frameId: string; buffer: Uint8ClampedArray }>()
+    for (const clip of project.clips) {
+      for (const frame of clip.frames) {
+        if (frameSnapshots.size >= MAX_BATCH_FRAME_SNAPSHOTS) break
+        frameSnapshots.set(`${clip.id}:${frame.id}`, {
+          clipId: clip.id,
+          frameId: frame.id,
+          buffer: composeFrameRgba(project, clip, frame),
+        })
+      }
+      if (frameSnapshots.size >= MAX_BATCH_FRAME_SNAPSHOTS) break
+    }
+    return { ...base, target: null, frameSnapshots }
+  }
   try {
     const clip = resolveClipRef(project, args)
     const { frame } = resolveFrameRef(clip, args)
@@ -2593,7 +2813,7 @@ function snapshotToolTarget(args: Record<string, unknown>): VisualBefore {
   }
 }
 
-/** Diff what the tool changed: a brand-new clip (VFX / strips / skins) sweeps in from empty; otherwise the edited frame. */
+/** Diff what the tool changed: a brand-new clip, resized canvas, targeted frame, or any frame touched inside a batch. */
 function collectVisualDiff(before: VisualBefore): {
   clipId: string
   frameId: string
@@ -2630,6 +2850,31 @@ function collectVisualDiff(before: VisualBefore): {
       }
     }
   }
+  // Canvas resize / auto_trim changed dimensions: sweep the active frame at the new dimensions
+  if (before.width !== project.width || before.height !== project.height) {
+    const st = useEditor.getState()
+    const clip = project.clips.find((c) => c.id === st.activeClipId) ?? project.clips[0]
+    const frameIdx = clip ? Math.min(st.activeFrameIndex, Math.max(0, clip.frames.length - 1)) : -1
+    const frame = clip && frameIdx >= 0 ? clip.frames[frameIdx] : undefined
+    if (clip && frame) {
+      const afterBuffer = composeFrameRgba(project, clip, frame)
+      const beforeBuffer = new Uint8ClampedArray(afterBuffer.length)
+      const diff = diffChangedPixels(beforeBuffer, afterBuffer, project.width, project.height)
+      if (diff.totalChanged > 0) {
+        return {
+          clipId: clip.id,
+          frameId: frame.id,
+          clipName: clip.name,
+          frameNumber: frameIdx + 1,
+          width: project.width,
+          height: project.height,
+          beforeBuffer,
+          afterBuffer,
+          diff,
+        }
+      }
+    }
+  }
   if (before.target && before.width === project.width && before.height === project.height) {
     const clip = project.clips.find((c) => c.id === before.target!.clipId)
     const frameIdx = clip?.frames.findIndex((f) => f.id === before.target!.frameId) ?? -1
@@ -2653,7 +2898,66 @@ function collectVisualDiff(before: VisualBefore): {
       }
     }
   }
+  // Batch / macro: check every clip & frame (including newly added frames) and return the latest changed one
+  if (before.frameSnapshots && before.width === project.width && before.height === project.height) {
+    let latestHit: {
+      clipId: string
+      frameId: string
+      clipName: string
+      frameNumber: number
+      width: number
+      height: number
+      beforeBuffer: Uint8ClampedArray
+      afterBuffer: Uint8ClampedArray
+      diff: ReturnType<typeof diffChangedPixels>
+    } | null = null
+    for (const clip of project.clips) {
+      for (let i = 0; i < clip.frames.length; i++) {
+        const frame = clip.frames[i]!
+        const prev = before.frameSnapshots.get(`${clip.id}:${frame.id}`)
+        const afterBuffer = composeFrameRgba(project, clip, frame)
+        const beforeBuffer = prev ? prev.buffer : new Uint8ClampedArray(afterBuffer.length)
+        const diff = diffChangedPixels(beforeBuffer, afterBuffer, project.width, project.height)
+        if (diff.totalChanged > 0) {
+          latestHit = {
+            clipId: clip.id,
+            frameId: frame.id,
+            clipName: clip.name,
+            frameNumber: i + 1,
+            width: project.width,
+            height: project.height,
+            beforeBuffer,
+            afterBuffer,
+            diff,
+          }
+        }
+      }
+    }
+    if (latestHit) return latestHit
+  }
   return null
+}
+
+/** Diagnose why a pixel-writing tool mutated history without changing any visible composited pixel. */
+function diagnoseInvisibleEdit(args: Record<string, unknown>): string | null {
+  try {
+    const project = getBus().getProject()
+    const clip = resolveClipRef(project, args)
+    const layer = resolveLayerRef(clip, args)
+    if (!layer.visible) {
+      return `You edited hidden layer "${layer.name}" (visible=false) — 0 pixels are visible on the canvas! Call set_layer_props({ layerId: "${layer.id}", visible: true }) or paint on a visible layer.`
+    }
+    if (layer.opacity <= 0) {
+      return `You edited layer "${layer.name}" with opacity=0 — 0 pixels are visible on the canvas!`
+    }
+    const idx = clip.layers.findIndex((l) => l.id === layer.id)
+    if (idx >= 0 && idx < clip.layers.length - 1) {
+      return `You modified layer "${layer.name}", but 0 visible pixels changed on the composited canvas — a visible layer above it may be covering that region.`
+    }
+    return null
+  } catch {
+    return null
+  }
 }
 
 export async function executeMcpTool(tool: string, args: unknown, ctx: ToolExecContext): Promise<ToolExecResult> {
@@ -2703,7 +3007,8 @@ export async function executeMcpTool(tool: string, args: unknown, ctx: ToolExecC
   }
   if (showLive) beginAiToolActivity(agentName, tool)
   const undoDepthBefore = bus.historyStats().undoDepth
-  const beforeVisual = VISUAL_DRAW_TOOLS.has(tool) ? snapshotToolTarget(safeArgs) : null
+  // Only snapshot at the top-level call (inner `batch`/`macro_run` steps run with clientId='macro')
+  const beforeVisual = showLive && VISUAL_DRAW_TOOLS.has(tool) ? snapshotToolTarget(tool, safeArgs) : null
   try {
     assertTaskProject(ctx)
     if (ctx.expectedProjectKey && (tool === 'create_project' || tool === 'open_project')) {
@@ -2719,7 +3024,7 @@ export async function executeMcpTool(tool: string, args: unknown, ctx: ToolExecC
     const hit = res.ok && beforeVisual ? collectVisualDiff(beforeVisual) : null
     let offView = false
 
-    if (hit) {
+    if (hit && showLive) {
       if (isAiAutoFollow()) {
         // make sure the artist is looking at the clip/frame the agent just painted
         followCommandTarget({ clipId: hit.clipId, frameId: hit.frameId })
@@ -2750,9 +3055,8 @@ export async function executeMcpTool(tool: string, args: unknown, ctx: ToolExecC
       })
 
       // Auto-Eyes: attach deterministic spatial self-critique (`visualCheck`)
-      // plus a crisp zoomed gridded PNG (`autoPreviewPng`) for external MCP
-      // vision agents so they immediately SEE what they just drew and spot
-      // crooked details, floating dots, or bad proportions without going blind.
+      // plus a crisp zoomed gridded PNG with coordinate rulers (`autoPreviewPng`)
+      // for external MCP vision agents so they immediately SEE what they just drew.
       if (res.data && isRecord(res.data)) {
         const projNow = bus.getProject()
         const visualCheck = buildVisualCheck(hit.afterBuffer, hit.width, hit.height, projNow.palette)
@@ -2762,13 +3066,50 @@ export async function executeMcpTool(tool: string, args: unknown, ctx: ToolExecC
           const targetFrame = targetClip?.frames.find((f) => f.id === hit.frameId)
           if (targetClip && targetFrame) {
             const zoomScale = recommendedInspectionScale(projNow.width, projNow.height)
-            autoPreviewPng = await framePng(projNow, targetClip, targetFrame, zoomScale, zoomScale >= 4)
+            autoPreviewPng = await framePng(projNow, targetClip, targetFrame, zoomScale, zoomScale >= 2, zoomScale >= 4)
           }
         }
         res.data = {
           ...res.data,
           visualCheck,
           ...(autoPreviewPng ? { autoPreviewPng } : {}),
+        }
+      }
+    } else if (
+      res.ok &&
+      showLive &&
+      beforeVisual &&
+      !hit &&
+      undoDepthAfter > undoDepthBefore &&
+      res.data &&
+      isRecord(res.data)
+    ) {
+      // Hidden or occluded layer catch: history changed (the agent mutated a cel)
+      // yet 0 visible pixels changed on the composited canvas — warn the agent!
+      const invisibleWarning = diagnoseInvisibleEdit(safeArgs)
+      if (invisibleWarning) {
+        const projNow = bus.getProject()
+        const targetClip = beforeVisual.target
+          ? projNow.clips.find((c) => c.id === beforeVisual.target!.clipId)
+          : projNow.clips.find((c) => c.id === useEditor.getState().activeClipId) ?? projNow.clips[0]
+        const targetFrame =
+          (beforeVisual.target ? targetClip?.frames.find((f) => f.id === beforeVisual.target!.frameId) : undefined) ??
+          targetClip?.frames[Math.min(useEditor.getState().activeFrameIndex, Math.max(0, (targetClip?.frames.length ?? 1) - 1))]
+        if (targetClip && targetFrame) {
+          const composed = composeFrameRgba(projNow, targetClip, targetFrame)
+          const visualCheck = buildVisualCheck(composed, projNow.width, projNow.height, projNow.palette, [
+            invisibleWarning,
+          ])
+          let autoPreviewPng: string | undefined
+          if (ctx.clientId !== 'macro' && ctx.clientId !== 'agent-console' && ctx.clientId !== 'second-brain') {
+            const zoomScale = recommendedInspectionScale(projNow.width, projNow.height)
+            autoPreviewPng = await framePng(projNow, targetClip, targetFrame, zoomScale, zoomScale >= 2, zoomScale >= 4)
+          }
+          res.data = {
+            ...res.data,
+            visualCheck,
+            ...(autoPreviewPng ? { autoPreviewPng } : {}),
+          }
         }
       }
     }
@@ -2797,6 +3138,9 @@ export async function executeMcpTool(tool: string, args: unknown, ctx: ToolExecC
               width: hit.width,
               height: hit.height,
               before: hit.beforeBuffer,
+              after: hit.afterBuffer,
+              orderedIndices: hit.diff.orderedIndices,
+              pixels: hit.diff.pixels,
             }
           : undefined,
       })

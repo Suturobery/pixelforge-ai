@@ -16,6 +16,7 @@ import {
   Navigation,
   Pause,
   Play,
+  RotateCcw,
   Sparkles,
   Trash2,
   Undo2,
@@ -25,6 +26,7 @@ import {
   flashAiRegion,
   getAiActivitySnapshot,
   getUndoStepsForAiEntry,
+  replayAiActivityEntry,
   setAiAutoFollow,
   setAiComparePreview,
   setAiPaused,
@@ -72,13 +74,14 @@ export const AiLiveCanvasOverlay = memo(function AiLiveCanvasOverlay({
   clipId: string
   frameId: string
 }) {
-  const { pulses, comparePreview } = useAiActivity()
+  const { banner, pulses, comparePreview } = useAiActivity()
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const cursorRef = useRef<HTMLDivElement>(null)
   const cursorLabelRef = useRef<HTMLSpanElement>(null)
 
   const cssW = Math.max(1, Math.round(width * zoom))
   const cssH = Math.max(1, Math.round(height * zoom))
+  const isAiBusy = Boolean(banner?.busy)
 
   const visiblePulses = useMemo(
     () =>
@@ -229,10 +232,13 @@ export const AiLiveCanvasOverlay = memo(function AiLiveCanvasOverlay({
     }
   }, [visiblePulses, isComparingHere, cssW, cssH, zoom])
 
-  if (visiblePulses.length === 0 && !isComparingHere) return null
+  if (visiblePulses.length === 0 && !isComparingHere && !isAiBusy) return null
 
   return (
     <div className="pointer-events-none absolute inset-0 z-20 overflow-visible" aria-hidden>
+      {isAiBusy && !isComparingHere && (
+        <div className="absolute inset-0 animate-pulse rounded-md ring-2 ring-teal-400/75 shadow-[0_0_24px_rgba(45,212,191,0.35)]" />
+      )}
       {isComparingHere && (
         <div className="absolute left-1.5 top-1.5 rounded bg-amber-500/95 px-1.5 py-0.5 font-mono text-[9px] font-bold tracking-wider text-zinc-950 shadow">
           BEFORE
@@ -582,7 +588,12 @@ export const AiLiveStatusPill = memo(function AiLiveStatusPill() {
           <div className="max-h-60 divide-y divide-zinc-800/60 overflow-y-auto">
             {feed.map((entry) => {
               const undoSteps = getUndoStepsForAiEntry(entry, historyUndoDepth, loadEpoch)
-              const hasCompare = entry.compare !== undefined && isEntryStillApplied(entry)
+              const applied = isEntryStillApplied(entry)
+              const hasCompare = entry.compare !== undefined && applied
+              const hasReplay =
+                entry.compare?.after !== undefined &&
+                entry.compare.orderedIndices !== undefined &&
+                applied
               const dotColor =
                 entry.status === 'ok'
                   ? 'bg-teal-400'
@@ -627,6 +638,21 @@ export const AiLiveStatusPill = memo(function AiLiveStatusPill() {
                   </button>
 
                   <div className="flex shrink-0 items-center gap-1 pt-0.5">
+                    {hasReplay && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (entry.clipId) {
+                            followCommandTarget({ clipId: entry.clipId, frameId: entry.frameId }, { force: true })
+                          }
+                          replayAiActivityEntry(entry.id)
+                        }}
+                        title="Replay this AI brush stroke live on the canvas"
+                        className="inline-flex items-center rounded border border-zinc-800 bg-zinc-900 p-1 text-zinc-400 transition-colors hover:border-teal-500/50 hover:text-teal-200"
+                      >
+                        <RotateCcw className="h-3 w-3" />
+                      </button>
+                    )}
                     {hasCompare && (
                       <button
                         type="button"

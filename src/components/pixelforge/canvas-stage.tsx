@@ -12,12 +12,15 @@ import {
   drawDitherGradientPixels,
   drawLineWrapped,
   floodFillDither,
+  hitTestVectorShapes,
   magicWandBounds,
   pixelPerfectStroke,
   stampBrushWrapped,
+  uid,
   wrapCoord,
   type PixelPerfectState,
   type ShadeMode,
+  type VectorShape,
 } from '@pixelforge/core'
 import { useEditor, getActiveClip, getActiveFrame, MIN_ZOOM, MAX_ZOOM } from '@/lib/pixelforge/store'
 import { useToast } from '@/hooks/use-toast'
@@ -50,6 +53,7 @@ import {
   composeProgressiveReveal,
   finishActiveReveals,
   getAiActivitySnapshot,
+  isAiAutoFollow,
   subscribeAiActivity,
 } from '@/lib/pixelforge/ai-live-activity'
 import { PalettePanel } from '@/components/pixelforge/palette-panel'
@@ -111,7 +115,7 @@ function clampSelRect(r: SelectionRect, W: number, H: number): SelectionRect {
 }
 
 interface Interaction {
-  mode: 'paint' | 'shape' | 'move' | 'pan' | 'marquee-create' | 'sel-move' | 'sel-scale'
+  mode: 'paint' | 'shape' | 'move' | 'pan' | 'marquee-create' | 'sel-move' | 'sel-scale' | 'vec-create' | 'vec-handle' | 'vec-move'
   tool?: ToolId
   start: { x: number; y: number }
   last: { x: number; y: number }
@@ -133,6 +137,10 @@ interface Interaction {
   /** sel-move: currently applied pixel offset (committed on pointer-up). */
   moveDx?: number
   moveDy?: number
+  /** vector drag state (committed as one undoable cel.setVectors on pointerup) */
+  vecBase?: VectorShape[]
+  vecShapeId?: string
+  vecPointIndex?: number
 }
 
 export function CanvasStage() {
@@ -145,6 +153,7 @@ export function CanvasStage() {
   const revealImageDataRef = useRef<ImageData | null>(null)
   const paintBoardRef = useRef<((source: HTMLCanvasElement) => void) | null>(null)
   const aiDisplayOverrideRef = useRef(false)
+  const lastAutoPannedPulseIdRef = useRef(0)
   const interactionRef = useRef<Interaction | null>(null)
   const wheelZoomRef = useRef<{ factor: number; cx: number; cy: number } | null>(null)
   const wheelZoomRafRef = useRef<number | null>(null)
@@ -177,6 +186,8 @@ export function CanvasStage() {
   const motionDraftParts = useEditor((s) => s.motionDraftParts)
   const craftPins = useEditor((s) => s.craftPins)
   const ellipseFilled = useEditor((s) => s.ellipseFilled)
+  const selectedVectorId = useEditor((s) => s.selectedVectorId)
+  const activeLayerId = useEditor((s) => s.activeLayerId)
   const selection = useEditor((s) => s.selection)
   const playing = useEditor((s) => s.playing)
   const renderTick = useEditor((s) => s.renderTick)
@@ -192,6 +203,10 @@ export function CanvasStage() {
   // release). The ref mirrors the state so pointerup reads the latest value.
   const [scaleDraft, setScaleDraft] = useState<SelectionRect | null>(null)
   const scaleDraftRef = useRef<SelectionRect | null>(null)
+  // vector drag draft: live preview while dragging a handle or drawing a new
+  // pixel-perfect vector shape; commits as ONE undoable cel.setVectors on release.
+  const [vectorDraft, setVectorDraft] = useState<VectorShape[] | null>(null)
+  const vectorDraftRef = useRef<VectorShape[] | null>(null)
   // true when the composited active frame is fully transparent — we show a
   // "this frame is empty" hint so a blank canvas is never mistaken for lost
   // pixel data (top user confusion after adding an empty frame)
@@ -265,14 +280,35 @@ export function CanvasStage() {
         }
       }
     }
-    drawFrame(ctx, clip, frame, W, H, { ghosts })
+    const resolvedLayerId = clip.layers.some((l) => l.id === st.activeLayerId)
+      ? st.activeLayerId
+      : (clip.layers.at(-1)?.id ?? '')
+    const frameToDraw =
+      vectorDraft && resolvedLayerId
+        ? {
+            ...frame,
+            cels: {
+              ...frame.cels,
+              [resolvedLayerId]: {
+                buffer: frame.cels[resolvedLayerId]?.buffer ?? new Uint8ClampedArray(W * H * 4),
+                linked: frame.cels[resolvedLayerId]?.linked ?? false,
+                vectors: vectorDraft,
+              },
+            },
+          }
+        : frame
+    drawFrame(ctx, clip, frameToDraw, W, H, { ghosts })
     // detect a fully-empty ACTIVE frame — scan the cel buffers directly so
     // onion-skin ghosts don't mask the "empty frame" hint
     let hasPixel = false
     for (const layer of clip.layers) {
       if (!layer.visible) continue
-      const cel = frame.cels[layer.id]
+      const cel = frameToDraw.cels[layer.id]
       if (!cel) continue // absent cel = transparent (C2)
+      if (cel.vectors && cel.vectors.length > 0) {
+        hasPixel = true
+        break
+      }
       const d = cel.buffer
       for (let i = 3; i < d.length; i += 4) {
         if (d[i] > 0) {
@@ -283,7 +319,7 @@ export function CanvasStage() {
       if (hasPixel) break
     }
     setFrameEmpty((cur) => (cur === hasPixel ? cur : !hasPixel))
-  }, [project, activeClipId, activeFrameIndex, renderTick, onionSkin, onionOpacity, onionPrevTint, onionNextTint, W, H])
+  }, [project, activeClipId, activeFrameIndex, activeLayerId, vectorDraft, renderTick, onionSkin, onionOpacity, onionPrevTint, onionNextTint, W, H])
 
   // marching ants: step the dash offset while a selection is visible
   useEffect(() => {
@@ -499,6 +535,92 @@ export function CanvasStage() {
         }
       }
 
+      // pixel-perfect vector handles & Bézier guide lines (Vector tool)
+      if (tool === 'vector' && !playing) {
+        const stNow = useEditor.getState()
+        const clipNow = getActiveClip(stNow)
+        const frameNow = getActiveFrame(stNow)
+        const lid = clipNow.layers.some((l) => l.id === stNow.activeLayerId)
+          ? stNow.activeLayerId
+          : (clipNow.layers.at(-1)?.id ?? '')
+        const shapes = vectorDraft ?? frameNow.cels[lid]?.vectors ?? []
+        if (shapes.length > 0) {
+          ctx.save()
+          for (const shape of shapes) {
+            const isSel = shape.id === selectedVectorId
+            const ptScreen = (p: { x: number; y: number }) => ({
+              x: (p.x + 0.5) * zoom,
+              y: (p.y + 0.5) * zoom,
+            })
+            // Guide lines for Bézier control handles or polygon edges
+            if (shape.kind === 'curve' && shape.points.length >= 3) {
+              ctx.strokeStyle = isSel ? 'rgba(251, 191, 36, 0.85)' : 'rgba(56, 189, 248, 0.45)'
+              ctx.lineWidth = 1
+              ctx.setLineDash([4, 3])
+              ctx.beginPath()
+              if (shape.points.length === 3) {
+                const a = ptScreen(shape.points[0]!)
+                const c = ptScreen(shape.points[1]!)
+                const b = ptScreen(shape.points[2]!)
+                ctx.moveTo(a.x, a.y)
+                ctx.lineTo(c.x, c.y)
+                ctx.lineTo(b.x, b.y)
+              } else {
+                const a = ptScreen(shape.points[0]!)
+                const c1 = ptScreen(shape.points[1]!)
+                const c2 = ptScreen(shape.points[2]!)
+                const b = ptScreen(shape.points[3]!)
+                ctx.moveTo(a.x, a.y)
+                ctx.lineTo(c1.x, c1.y)
+                ctx.moveTo(b.x, b.y)
+                ctx.lineTo(c2.x, c2.y)
+              }
+              ctx.stroke()
+              ctx.setLineDash([])
+            } else if ((shape.kind === 'rect' || shape.kind === 'ellipse') && isSel && shape.points.length === 2) {
+              const a = ptScreen(shape.points[0]!)
+              const b = ptScreen(shape.points[1]!)
+              ctx.strokeStyle = 'rgba(56, 189, 248, 0.55)'
+              ctx.lineWidth = 1
+              ctx.setLineDash([3, 3])
+              ctx.strokeRect(
+                Math.min(a.x, b.x),
+                Math.min(a.y, b.y),
+                Math.abs(b.x - a.x),
+                Math.abs(b.y - a.y),
+              )
+              ctx.setLineDash([])
+            }
+
+            // Anchor & control handles
+            shape.points.forEach((pt, idx) => {
+              const s = ptScreen(pt)
+              const isBezierCtrl =
+                shape.kind === 'curve' &&
+                ((shape.points.length === 3 && idx === 1) ||
+                  (shape.points.length === 4 && (idx === 1 || idx === 2)))
+              const r = isSel ? 4.5 : 3.5
+              ctx.lineWidth = 1.5
+              ctx.strokeStyle = '#09090b'
+              if (isBezierCtrl) {
+                // Warm amber circle handle for curve bending
+                ctx.fillStyle = isSel ? '#fbbf24' : '#f59e0b'
+                ctx.beginPath()
+                ctx.arc(s.x, s.y, r, 0, Math.PI * 2)
+                ctx.fill()
+                ctx.stroke()
+              } else {
+                // Crisp square anchor handle
+                ctx.fillStyle = isSel ? '#38bdf8' : '#e4e4e7'
+                ctx.fillRect(Math.round(s.x - r), Math.round(s.y - r), r * 2, r * 2)
+                ctx.strokeRect(Math.round(s.x - r) + 0.5, Math.round(s.y - r) + 0.5, r * 2 - 1, r * 2 - 1)
+              }
+            })
+          }
+          ctx.restore()
+        }
+      }
+
       // marching-ants selection outline (two alternating dashed passes);
       // while a scale handle is dragged the DRAFT rect is outlined instead
       if (selection && !playing) {
@@ -530,7 +652,7 @@ export function CanvasStage() {
     // NOTE: the onion values must be deps too — toggling the switch or changing
     // opacity/tints re-composites the offscreen buffer only; without these deps
     // the visible canvas keeps showing the pre-onion blit (stale ghosts).
-  }, [project, W, H, zoom, panX, panY, showGrid, tileSnap, tileSize, tiledWrap, mirrorX, mirrorY, rightTab, motionDraftParts, craftPins, renderTick, hover, tool, brushSize, brushShape, customBrush, playing, activeFrameIndex, selection, scaleDraft, ellipseFilled, antsTick, onionSkin, onionOpacity, onionPrevTint, onionNextTint])
+  }, [project, W, H, zoom, panX, panY, showGrid, tileSnap, tileSize, tiledWrap, mirrorX, mirrorY, rightTab, motionDraftParts, craftPins, renderTick, hover, tool, brushSize, brushShape, customBrush, playing, activeFrameIndex, activeLayerId, selectedVectorId, vectorDraft, selection, scaleDraft, ellipseFilled, antsTick, onionSkin, onionOpacity, onionPrevTint, onionNextTint])
 
   // ------------------------------------------- live AI progressive reveal + before/after peek
   // Runs completely outside React state (zero re-renders during the 60fps reveal sweep).
@@ -586,7 +708,33 @@ export function CanvasStage() {
         return
       }
 
-      // 2. Progressive pixel reveal for the newest active reveal pulse on this frame
+      // 2. Smart Auto-Pan: if Auto-Follow is ON and a new AI draw pulse landed off-screen
+      //    (e.g. while zoomed into another corner), smoothly center the edited bbox in view.
+      const newestDrawPulse = [...snap.pulses]
+        .reverse()
+        .find(
+          (p) =>
+            !p.highlightOnly &&
+            p.bbox !== null &&
+            p.id > lastAutoPannedPulseIdRef.current &&
+            (!p.clipId || (p.clipId === activeClipId && (!p.frameId || p.frameId === activeFrameId))),
+        )
+      if (newestDrawPulse?.bbox && isAiAutoFollow() && !interactionRef.current && containerRef.current) {
+        lastAutoPannedPulseIdRef.current = newestDrawPulse.id
+        const rect = containerRef.current.getBoundingClientRect()
+        const stNow = useEditor.getState()
+        const cx = stNow.panX + (newestDrawPulse.bbox.x + newestDrawPulse.bbox.w / 2) * stNow.zoom
+        const cy = stNow.panY + (newestDrawPulse.bbox.y + newestDrawPulse.bbox.h / 2) * stNow.zoom
+        const pad = 28
+        if (cx < pad || cx > rect.width - pad || cy < pad || cy > rect.height - pad) {
+          useEditor.setState({
+            panX: rect.width / 2 - (newestDrawPulse.bbox.x + newestDrawPulse.bbox.w / 2) * stNow.zoom,
+            panY: rect.height / 2 - (newestDrawPulse.bbox.y + newestDrawPulse.bbox.h / 2) * stNow.zoom,
+          })
+        }
+      }
+
+      // 3. Progressive pixel reveal for the newest active reveal pulse on this frame
       if (reducedMotion) {
         restoreRealFrame()
         return
@@ -871,7 +1019,10 @@ export function CanvasStage() {
       case 'shade': {
         const handle = st.beginStroke()
         if (!handle) return
-        const mode: ShadeMode = e.button === 2 || e.shiftKey ? 'lighten' : 'darken'
+        const invert = e.button === 2 || e.shiftKey
+        const mode: ShadeMode = invert
+          ? (st.shadeMode === 'darken' ? 'lighten' : 'darken')
+          : st.shadeMode
         const visited = new Set<number>()
         const changed = applyShadeBrush(
           handle.buffer,
@@ -944,6 +1095,120 @@ export function CanvasStage() {
           snapshot: new Uint8ClampedArray(handle.buffer),
           changed: false,
           btn: e.button,
+        }
+        break
+      }
+      case 'vector': {
+        const clip = getActiveClip(st)
+        const frame = getActiveFrame(st)
+        const lid = clip.layers.some((l) => l.id === st.activeLayerId)
+          ? st.activeLayerId
+          : (clip.layers.at(-1)?.id ?? '')
+        const activeLayerObj = clip.layers.find((l) => l.id === lid)
+        if (activeLayerObj?.locked) {
+          toast({ title: 'Layer is locked', description: 'Unlock it in the Layers panel to edit vectors.', variant: 'destructive' })
+          break
+        }
+        const curVecs = frame.cels[lid]?.vectors ?? []
+        const container = containerRef.current
+        const rect = container?.getBoundingClientRect()
+        const fx = rect ? (e.clientX - rect.left - panX) / zoom - 0.5 : px.x
+        const fy = rect ? (e.clientY - rect.top - panY) / zoom - 0.5 : px.y
+        const handleRadius = Math.max(0.85, (e.pointerType === 'touch' ? 14 : 9) / zoom)
+        const edgeRadius = Math.max(0.95, 7 / zoom)
+
+        // Shift+click with a polygon selected appends a new vertex right away
+        if (e.shiftKey && st.selectedVectorId) {
+          const selPoly = curVecs.find((v) => v.id === st.selectedVectorId && v.kind === 'polygon')
+          if (selPoly && selPoly.points.length < 64) {
+            const nextVecs = curVecs.map((v) =>
+              v.id === selPoly.id ? { ...v, points: [...v.points, { x: px.x, y: px.y }] } : v,
+            )
+            st.setActiveCelVectors(nextVecs, 'Add polygon vertex')
+            break
+          }
+        }
+
+        const hit = hitTestVectorShapes(curVecs, fx, fy, handleRadius, edgeRadius)
+        if (hit?.kind === 'handle') {
+          st.setSelectedVectorId(hit.shapeId)
+          const draft = curVecs.map((v) => ({ ...v, points: v.points.map((p) => ({ ...p })) }))
+          vectorDraftRef.current = draft
+          setVectorDraft(draft)
+          interactionRef.current = {
+            mode: 'vec-handle',
+            tool: 'vector',
+            start: px,
+            last: px,
+            changed: false,
+            vecBase: draft,
+            vecShapeId: hit.shapeId,
+            vecPointIndex: hit.pointIndex,
+          }
+          break
+        }
+        if (hit?.kind === 'shape') {
+          st.setSelectedVectorId(hit.shapeId)
+          const draft = curVecs.map((v) => ({ ...v, points: v.points.map((p) => ({ ...p })) }))
+          vectorDraftRef.current = draft
+          setVectorDraft(draft)
+          interactionRef.current = {
+            mode: 'vec-move',
+            tool: 'vector',
+            start: px,
+            last: px,
+            changed: false,
+            vecBase: draft,
+            vecShapeId: hit.shapeId,
+          }
+          break
+        }
+
+        // Create a brand-new pixel-perfect vector shape
+        const strokeHex = e.button === 2 ? st.secondary : st.primary
+        const fillHex =
+          st.vectorFilled && (st.vectorKind === 'rect' || st.vectorKind === 'ellipse' || st.vectorKind === 'polygon')
+            ? st.secondary
+            : null
+        const newId = uid('vec')
+        const initialPoints =
+          st.vectorKind === 'curve'
+            ? [
+                { x: px.x, y: px.y },
+                { x: px.x, y: px.y },
+                { x: px.x, y: px.y },
+              ]
+            : st.vectorKind === 'polygon'
+              ? [
+                  { x: px.x, y: px.y },
+                  { x: px.x, y: px.y },
+                  { x: px.x, y: px.y },
+                ]
+              : [
+                  { x: px.x, y: px.y },
+                  { x: px.x, y: px.y },
+                ]
+        const created: VectorShape = {
+          id: newId,
+          kind: st.vectorKind,
+          points: initialPoints,
+          stroke: strokeHex,
+          ...(fillHex ? { fill: fillHex } : {}),
+          strokeWidth: st.vectorStrokeWidth,
+          ...(st.vectorKind === 'polygon' ? { closed: true } : {}),
+        }
+        const draft = [...curVecs.map((v) => ({ ...v, points: v.points.map((p) => ({ ...p })) })), created]
+        st.setSelectedVectorId(newId)
+        vectorDraftRef.current = draft
+        setVectorDraft(draft)
+        interactionRef.current = {
+          mode: 'vec-create',
+          tool: 'vector',
+          start: px,
+          last: px,
+          changed: false,
+          vecBase: draft,
+          vecShapeId: newId,
         }
         break
       }
@@ -1098,6 +1363,81 @@ export function CanvasStage() {
       }
       it.changed =
         draft.x !== s.x || draft.y !== s.y || draft.w !== s.w || draft.h !== s.h
+      return
+    }
+
+    // vector interactions run via local draft preview & commit ONCE on pointerup
+    if (
+      (it.mode === 'vec-create' || it.mode === 'vec-handle' || it.mode === 'vec-move') &&
+      it.vecBase &&
+      it.vecShapeId
+    ) {
+      if (px.x === it.last.x && px.y === it.last.y) return
+      let nextDraft: VectorShape[]
+      if (it.mode === 'vec-handle' && it.vecPointIndex !== undefined) {
+        nextDraft = it.vecBase.map((v) =>
+          v.id === it.vecShapeId
+            ? {
+                ...v,
+                points: v.points.map((pt, idx) => (idx === it.vecPointIndex ? { x: px.x, y: px.y } : pt)),
+              }
+            : v,
+        )
+      } else if (it.mode === 'vec-move') {
+        const dx = px.x - it.start.x
+        const dy = px.y - it.start.y
+        nextDraft = it.vecBase.map((v) =>
+          v.id === it.vecShapeId
+            ? {
+                ...v,
+                points: v.points.map((pt) => ({ x: pt.x + dx, y: pt.y + dy })),
+              }
+            : v,
+        )
+      } else {
+        // vec-create: update endpoints (and gentle initial bend for curves)
+        nextDraft = it.vecBase.map((v) => {
+          if (v.id !== it.vecShapeId) return v
+          if (v.kind === 'curve') {
+            const dx = px.x - it.start.x
+            const dy = px.y - it.start.y
+            const mx = (it.start.x + px.x) / 2
+            const my = (it.start.y + px.y) / 2
+            // Auto-bend perpendicular by 25% so the artist immediately sees the curve & amber handle
+            const cx = Math.round(mx - dy * 0.25)
+            const cy = Math.round(my + dx * 0.25)
+            return {
+              ...v,
+              points: [
+                { x: it.start.x, y: it.start.y },
+                { x: cx, y: cy },
+                { x: px.x, y: px.y },
+              ],
+            }
+          }
+          if (v.kind === 'polygon') {
+            return {
+              ...v,
+              points: [
+                { x: Math.round((it.start.x + px.x) / 2), y: it.start.y },
+                { x: px.x, y: px.y },
+                { x: it.start.x, y: px.y },
+              ],
+            }
+          }
+          return {
+            ...v,
+            points: [
+              { x: it.start.x, y: it.start.y },
+              { x: px.x, y: px.y },
+            ],
+          }
+        })
+      }
+      it.last = px
+      it.changed = true
+      vectorDraftRef.current = nextDraft
+      setVectorDraft(nextDraft)
       return
     }
 
@@ -1323,6 +1663,19 @@ export function CanvasStage() {
           draft.w !== it.selectionStart.w ||
           draft.h !== it.selectionStart.h
         if (changed) useEditor.getState().selectionScaleTo(draft)
+      }
+    } else if (it.mode === 'vec-create' || it.mode === 'vec-handle' || it.mode === 'vec-move') {
+      const draft = vectorDraftRef.current
+      vectorDraftRef.current = null
+      setVectorDraft(null)
+      if (draft && it.changed) {
+        const label =
+          it.mode === 'vec-create'
+            ? 'Add vector shape'
+            : it.mode === 'vec-handle'
+              ? 'Move vector node'
+              : 'Move vector shape'
+        useEditor.getState().setActiveCelVectors(draft, label)
       }
     } else if (it.mode === 'sel-move' && it.selectionStart) {
       // commit the final offset into history (the working buffer already

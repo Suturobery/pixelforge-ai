@@ -73,6 +73,10 @@ export interface AiCompareSnapshot {
   width: number
   height: number
   before: Uint8ClampedArray
+  /** Kept alongside `before` on the latest 3 visual edits for 1-click live stroke replay. */
+  after?: Uint8ClampedArray
+  orderedIndices?: Uint32Array
+  pixels?: AiPixelPoint[]
 }
 
 export interface AiActivityEntry {
@@ -188,7 +192,16 @@ const TOOL_VERBS: Record<string, string> = {
   import_image_as_layer: 'Importing sprite layer',
   import_frame_strip: 'Importing animation strip',
   create_skin_variants: 'Generating skin variants',
+  resize_canvas: 'Resizing canvas',
+  auto_trim: 'Trimming canvas',
+  merge_down: 'Merging layer down',
+  set_layer_props: 'Updating layer & Live FX',
+  delete_layer: 'Deleting layer',
+  set_vectors: 'Editing pixel-perfect vectors',
+  bake_vectors: 'Baking vectors to pixels',
+  generate_hue_ramp: 'Generating hue-shifted ramp',
   batch: 'Running drawing batch',
+  macro_run: 'Running macro',
   get_project_state: 'Inspecting canvas',
   get_frame_png: 'Reviewing sprite',
   validate_style: 'Checking style rules',
@@ -375,6 +388,34 @@ export function flashAiRegion(entryId: number): void {
     durationMs: 780,
     highlightOnly: true,
   })
+}
+
+/** Replay the progressive brush-sweep animation for a recent visual AI edit. */
+export function replayAiActivityEntry(entryId: number): boolean {
+  const entry = activityFeed.find((e) => e.id === entryId)
+  const cmp = entry?.compare
+  if (!entry || !cmp || !cmp.after || !cmp.orderedIndices || !cmp.pixels) return false
+  activeCompare = null
+  emitAiDrawPulse({
+    clientName: entry.clientName,
+    tool: entry.tool,
+    label: entry.label,
+    clipId: cmp.clipId,
+    frameId: cmp.frameId,
+    pixels: cmp.pixels,
+    totalChanged: entry.totalChanged,
+    bbox: entry.bbox,
+    reveal: {
+      clipId: cmp.clipId,
+      frameId: cmp.frameId,
+      width: cmp.width,
+      height: cmp.height,
+      before: cmp.before,
+      after: cmp.after,
+      orderedIndices: cmp.orderedIndices,
+    },
+  })
+  return true
 }
 
 export function recordAiActivityEntry(input: {

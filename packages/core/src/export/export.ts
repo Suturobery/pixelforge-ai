@@ -24,6 +24,8 @@
 
 import type { Clip, Frame, Layer, Project } from '../types/document';
 import { encodePng } from '../persist/png';
+import { applyLayerModifiers } from '../pixels/modifiers';
+import { renderCelWithVectors } from '../pixels/vectors';
 import { tmpPathFor } from '../persist/store';
 import type { FileFs } from '../persist/store';
 import { buildPlaybackCycle } from '../anim/clock';
@@ -208,14 +210,16 @@ function composeLayerInto(dst: Uint8ClampedArray, w: number, h: number, layer: L
   if (!layer.visible || layer.opacity <= 0) return;
   const cel = frame.cels[layer.id];
   if (!cel || !cel.buffer) return; // absent cel = fully transparent (C2)
-  const src = cel.buffer;
-  if (src.length !== w * h * 4) {
+  const rawSrc = cel.buffer;
+  if (rawSrc.length !== w * h * 4) {
     throw new ExportError(
       'BAD_CEL_BUFFER',
-      `cel buffer for layer "${layer.name}" on frame "${frame.id}" is ${src.length} bytes, expected ${w * h * 4}`,
-      { layerId: layer.id, frameId: frame.id, bytes: src.length, expected: w * h * 4 },
+      `cel buffer for layer "${layer.name}" on frame "${frame.id}" is ${rawSrc.length} bytes, expected ${w * h * 4}`,
+      { layerId: layer.id, frameId: frame.id, bytes: rawSrc.length, expected: w * h * 4 },
     );
   }
+  const withVectors = renderCelWithVectors(cel, w, h);
+  const src = applyLayerModifiers(withVectors, w, h, layer.modifiers);
   const opacity = Math.min(1, Math.max(0, layer.opacity));
   for (let i = 0; i < dst.length; i += 4) {
     const a = src[i + 3];

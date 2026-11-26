@@ -116,37 +116,103 @@ export type InspectionScale = 0.25 | 0.5 | 1 | 2 | 4 | 8;
  * slightly brighter major grid line every 8 source pixels) so vision-capable
  * agents can inspect exact pixel coordinates and silhouette quality.
  */
+// Minimal crisp 3x5 bitmap font for digits 0-9 used by Auto-Eyes coordinate rulers.
+const RULER_DIGITS: Record<string, readonly string[]> = {
+  '0': ['111', '101', '101', '101', '111'],
+  '1': ['010', '110', '010', '010', '111'],
+  '2': ['111', '001', '111', '100', '111'],
+  '3': ['111', '001', '111', '001', '111'],
+  '4': ['101', '101', '111', '001', '001'],
+  '5': ['111', '100', '111', '001', '111'],
+  '6': ['111', '100', '111', '101', '111'],
+  '7': ['111', '001', '010', '010', '010'],
+  '8': ['111', '101', '111', '101', '111'],
+  '9': ['111', '101', '111', '001', '111'],
+};
+
+function drawRulerNumber(
+  buf: Uint8ClampedArray,
+  bufW: number,
+  bufH: number,
+  x0: number,
+  y0: number,
+  text: string,
+  rgb: readonly [number, number, number],
+): void {
+  let cursorX = x0;
+  for (const ch of text) {
+    const glyph = RULER_DIGITS[ch];
+    if (!glyph) continue;
+    for (let gy = 0; gy < 5; gy++) {
+      const row = glyph[gy]!;
+      for (let gx = 0; gx < 3; gx++) {
+        if (row[gx] !== '1') continue;
+        const px = cursorX + gx;
+        const py = y0 + gy;
+        if (px < 0 || py < 0 || px >= bufW || py >= bufH) continue;
+        const idx = (py * bufW + px) * 4;
+        buf[idx] = rgb[0];
+        buf[idx + 1] = rgb[1];
+        buf[idx + 2] = rgb[2];
+        buf[idx + 3] = 255;
+      }
+    }
+    cursorX += 4;
+  }
+}
+
 export function renderInspectionRgba(
   rgba: Uint8ClampedArray,
   w: number,
   h: number,
   scale: InspectionScale,
   showGrid = false,
+  opts?: { showRulers?: boolean },
 ): { rgba: Uint8ClampedArray; w: number; h: number } {
-  if (scale === 1 && !showGrid) return { rgba, w, h };
+  const showRulers = Boolean(opts?.showRulers && scale >= 4);
+  if (scale === 1 && !showGrid && !showRulers) return { rgba, w, h };
 
-  const ow = Math.max(1, Math.floor(w * scale));
-  const oh = Math.max(1, Math.floor(h * scale));
+  const gridW = Math.max(1, Math.floor(w * scale));
+  const gridH = Math.max(1, Math.floor(h * scale));
+  const gutter = showRulers ? 16 : 0;
+  const ow = gridW + gutter;
+  const oh = gridH + gutter;
   const out = new Uint8ClampedArray(ow * oh * 4);
+  const drawChecker = showGrid && scale >= 2;
   const drawGrid = showGrid && scale >= 4;
 
-  for (let y = 0; y < oh; y++) {
+  // Fill dark ruler header/left gutter when showRulers is enabled
+  if (showRulers) {
+    for (let y = 0; y < oh; y++) {
+      for (let x = 0; x < ow; x++) {
+        if (x >= gutter && y >= gutter) continue;
+        const di = (y * ow + x) * 4;
+        const isDivider = (y === gutter - 1 && x >= gutter - 1) || (x === gutter - 1 && y >= gutter - 1);
+        out[di] = isDivider ? 45 : 20;
+        out[di + 1] = isDivider ? 120 : 20;
+        out[di + 2] = isDivider ? 115 : 24;
+        out[di + 3] = 255;
+      }
+    }
+  }
+
+  for (let y = 0; y < gridH; y++) {
     const sy = Math.min(h - 1, Math.floor(y / scale));
     const subY = drawGrid ? y % scale : -1;
     const majorY = drawGrid && subY === 0 && sy > 0 && sy % 8 === 0;
     const minorY = drawGrid && subY === 0 && sy > 0 && !majorY;
 
-    for (let x = 0; x < ow; x++) {
+    for (let x = 0; x < gridW; x++) {
       const sx = Math.min(w - 1, Math.floor(x / scale));
       const si = (sy * w + sx) * 4;
-      const di = (y * ow + x) * 4;
+      const di = ((y + gutter) * ow + (x + gutter)) * 4;
 
       let r = rgba[si]!;
       let g = rgba[si + 1]!;
       let b = rgba[si + 2]!;
       let a = rgba[si + 3]!;
 
-      if (drawGrid && a < 255) {
+      if (drawChecker && a < 255) {
         // Dark neutral checkerboard so transparent edges & dark outlines both read clearly
         const lightTile = (sx + sy) % 2 === 0;
         const bg = lightTile ? 58 : 44;
@@ -187,6 +253,21 @@ export function renderInspectionRgba(
       out[di + 1] = g;
       out[di + 2] = b;
       out[di + 3] = a;
+    }
+  }
+
+  // Stamp crisp 8px coordinate ticks (0, 8, 16, 24...) onto the top & left rulers
+  if (showRulers) {
+    const tickColor: readonly [number, number, number] = [148, 226, 213];
+    const step = w <= 16 ? 4 : 8;
+    for (let sx = 0; sx < w; sx += step) {
+      const px = gutter + Math.floor(sx * scale);
+      drawRulerNumber(out, ow, oh, px + 1, 5, String(sx), tickColor);
+    }
+    const stepY = h <= 16 ? 4 : 8;
+    for (let sy = 0; sy < h; sy += stepY) {
+      const py = gutter + Math.floor(sy * scale);
+      drawRulerNumber(out, ow, oh, 2, py + 1, String(sy), tickColor);
     }
   }
 

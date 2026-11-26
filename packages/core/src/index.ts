@@ -33,6 +33,10 @@ export type {
   DocumentSettings,
   Frame,
   Layer,
+  LayerColorRemapModifier,
+  LayerModifiers,
+  LayerOutlineModifier,
+  LayerShadowModifier,
   LoopMode,
   Palette,
   Part,
@@ -41,6 +45,9 @@ export type {
   RGBA,
   TrashEntry,
   TrashItem,
+  VectorPoint,
+  VectorShape,
+  VectorShapeKind,
 } from './types/document';
 export {
   CANVAS_MAX,
@@ -214,6 +221,32 @@ export {
   type ShadeMode,
   type TrimBoundsResult,
 } from './pixels/craft';
+export {
+  computeSelOutColor,
+  generateHueShiftedRamp,
+  hslToRgb,
+  rgbToHsl,
+  type HueRampOptions,
+} from './pixels/hue-ramp';
+export {
+  applyLayerModifiers,
+  cloneLayerModifiers,
+  hasActiveLayerModifiers,
+  validateLayerModifiers,
+} from './pixels/modifiers';
+export {
+  MAX_VECTORS_PER_CEL,
+  cloneVectorShape,
+  cloneVectorShapes,
+  hitTestVectorShapes,
+  rasterizeVectorShape,
+  renderCelWithVectors,
+  sampleBezierPixelPerfect,
+  shiftVectorShapes,
+  validateVectorShape,
+  validateVectorShapes,
+  type VectorHit,
+} from './pixels/vectors';
 export {
   SPRITE_TEMPLATES,
   isSpriteTemplateId,

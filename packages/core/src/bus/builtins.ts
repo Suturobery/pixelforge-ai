@@ -16,10 +16,19 @@ import type {
   ClipTag,
   Frame,
   Layer,
+  LayerModifiers,
   LoopMode,
+  VectorShape,
 } from '../types/document';
 import { ONION_MAX } from '../types/document';
 import { parseStyleProfile, type StyleProfile } from '../style-profile';
+import { applyLayerModifiers, cloneLayerModifiers, validateLayerModifiers } from '../pixels/modifiers';
+import {
+  cloneVectorShapes,
+  renderCelWithVectors,
+  shiftVectorShapes,
+  validateVectorShapes,
+} from '../pixels/vectors';
 import type { CommandDefinition } from '../types/commands';
 import {
   findClip,
@@ -455,6 +464,7 @@ export const layerDuplicate: CommandDefinition<{ clipId: string; layerId: string
               // Duplicate of a linked layer → independent per-frame copies.
               buffer: new Uint8ClampedArray(src.buffer),
               linked: false,
+              ...(src.vectors && src.vectors.length > 0 ? { vectors: cloneVectorShapes(src.vectors) } : {}),
             },
           },
         };
@@ -523,20 +533,23 @@ export const layerMergeDown: CommandDefinition<{ clipId: string; layerId: string
           ? new Uint8ClampedArray(bottom.buffer)
           : new Uint8ClampedArray(width * height * 4);
         if (top) {
-          const mode = c.layers[index]?.blend;
+          const topLayer = c.layers[index];
+          const mode = topLayer?.blend;
+          const topWithVecs = renderCelWithVectors(top, width, height);
+          const topBuf = applyLayerModifiers(topWithVecs, width, height, topLayer?.modifiers);
           for (let i = 0; i < width * height; i++) {
-            const ta = (top.buffer[i * 4 + 3] / 255) * (top.linked ? 1 : (c.layers[index]?.opacity ?? 1));
+            const ta = (topBuf[i * 4 + 3] / 255) * (top.linked ? 1 : (topLayer?.opacity ?? 1));
             if (ta >= 1) {
               for (let ch = 0; ch < 3; ch++) {
-                merged[i * 4 + ch] = blendChannel(mode, top.buffer[i * 4 + ch], merged[i * 4 + ch]);
+                merged[i * 4 + ch] = blendChannel(mode, topBuf[i * 4 + ch], merged[i * 4 + ch]);
               }
-              merged[i * 4 + 3] = top.buffer[i * 4 + 3];
+              merged[i * 4 + 3] = topBuf[i * 4 + 3];
             } else if (ta > 0) {
               const ba = merged[i * 4 + 3] / 255;
               const outA = ta + ba * (1 - ta);
               if (outA === 0) continue;
               for (let ch = 0; ch < 3; ch++) {
-                const blended = blendChannel(mode, top.buffer[i * 4 + ch], merged[i * 4 + ch]);
+                const blended = blendChannel(mode, topBuf[i * 4 + ch], merged[i * 4 + ch]);
                 merged[i * 4 + ch] = Math.round(
                   (blended * ta + merged[i * 4 + ch] * ba * (1 - ta)) / outA
                 );
@@ -545,7 +558,17 @@ export const layerMergeDown: CommandDefinition<{ clipId: string; layerId: string
             }
           }
         }
-        return { ...f, cels: { ...f.cels, [bottomLayer.id]: { buffer: merged, linked: false } } };
+        return {
+          ...f,
+          cels: {
+            ...f.cels,
+            [bottomLayer.id]: {
+              buffer: merged,
+              linked: false,
+              ...(bottom?.vectors && bottom.vectors.length > 0 ? { vectors: cloneVectorShapes(bottom.vectors) } : {}),
+            },
+          },
+        };
       }),
     }));
     // Remove the top layer's cels everywhere.
@@ -592,7 +615,14 @@ export const layerMove: CommandDefinition<{ clipId: string; layerId: string; dir
 interface LayerSetPropsPayload {
   clipId: string;
   layerId: string;
-  patch: { name?: string; visible?: boolean; opacity?: number; locked?: boolean; blend?: BlendMode };
+  patch: {
+    name?: string;
+    visible?: boolean;
+    opacity?: number;
+    locked?: boolean;
+    blend?: BlendMode;
+    modifiers?: LayerModifiers | null;
+  };
 }
 
 export const layerSetProps: CommandDefinition<LayerSetPropsPayload> = {
@@ -620,24 +650,33 @@ export const layerSetProps: CommandDefinition<LayerSetPropsPayload> = {
     ) {
       fail('layer.setProps: unknown blend mode');
     }
+    if (patch.modifiers !== undefined && patch.modifiers !== null) {
+      const modErr = validateLayerModifiers(patch.modifiers);
+      if (modErr) fail(`layer.setProps: invalid modifiers (${modErr})`);
+    }
   },
   apply(payload, ctx) {
     const { clipId, layerId, patch } = payload;
     return {
       project: mapClip(ctx.project, clipId, (c) => ({
         ...c,
-        layers: c.layers.map((l) =>
-          l.id === layerId
-            ? {
-                ...l,
-                ...(patch.name !== undefined ? { name: patch.name } : {}),
-                ...(patch.visible !== undefined ? { visible: patch.visible } : {}),
-                ...(patch.opacity !== undefined ? { opacity: patch.opacity } : {}),
-                ...(patch.locked !== undefined ? { locked: patch.locked } : {}),
-                ...(patch.blend !== undefined ? { blend: patch.blend } : {}),
-              }
-            : l
-        ),
+        layers: c.layers.map((l) => {
+          if (l.id !== layerId) return l;
+          const next: Layer = {
+            ...l,
+            ...(patch.name !== undefined ? { name: patch.name } : {}),
+            ...(patch.visible !== undefined ? { visible: patch.visible } : {}),
+            ...(patch.opacity !== undefined ? { opacity: patch.opacity } : {}),
+            ...(patch.locked !== undefined ? { locked: patch.locked } : {}),
+            ...(patch.blend !== undefined ? { blend: patch.blend } : {}),
+          };
+          if (patch.modifiers === null) {
+            delete next.modifiers;
+          } else if (patch.modifiers !== undefined) {
+            next.modifiers = cloneLayerModifiers(patch.modifiers);
+          }
+          return next;
+        }),
       })),
       label: 'Layer properties',
     };
@@ -939,10 +978,17 @@ export const canvasResize: CommandDefinition<{
       frames: clip.frames.map((frame) => ({
         ...frame,
         cels: Object.fromEntries(
-          Object.entries(frame.cels).map(([layerId, cel]) => [
-            layerId,
-            { ...cel, buffer: remap(cel.buffer) },
-          ]),
+          Object.entries(frame.cels).map(([layerId, cel]) => {
+            const shiftedVecs = shiftVectorShapes(cel.vectors, offsetX, offsetY);
+            return [
+              layerId,
+              {
+                ...cel,
+                buffer: remap(cel.buffer),
+                ...(shiftedVecs ? { vectors: shiftedVecs } : {}),
+              },
+            ];
+          }),
         ),
       })),
     }));
@@ -1010,6 +1056,98 @@ export const settingsSetStyleProfile: CommandDefinition<{ profile: StyleProfile 
 };
 
 // ---------------------------------------------------------------------------
+// non-destructive cel vectors (pixel-perfect editable lines/curves/shapes)
+// ---------------------------------------------------------------------------
+
+export const celSetVectors: CommandDefinition<{
+  clipId: string;
+  frameId: string;
+  layerId: string;
+  vectors: VectorShape[];
+}> = {
+  type: 'cel.setVectors',
+  defaultLabel: 'Edit vectors',
+  validate(payload, ctx) {
+    const p = assertObject(payload, 'cel.setVectors');
+    const clipId = getString(p, 'clipId', 'cel.setVectors');
+    const frameId = getString(p, 'frameId', 'cel.setVectors');
+    const layerId = getString(p, 'layerId', 'cel.setVectors');
+    const clip = findClip(ctx.project, clipId);
+    if (!clip) failNotFound(`cel.setVectors: clip "${clipId}" not found`);
+    if (!findFrame(clip, frameId)) failNotFound(`cel.setVectors: frame "${frameId}" not found`);
+    const found = findLayer(clip, layerId);
+    if (!found) failNotFound(`cel.setVectors: layer "${layerId}" not found`);
+    if (found.layer.locked) fail('cel.setVectors: layer is locked');
+    const err = validateVectorShapes(p.vectors);
+    if (err) fail(`cel.setVectors: ${err}`);
+  },
+  apply(payload, ctx) {
+    const { clipId, frameId, layerId, vectors } = payload;
+    const clip = findClip(ctx.project, clipId) as Clip;
+    const found = findLayer(clip, layerId) as { layer: Layer; index: number };
+    const frame = findFrame(clip, frameId) as Frame;
+    const existing = frame.cels[layerId];
+    const cloned = cloneVectorShapes(vectors);
+    const nextCel: Cel = {
+      buffer: existing ? existing.buffer : new Uint8ClampedArray(ctx.project.width * ctx.project.height * 4),
+      linked: found.layer.linked,
+      ...(cloned ? { vectors: cloned } : {}),
+    };
+    const project = found.layer.linked
+      ? setCelEverywhere(ctx.project, clipId, layerId, nextCel)
+      : mapClip(ctx.project, clipId, (c) => ({
+          ...c,
+          frames: c.frames.map((f) =>
+            f.id === frameId ? { ...f, cels: { ...f.cels, [layerId]: nextCel } } : f,
+          ),
+        }));
+    return { project, label: 'Edit vectors' };
+  },
+};
+
+export const celBakeVectors: CommandDefinition<{
+  clipId: string;
+  frameId: string;
+  layerId: string;
+}> = {
+  type: 'cel.bakeVectors',
+  defaultLabel: 'Bake vectors to pixels',
+  validate(payload, ctx) {
+    const p = assertObject(payload, 'cel.bakeVectors');
+    const clipId = getString(p, 'clipId', 'cel.bakeVectors');
+    const frameId = getString(p, 'frameId', 'cel.bakeVectors');
+    const layerId = getString(p, 'layerId', 'cel.bakeVectors');
+    const clip = findClip(ctx.project, clipId);
+    if (!clip) failNotFound(`cel.bakeVectors: clip "${clipId}" not found`);
+    if (!findFrame(clip, frameId)) failNotFound(`cel.bakeVectors: frame "${frameId}" not found`);
+    const found = findLayer(clip, layerId);
+    if (!found) failNotFound(`cel.bakeVectors: layer "${layerId}" not found`);
+    if (found.layer.locked) fail('cel.bakeVectors: layer is locked');
+  },
+  apply(payload, ctx) {
+    const { clipId, frameId, layerId } = payload;
+    const clip = findClip(ctx.project, clipId) as Clip;
+    const found = findLayer(clip, layerId) as { layer: Layer; index: number };
+    const frame = findFrame(clip, frameId) as Frame;
+    const existing = frame.cels[layerId];
+    if (!existing || !existing.vectors || existing.vectors.length === 0) {
+      return { project: ctx.project, label: 'Bake vectors to pixels' };
+    }
+    const baked = new Uint8ClampedArray(renderCelWithVectors(existing, ctx.project.width, ctx.project.height));
+    const nextCel: Cel = { buffer: baked, linked: found.layer.linked };
+    const project = found.layer.linked
+      ? setCelEverywhere(ctx.project, clipId, layerId, nextCel)
+      : mapClip(ctx.project, clipId, (c) => ({
+          ...c,
+          frames: c.frames.map((f) =>
+            f.id === frameId ? { ...f, cels: { ...f.cels, [layerId]: nextCel } } : f,
+          ),
+        }));
+    return { project, label: 'Bake vectors to pixels' };
+  },
+};
+
+// ---------------------------------------------------------------------------
 // registry
 // ---------------------------------------------------------------------------
 
@@ -1032,6 +1170,8 @@ export function builtinCommands(): CommandDefinition<never>[] {
     layerReorder,
     layerSetProps,
     layerSetLinked,
+    celSetVectors,
+    celBakeVectors,
     paletteAddColor,
     paletteRemoveColor,
     paletteReplaceAll,

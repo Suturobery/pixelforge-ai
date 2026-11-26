@@ -8,8 +8,8 @@
 'use client'
 
 import { useState } from 'react'
-import { useEditor } from '@/lib/pixelforge/store'
-import type { TransformKind } from '@/lib/pixelforge/types'
+import { getActiveClip, getActiveFrame, useEditor } from '@/lib/pixelforge/store'
+import type { TransformKind, VectorShapeKind } from '@/lib/pixelforge/types'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { StepperInput } from '@/components/pixelforge/stepper-input'
@@ -108,10 +108,41 @@ export function ToolOptionsBar() {
   const setWandDiagonal = useEditor((s) => s.setWandDiagonal)
   const gradientToAlpha = useEditor((s) => s.gradientToAlpha)
   const setGradientToAlpha = useEditor((s) => s.setGradientToAlpha)
+  const shadeMode = useEditor((s) => s.shadeMode)
+  const setShadeMode = useEditor((s) => s.setShadeMode)
+  const vectorKind = useEditor((s) => s.vectorKind)
+  const setVectorKind = useEditor((s) => s.setVectorKind)
+  const vectorFilled = useEditor((s) => s.vectorFilled)
+  const setVectorFilled = useEditor((s) => s.setVectorFilled)
+  const vectorStrokeWidth = useEditor((s) => s.vectorStrokeWidth)
+  const setVectorStrokeWidth = useEditor((s) => s.setVectorStrokeWidth)
+  const selectedVectorId = useEditor((s) => s.selectedVectorId)
+  const primary = useEditor((s) => s.primary)
+  const secondary = useEditor((s) => s.secondary)
+  const activeClipId = useEditor((s) => s.activeClipId)
+  const activeFrameIndex = useEditor((s) => s.activeFrameIndex)
+  const activeLayerId = useEditor((s) => s.activeLayerId)
+  const setActiveCelVectors = useEditor((s) => s.setActiveCelVectors)
+  const bakeActiveCelVectors = useEditor((s) => s.bakeActiveCelVectors)
+  const deleteSelectedVector = useEditor((s) => s.deleteSelectedVector)
+  const duplicateSelectedVector = useEditor((s) => s.duplicateSelectedVector)
   const selection = useEditor((s) => s.selection)
   const clipboard = useEditor((s) => s.clipboard)
   const playing = useEditor((s) => s.playing)
   const project = useEditor((s) => s.project)
+
+  const activeVectors = (() => {
+    if (tool !== 'vector') return []
+    const clip = getActiveClip({ project, activeClipId })
+    const frame = getActiveFrame({ project, activeClipId, activeFrameIndex })
+    const layerId = clip.layers.some((l) => l.id === activeLayerId)
+      ? activeLayerId
+      : (clip.layers.at(-1)?.id ?? '')
+    return frame.cels[layerId]?.vectors ?? []
+  })()
+  const selectedVector = selectedVectorId
+    ? activeVectors.find((v) => v.id === selectedVectorId) ?? null
+    : null
 
   // free-scale target size — render-time derived from the live selection;
   // sizeEd overrides while the user is typing a custom target (reset by the
@@ -127,6 +158,7 @@ export function ToolOptionsBar() {
   if (
     tool !== 'ellipse' &&
     tool !== 'rect' &&
+    tool !== 'vector' &&
     tool !== 'marquee' &&
     tool !== 'shade' &&
     tool !== 'wand' &&
@@ -145,10 +177,27 @@ export function ToolOptionsBar() {
         {tool === 'shade' && (
           <>
             <span className="rounded bg-amber-500/15 px-2 py-0.5 font-mono text-[10px] font-semibold text-amber-300 ring-1 ring-amber-500/30">
-              OKLab Palette Shade
+              OKLab Shade
             </span>
-            <span className="px-1 font-mono text-[10px] text-zinc-400">
-              L-click: darken (cool) · R-click / Shift: lighten (warm) · 1 step/stroke
+            <div className="flex items-center gap-0.5" role="group" aria-label="Shade brush mode">
+              {(['darken', 'lighten'] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setShadeMode(m)}
+                  aria-pressed={shadeMode === m}
+                  className={`rounded-md px-2 py-0.5 font-mono text-[10px] capitalize transition-colors ${
+                    shadeMode === m
+                      ? 'bg-teal-500/20 text-teal-300 ring-1 ring-teal-500/40'
+                      : 'text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
+                  }`}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+            <span className="hidden px-1 font-mono text-[10px] text-zinc-400 @[560px]:inline">
+              Left-click: {shadeMode} · Right-click / Shift: {shadeMode === 'darken' ? 'lighten' : 'darken'}
             </span>
           </>
         )}
@@ -192,6 +241,162 @@ export function ToolOptionsBar() {
             <span className="px-1 font-mono text-[10px] text-zinc-400">
               Click color island to select · Shift+click adds to selection
             </span>
+          </>
+        )}
+
+        {tool === 'vector' && (
+          <>
+            <div className="flex items-center gap-0.5" role="group" aria-label="Vector shape kind">
+              {(
+                [
+                  { id: 'curve', label: 'Curve' },
+                  { id: 'line', label: 'Line' },
+                  { id: 'rect', label: 'Rect' },
+                  { id: 'ellipse', label: 'Ellipse' },
+                  { id: 'polygon', label: 'Poly' },
+                ] as Array<{ id: VectorShapeKind; label: string }>
+              ).map((k) => (
+                <button
+                  key={k.id}
+                  type="button"
+                  onClick={() => setVectorKind(k.id)}
+                  aria-pressed={vectorKind === k.id}
+                  className={`rounded-md px-2 py-1 font-mono text-[10px] transition-colors ${
+                    vectorKind === k.id
+                      ? 'bg-sky-500/20 text-sky-300 ring-1 ring-sky-500/40'
+                      : 'text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
+                  }`}
+                >
+                  {k.label}
+                </button>
+              ))}
+            </div>
+            <Separator orientation="vertical" className="h-4 bg-zinc-800" />
+            <button
+              type="button"
+              role="switch"
+              aria-checked={selectedVector ? Boolean(selectedVector.fill) : vectorFilled}
+              onClick={() => {
+                const next = selectedVector ? !selectedVector.fill : !vectorFilled
+                setVectorFilled(next)
+                if (selectedVector && (selectedVector.kind === 'rect' || selectedVector.kind === 'ellipse' || selectedVector.kind === 'polygon')) {
+                  setActiveCelVectors(
+                    activeVectors.map((v) =>
+                      v.id === selectedVector.id ? { ...v, fill: next ? secondary : null } : v,
+                    ),
+                    next ? 'Fill vector shape' : 'Clear vector fill',
+                  )
+                }
+              }}
+              className={`rounded-md px-2 py-1 font-mono text-[10px] transition-colors ${
+                (selectedVector ? Boolean(selectedVector.fill) : vectorFilled)
+                  ? 'bg-teal-500/15 text-teal-300 ring-1 ring-teal-500/40'
+                  : 'text-zinc-400 hover:text-zinc-200'
+              }`}
+              title="Toggle fill color (Secondary) for Rect / Ellipse / Polygon"
+            >
+              Fill
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const next: 1 | 2 = (selectedVector?.strokeWidth ?? vectorStrokeWidth) === 1 ? 2 : 1
+                setVectorStrokeWidth(next)
+                if (selectedVector) {
+                  setActiveCelVectors(
+                    activeVectors.map((v) => (v.id === selectedVector.id ? { ...v, strokeWidth: next } : v)),
+                    `Vector stroke ${next}px`,
+                  )
+                }
+              }}
+              className="rounded-md px-1.5 py-1 font-mono text-[10px] text-zinc-300 hover:bg-zinc-800"
+              title="Toggle stroke thickness (1px / 2px)"
+            >
+              {(selectedVector?.strokeWidth ?? vectorStrokeWidth)}px
+            </button>
+            {selectedVector && (
+              <>
+                <Separator orientation="vertical" className="h-4 bg-zinc-800" />
+                <button
+                  type="button"
+                  onClick={() =>
+                    setActiveCelVectors(
+                      activeVectors.map((v) =>
+                        v.id === selectedVector.id
+                          ? { ...v, stroke: primary, ...(v.fill ? { fill: secondary } : {}) }
+                          : v,
+                      ),
+                      'Recolor vector shape',
+                    )
+                  }
+                  className="rounded-md px-2 py-1 font-mono text-[10px] text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100"
+                  title="Apply current Primary (stroke) and Secondary (fill) to selected shape"
+                >
+                  Recolor
+                </button>
+                {selectedVector.kind === 'curve' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const pts = selectedVector.points
+                      const nextPts =
+                        pts.length === 3
+                          ? [
+                              pts[0]!,
+                              {
+                                x: Math.round(pts[0]!.x + (2 / 3) * (pts[1]!.x - pts[0]!.x)),
+                                y: Math.round(pts[0]!.y + (2 / 3) * (pts[1]!.y - pts[0]!.y)),
+                              },
+                              {
+                                x: Math.round(pts[2]!.x + (2 / 3) * (pts[1]!.x - pts[2]!.x)),
+                                y: Math.round(pts[2]!.y + (2 / 3) * (pts[1]!.y - pts[2]!.y)),
+                              },
+                              pts[2]!,
+                            ]
+                          : [
+                              pts[0]!,
+                              {
+                                x: Math.round((pts[1]!.x + pts[2]!.x) / 2),
+                                y: Math.round((pts[1]!.y + pts[2]!.y) / 2),
+                              },
+                              pts[3]!,
+                            ]
+                      setActiveCelVectors(
+                        activeVectors.map((v) => (v.id === selectedVector.id ? { ...v, points: nextPts } : v)),
+                        nextPts.length === 4 ? 'Convert to cubic curve' : 'Convert to quadratic curve',
+                      )
+                    }}
+                    className="rounded-md px-2 py-1 font-mono text-[10px] text-amber-300 hover:bg-amber-500/15"
+                    title="Switch selected Bézier curve between 3-point Quadratic and 4-point Cubic"
+                  >
+                    {selectedVector.points.length === 4 ? 'Cubic (4pt)' : 'Quad (3pt)'}
+                  </button>
+                )}
+                <OptButton
+                  icon={<Copy className="h-3.5 w-3.5" />}
+                  label="Duplicate selected vector (Ctrl+D)"
+                  onClick={() => duplicateSelectedVector()}
+                />
+                <OptButton
+                  icon={<Trash2 className="h-3.5 w-3.5" />}
+                  label="Delete selected vector (Del)"
+                  onClick={() => deleteSelectedVector()}
+                />
+              </>
+            )}
+            {activeVectors.length > 0 && (
+              <>
+                <Separator orientation="vertical" className="h-4 bg-zinc-800" />
+                <button
+                  type="button"
+                  onClick={() => bakeActiveCelVectors()}
+                  className="rounded-md bg-sky-600/90 px-2 py-1 font-mono text-[10px] font-medium text-white transition-colors hover:bg-sky-500"
+                  title="Rasterize all editable vectors on this cel into crisp pixels (Ctrl+Z to undo)"
+                >
+                  Bake ({activeVectors.length})
+                </button>
+              </>
+            )}
           </>
         )}
 

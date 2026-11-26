@@ -16,6 +16,7 @@ import { useAppSettings } from '@/lib/pixelforge/settings'
 import {
   collectUniqueOpaqueColors,
   composeFrameRgba,
+  generateHueShiftedRamp,
   harvestPalette,
   listSkinPresets,
   remapBufferToPalette,
@@ -142,8 +143,27 @@ export function PalettePanel() {
   const [pos, setPos] = useState<PxPos | null>(null)
   const [pillPos, setPillPos] = useState<PxPos | null>(null)
   const [dragging, setDragging] = useState(false)
+  const [addOpen, setAddOpen] = useState(false)
   const [addColor, setAddColor] = useState('#2ce8f5')
+  const [rampSteps, setRampSteps] = useState<3 | 5 | 7>(5)
+  const [rampAutoShift, setRampAutoShift] = useState(true)
+  const [rampShadowShift, setRampShadowShift] = useState(-28)
+  const [rampHighlightShift, setRampHighlightShift] = useState(22)
+  const [rampContrast, setRampContrast] = useState(72)
   const harvestRef = useRef<HTMLInputElement>(null)
+
+  const hueRamp = useMemo(
+    () =>
+      generateHueShiftedRamp({
+        baseHex: addColor,
+        steps: rampSteps,
+        autoShift: rampAutoShift,
+        shadowHueShift: rampShadowShift,
+        highlightHueShift: rampHighlightShift,
+        contrast: rampContrast / 100,
+      }),
+    [addColor, rampSteps, rampAutoShift, rampShadowShift, rampHighlightShift, rampContrast],
+  )
   // share codes: paste-a-code popover (encode lives behind "Share…" copy)
   const [shareOpen, setShareOpen] = useState(false)
   const [pasteValue, setPasteValue] = useState('')
@@ -457,46 +477,158 @@ export function PalettePanel() {
       <div className="space-y-1.5 border-t border-zinc-800 px-3 py-2">
         <div className="flex items-center justify-between gap-1">
           <div className="flex items-center gap-0.5">
-            <Popover>
+            <Popover
+              open={addOpen}
+              onOpenChange={(nextOpen) => {
+                setAddOpen(nextOpen)
+                if (nextOpen && /^#[0-9a-f]{6}$/i.test(primary)) {
+                  setAddColor(primary.toLowerCase())
+                }
+              }}
+            >
               <Tooltip>
                 <TooltipTrigger asChild>
                   <PopoverTrigger asChild>
                     <button
                       type="button"
                       className="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
-                      aria-label="Add color to palette"
+                      aria-label="Add color or generate hue-shifted ramp"
                     >
                       <Plus className="h-3.5 w-3.5" />
                     </button>
                   </PopoverTrigger>
                 </TooltipTrigger>
-                <TooltipContent side="top">Add color to palette</TooltipContent>
+                <TooltipContent side="top">Add color / Automatic Hue Shifter ramp</TooltipContent>
               </Tooltip>
-              <PopoverContent side="top" align="start" className="w-56 p-3" onOpenAutoFocus={(e) => e.preventDefault()}>
+              <PopoverContent side="top" align="start" className="w-64 p-3" onOpenAutoFocus={(e) => e.preventDefault()}>
                 <ColorPickerContent
                   color={addColor}
                   onChange={setAddColor}
                   alreadyInPalette={palette.includes(addColor.toLowerCase())}
                   onAddToPalette={() => addPaletteColor(addColor)}
                 />
-                {/* ramp generator: 4 shading steps around the picked color */}
-                <button
-                  type="button"
-                  disabled={!/^#[0-9a-fA-F]{6}$/.test(addColor)}
-                  onClick={() => {
-                    const h = addColor.replace('#', '')
-                    const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16)
-                    const hexAt = (m: number) => {
-                      const c = [r, g, b].map((v) => Math.max(0, Math.min(255, Math.round(v * m))))
-                      return `#${c.map((v) => v.toString(16).padStart(2, '0')).join('')}`
-                    }
-                    for (const hexv of [hexAt(1.2), hexAt(0.78), hexAt(0.58), hexAt(0.4)]) addPaletteColor(hexv)
-                  }}
-                  className="mt-2 w-full rounded border border-zinc-700 py-1 font-mono text-[10px] text-zinc-300 hover:border-frost-500/60 hover:text-frost-300 disabled:opacity-40"
-                  title="Add a 4-step light/shade ramp around this color"
-                >
-                  Generate ramp (+4 shades)
-                </button>
+                {/* Automatic Hue Shifter — builds a full cool-shadow / warm-highlight ramp from one color */}
+                <div className="mt-2.5 space-y-2 border-t border-zinc-800 pt-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-mono text-[10px] font-semibold uppercase tracking-wider text-teal-300">
+                      Hue Shifter
+                    </span>
+                    <div className="flex items-center gap-0.5" role="group" aria-label="Ramp step count">
+                      {([3, 5, 7] as const).map((n) => (
+                        <button
+                          key={n}
+                          type="button"
+                          onClick={() => setRampSteps(n)}
+                          aria-pressed={rampSteps === n}
+                          className={`h-5 min-w-5 rounded px-1 font-mono text-[9px] transition-colors ${
+                            rampSteps === n
+                              ? 'bg-teal-500/20 text-teal-300 ring-1 ring-teal-500/40'
+                              : 'text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
+                          }`}
+                        >
+                          {n}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {/* Live ramp preview strip (click any swatch to set primary color) */}
+                  {hueRamp.length > 0 && (
+                    <div className="flex h-6 w-full overflow-hidden rounded border border-zinc-700/80">
+                      {hueRamp.map((hex, idx) => (
+                        <button
+                          key={`${hex}-${idx}`}
+                          type="button"
+                          onClick={() => setPrimary(hex)}
+                          className="h-full flex-1 transition-transform hover:scale-y-110"
+                          style={{ background: hex }}
+                          title={`${hex} — click to paint with this shade`}
+                          aria-label={`Use ramp shade ${hex}`}
+                        />
+                      ))}
+                    </div>
+                  )}
+                  <label className="flex cursor-pointer items-center justify-between font-mono text-[9px] text-zinc-300">
+                    <span>Auto cool shadow / warm light</span>
+                    <input
+                      type="checkbox"
+                      checked={rampAutoShift}
+                      onChange={(e) => setRampAutoShift(e.target.checked)}
+                      className="h-3 w-3 accent-teal-500"
+                    />
+                  </label>
+                  <div className="space-y-1 font-mono text-[9px] text-zinc-400">
+                    <label className="flex items-center gap-2">
+                      <span className="w-12 shrink-0">Shadow</span>
+                      <input
+                        type="range"
+                        min={rampAutoShift ? 0 : -60}
+                        max={60}
+                        step={2}
+                        value={rampAutoShift ? Math.abs(rampShadowShift) : rampShadowShift}
+                        onChange={(e) => {
+                          const v = Number(e.target.value)
+                          setRampShadowShift(rampAutoShift ? -Math.abs(v) : v)
+                        }}
+                        aria-label="Shadow hue shift"
+                        className="h-1 flex-1 accent-teal-500"
+                      />
+                      <span className="w-8 text-right text-zinc-300">
+                        {rampAutoShift ? `${Math.abs(rampShadowShift)}°` : `${rampShadowShift > 0 ? '+' : ''}${rampShadowShift}°`}
+                      </span>
+                    </label>
+                    <label className="flex items-center gap-2">
+                      <span className="w-12 shrink-0">Light</span>
+                      <input
+                        type="range"
+                        min={rampAutoShift ? 0 : -60}
+                        max={60}
+                        step={2}
+                        value={rampAutoShift ? Math.abs(rampHighlightShift) : rampHighlightShift}
+                        onChange={(e) => setRampHighlightShift(Number(e.target.value))}
+                        aria-label="Highlight hue shift"
+                        className="h-1 flex-1 accent-teal-500"
+                      />
+                      <span className="w-8 text-right text-zinc-300">
+                        {rampAutoShift ? `${Math.abs(rampHighlightShift)}°` : `${rampHighlightShift > 0 ? '+' : ''}${rampHighlightShift}°`}
+                      </span>
+                    </label>
+                    <label className="flex items-center gap-2">
+                      <span className="w-12 shrink-0">Contrast</span>
+                      <input
+                        type="range"
+                        min={30}
+                        max={100}
+                        step={2}
+                        value={rampContrast}
+                        onChange={(e) => setRampContrast(Number(e.target.value))}
+                        aria-label="Ramp contrast"
+                        className="h-1 flex-1 accent-teal-500"
+                      />
+                      <span className="w-8 text-right text-zinc-300">{rampContrast}%</span>
+                    </label>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={hueRamp.length === 0}
+                    onClick={() => {
+                      const existing = new Set(palette.map((c) => c.toLowerCase()))
+                      const fresh = hueRamp.filter((hex) => !existing.has(hex.toLowerCase()))
+                      if (fresh.length === 0) {
+                        toast({ title: 'Ramp already in palette', description: 'All generated swatches are already present.' })
+                        return
+                      }
+                      setPalette([...palette, ...fresh], `Add ${fresh.length}-color hue ramp`)
+                      toast({
+                        title: `Added ${fresh.length}-color hue ramp`,
+                        description: `${rampAutoShift ? 'Auto cool/warm' : 'Manual'} shift from ${addColor.toLowerCase()} (Ctrl+Z to undo).`,
+                      })
+                    }}
+                    className="w-full rounded bg-teal-600/90 py-1 font-mono text-[10px] font-medium text-white transition-colors hover:bg-teal-500 disabled:opacity-40"
+                    title="Merge this hue-shifted shading ramp into the document palette in one undoable step"
+                  >
+                    Add {hueRamp.length}-color ramp to palette
+                  </button>
+                </div>
                 {/* palette harvest: steal the 16 best colors from any image */}
                 <input
                   ref={harvestRef}

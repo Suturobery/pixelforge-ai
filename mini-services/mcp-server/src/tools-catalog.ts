@@ -305,6 +305,11 @@ export const TOOL_CATALOG: ToolDef[] = [
     inputSchema: {
       ...clipRef,
       maxFrames: z.number().int().min(1).max(64).optional().describe('Maximum frames to render. Default 32.'),
+      scale: z
+        .union([z.literal(0.25), z.literal(0.5), z.literal(1), z.literal(2), z.literal(4), z.literal(8)])
+        .optional()
+        .describe('Inspection zoom factor (defaults to auto-zoom up to 4x for crisp vision review).'),
+      showGrid: z.boolean().optional().describe('Draw dark checkerboard + pixel grid behind transparent pixels (default true when zoomed).'),
     },
   },
   {
@@ -663,6 +668,52 @@ export const TOOL_CATALOG: ToolDef[] = [
     },
   },
   {
+    name: 'set_vectors',
+    title: 'Set editable pixel-perfect vectors',
+    description:
+      'Set non-destructive pixel-perfect editable vector shapes (line, quadratic/cubic Bézier curve, rect, ellipse, polygon) ' +
+      'on a cel. Renders crisp zero-AA pixels before Live FX modifiers so shapes remain flexible and animatable per frame.',
+    tier: 'L1',
+    relay: true,
+    inputSchema: {
+      ...clipRef,
+      ...frameRef,
+      ...layerRef,
+      vectors: z
+        .array(
+          z.object({
+            id: z.string().trim().min(1).max(64).optional().describe('Stable shape id (auto-generated if omitted).'),
+            kind: z.enum(['line', 'curve', 'rect', 'ellipse', 'polygon']),
+            points: z
+              .array(z.object({ x: z.number().int().min(-512).max(1024), y: z.number().int().min(-512).max(1024) }))
+              .min(2)
+              .max(64)
+              .describe('Anchor/control points: 2 for line/rect/ellipse, 3 (quadratic) or 4 (cubic) for curve, 2..64 for polygon.'),
+            stroke: hexColor.nullable().optional().describe('Crisp stroke color (#rrggbb) or null.'),
+            fill: hexColor.nullable().optional().describe('Crisp fill color (#rrggbb) for rect/ellipse/closed polygon, or null.'),
+            strokeWidth: z.number().int().min(1).max(4).optional().describe('Stroke thickness in pixels (1..4, default 1).'),
+            closed: z.boolean().optional().describe('For polygon: true (default) closes the loop; false renders an open polyline.'),
+          }),
+        )
+        .max(64)
+        .describe('Complete list of editable vector shapes for this cel (pass [] to clear).'),
+      ...staleGuard,
+    },
+  },
+  {
+    name: 'bake_vectors',
+    title: 'Bake editable vectors to pixels',
+    description: 'Rasterize all non-destructive vector shapes on the target cel into permanent crisp pixels in one undoable step.',
+    tier: 'L1',
+    relay: true,
+    inputSchema: {
+      ...clipRef,
+      ...frameRef,
+      ...layerRef,
+      ...staleGuard,
+    },
+  },
+  {
     name: 'flood_fill',
     title: 'Flood fill region',
     description: 'Scanline flood-fill a contiguous region starting at (x, y) with color, in one undoable step.',
@@ -916,7 +967,9 @@ export const TOOL_CATALOG: ToolDef[] = [
   {
     name: 'set_layer_props',
     title: 'Set layer properties',
-    description: 'Rename a layer, toggle visibility, or set opacity (0–1).',
+    description:
+      'Rename a layer, toggle visibility/lock, set blend/opacity (0–1), or attach/clear non-destructive Live FX modifiers ' +
+      '(outline/sel-out, drop shadow, color/skin remap) that render live across every frame without flattening raw pixels.',
     tier: 'L1',
     relay: true,
     inputSchema: {
@@ -927,6 +980,37 @@ export const TOOL_CATALOG: ToolDef[] = [
       opacity: z.number().min(0).max(1).optional(),
       locked: z.boolean().optional().describe('Paint lock: pixel tools cannot change this layer while locked.'),
       blend: z.enum(['normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten']).optional(),
+      modifiers: z
+        .object({
+          outline: z
+            .object({
+              enabled: z.boolean(),
+              mode: z.enum(['solid', 'sel-out']),
+              color: hexColor,
+              connectivity: z.union([z.literal(4), z.literal(8)]).optional(),
+            })
+            .optional(),
+          shadow: z
+            .object({
+              enabled: z.boolean(),
+              offsetX: z.number().int().min(-8).max(8),
+              offsetY: z.number().int().min(-8).max(8),
+              color: hexColor,
+              opacity: z.number().min(0.05).max(1),
+            })
+            .optional(),
+          colorRemap: z
+            .object({
+              enabled: z.boolean(),
+              presetId: z.string().max(64).optional(),
+              palette: z.array(hexColor).max(64),
+              mode: z.enum(['ramp', 'nearest']).optional(),
+            })
+            .optional(),
+        })
+        .nullable()
+        .optional()
+        .describe('Non-destructive Live FX modifiers applied at render/export time. Pass null to clear all modifiers.'),
       ...staleGuard,
     },
   },
@@ -998,6 +1082,26 @@ export const TOOL_CATALOG: ToolDef[] = [
     relay: true,
     inputSchema: {
       hex: hexColor.describe('Existing palette color to remove.'),
+      ...staleGuard,
+    },
+  },
+  {
+    name: 'generate_hue_ramp',
+    title: 'Generate hue-shifted color ramp',
+    description:
+      'Automatic Hue Shifter: build a complete 3–9 color pixel-art shading ramp (dark → mid → bright) from one base color ' +
+      'with cool-shifted shadows and warm-shifted highlights. Optionally merges new swatches into the project palette in one undoable step.',
+    tier: 'L1',
+    relay: true,
+    inputSchema: {
+      baseColor: hexColor.describe('Base #rrggbb color to build the shading ramp around.'),
+      steps: z.number().int().min(3).max(9).optional().describe('Number of ramp swatches (3–9, default 5).'),
+      autoShift: z.boolean().optional().describe('true (default) shifts shadows toward cool blue-violet and highlights toward warm yellow; false uses signed shadowHueShift/highlightHueShift degrees.'),
+      shadowHueShift: z.number().min(-90).max(90).optional().describe('Shadow hue shift in degrees (-90..90, default -28).'),
+      highlightHueShift: z.number().min(-90).max(90).optional().describe('Highlight hue shift in degrees (-90..90, default 22).'),
+      contrast: z.number().min(0.2).max(1).optional().describe('Lightness spread across the ramp (0.2..1.0, default 0.72).'),
+      saturationShift: z.number().min(-0.4).max(0.4).optional().describe('Saturation boost/cut curve (-0.4..0.4, default 0.12).'),
+      addToPalette: z.boolean().optional().describe('Merge newly generated swatches into the project palette (default true).'),
       ...staleGuard,
     },
   },

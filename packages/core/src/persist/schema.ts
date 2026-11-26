@@ -17,6 +17,8 @@ import type {
 import { PersistError, type PersistIssue } from './errors';
 import { assertSafeCelSrc, isSafeId } from './paths';
 import { parseStyleProfile } from '../style-profile';
+import { validateLayerModifiers } from '../pixels/modifiers';
+import { validateVectorShapes } from '../pixels/vectors';
 
 const HEX = /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
 const LOOP_MODES = ['forward', 'reverse', 'pingpong'] as const;
@@ -161,6 +163,10 @@ function validateClip(
     if (l.blend !== undefined && (typeof l.blend !== 'string' || !BLEND_MODES.includes(l.blend))) {
       add(`${lp}.blend`, 'must be a blend mode when present');
     }
+    if (l.modifiers !== undefined) {
+      const modErr = validateLayerModifiers(l.modifiers);
+      if (modErr) add(`${lp}.modifiers`, modErr);
+    }
     if (l.linked === true && l.id) {
       linkedLayers.set(l.id, opts.trashScoped ? null : `cels/${c.id}/shared/${l.id}.png`);
     }
@@ -244,6 +250,10 @@ function validateClip(
       } catch (err) {
         add(`${cp}.src`, err instanceof Error ? err.message : 'unsafe cel path', 'UNSAFE_PATH');
         continue;
+      }
+      if (celObj.vectors !== undefined) {
+        const vecErr = validateVectorShapes(celObj.vectors);
+        if (vecErr) add(`${cp}.vectors`, vecErr);
       }
       const expectedShared = linkedLayers.get(layerId);
       const celLinked = celObj.linked === true;

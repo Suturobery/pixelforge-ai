@@ -16,7 +16,9 @@
  * (verified by persist-format tests), including trash and linked identity.
  */
 
-import type { BlendMode, Cel, CellBuffer, Clip, Frame, Project, TrashEntry, TrashItem } from '../types/document';
+import type { BlendMode, Cel, CellBuffer, Clip, Frame, LayerModifiers, Project, TrashEntry, TrashItem } from '../types/document';
+import { cloneLayerModifiers } from '../pixels/modifiers';
+import { cloneVectorShapes } from '../pixels/vectors';
 import type {
   SerializedCelV2,
   SerializedClipV2,
@@ -80,22 +82,31 @@ export async function serializeProjectV2(project: Project): Promise<SerializedWi
           ? sharedCelSrc(clip.id, layer.id)
           : pathFor(clip.id, frame.id, layer.id);
         const entry = await put(src, cel.buffer);
-        cels[layer.id] = layer.linked ? { ...entry, linked: true } : entry;
+        const vectors = cloneVectorShapes(cel.vectors);
+        cels[layer.id] = {
+          ...entry,
+          ...(layer.linked ? { linked: true } : {}),
+          ...(vectors ? { vectors } : {}),
+        };
       }
       out.push(cels);
     }
     return out;
   };
 
-  const serializeLayer = (l: { id: string; name: string; visible: boolean; opacity: number; linked: boolean; locked?: boolean; blend?: BlendMode }): SerializedLayerV2 => ({
-    id: l.id,
-    name: l.name,
-    visible: l.visible,
-    opacity: l.opacity,
-    linked: l.linked,
-    ...(l.locked !== undefined ? { locked: l.locked } : {}),
-    ...(l.blend !== undefined ? { blend: l.blend } : {}),
-  });
+  const serializeLayer = (l: { id: string; name: string; visible: boolean; opacity: number; linked: boolean; locked?: boolean; blend?: BlendMode; modifiers?: LayerModifiers }): SerializedLayerV2 => {
+    const mods = cloneLayerModifiers(l.modifiers);
+    return {
+      id: l.id,
+      name: l.name,
+      visible: l.visible,
+      opacity: l.opacity,
+      linked: l.linked,
+      ...(l.locked !== undefined ? { locked: l.locked } : {}),
+      ...(l.blend !== undefined ? { blend: l.blend } : {}),
+      ...(mods ? { modifiers: mods } : {}),
+    };
+  };
 
   const serializeClip = async (
     clip: Clip,
@@ -157,7 +168,7 @@ export async function serializeProjectV2(project: Project): Promise<SerializedWi
 
 interface SerializeCtx {
   serializeClip: (clip: Clip, pathFor: (clipId: string, frameId: string, layerId: string) => string) => Promise<SerializedClipV2>;
-  serializeLayer: (l: { id: string; name: string; visible: boolean; opacity: number; linked: boolean; locked?: boolean; blend?: BlendMode }) => SerializedLayerV2;
+  serializeLayer: (l: { id: string; name: string; visible: boolean; opacity: number; linked: boolean; locked?: boolean; blend?: BlendMode; modifiers?: LayerModifiers }) => SerializedLayerV2;
   put: (src: string, buffer: CellBuffer) => Promise<SerializedCelV2>;
 }
 
@@ -262,7 +273,8 @@ export async function projectFromSerialized(
       const entry = frame.cels[layer.id];
       if (!entry) continue;
       const buffer = await decode(entry.src, { buffer: new Uint8ClampedArray(0), linked: layer.linked });
-      cels[layer.id] = { buffer, linked: entry.linked === true };
+      const vectors = cloneVectorShapes(entry.vectors);
+      cels[layer.id] = { buffer, linked: entry.linked === true, ...(vectors ? { vectors } : {}) };
     }
     void clipId;
     void frameIndex;
@@ -319,7 +331,10 @@ export async function projectFromSerialized(
       fps: clipJson.fps,
       loop: clipJson.loop,
       loopMode: clipJson.loopMode,
-      layers: clipJson.layers.map((l) => ({ ...l })),
+      layers: clipJson.layers.map((l) => {
+        const mods = cloneLayerModifiers(l.modifiers);
+        return { ...l, ...(mods ? { modifiers: mods } : {}) };
+      }),
       parts: clipJson.parts.map((p) => ({ ...p, ...(p.rect ? { rect: { ...p.rect } } : {}) })),
       frames,
       tags: clipJson.tags.map((t) => ({ ...t })),
@@ -443,7 +458,10 @@ async function trashEntryFromSerialized(
         fps: clipJson.fps,
         loop: clipJson.loop,
         loopMode: clipJson.loopMode,
-        layers: clipJson.layers.map((l) => ({ ...l })),
+        layers: clipJson.layers.map((l) => {
+        const mods = cloneLayerModifiers(l.modifiers);
+        return { ...l, ...(mods ? { modifiers: mods } : {}) };
+      }),
         parts: clipJson.parts.map((p) => ({ ...p, ...(p.rect ? { rect: { ...p.rect } } : {}) })),
         frames,
         tags: clipJson.tags.map((t) => ({ ...t })),

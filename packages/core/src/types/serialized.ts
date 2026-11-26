@@ -5,7 +5,7 @@
  * the contract + structural validation only (pure, DOM-free).
  */
 
-import type { BlendMode, DocumentSettings, LoopMode, PartRect } from './document';
+import type { BlendMode, DocumentSettings, LayerModifiers, LoopMode, PartRect, VectorShape } from './document';
 import { CANVAS_MAX, CANVAS_MIN } from './document';
 
 export interface SerializedCelV2 {
@@ -14,6 +14,8 @@ export interface SerializedCelV2 {
   src: string;
   /** True when this entry references the shared cel of a linked layer. */
   linked?: boolean;
+  /** Optional non-destructive pixel-perfect editable vector shapes on this cel. */
+  vectors?: VectorShape[];
 }
 
 export interface SerializedFrameV2 {
@@ -34,6 +36,8 @@ export interface SerializedLayerV2 {
   locked?: boolean;
   /** Compositing mode against the layers below; omitted = normal. */
   blend?: BlendMode;
+  /** Optional non-destructive live modifiers. */
+  modifiers?: LayerModifiers;
 }
 
 export interface SerializedPartV2 {

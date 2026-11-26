@@ -70,7 +70,7 @@ The tier is fixed when the pairing code is generated. A higher tier includes eve
 | Tier | Name in the UI | Grants | Tools |
 | --- | --- | --- | --- |
 | `L0` | Read-only | Inspect state, frames, palette, style validation, asset set consistency, animation preview, knowledge, the task board, the operation log | 23 |
-| `L1` | Read + undoable edits | Painting, frame/layer/clip edits, timing and tags, palette colors, imports, VFX, motion presets, macros, batch, undo/redo, claiming and finishing tasks | 54 |
+| `L1` | Read + undoable edits | Painting, editable pixel-perfect vectors, frame/layer/clip edits, non-destructive layer modifiers, timing and tags, palette colors & hue-shifted ramps, imports, VFX, motion presets, macros, batch, undo/redo, claiming and finishing tasks | 57 |
 | `L2` | Edits + destructive and disk operations | Deletes, canvas resize, `replace_color`, `set_palette`, library palettes, exports, `save_project`, trash purge | 13 |
 | `L3` | Full project control | Same as `L2`. No tool is registered at `L3` today | 0 |
 
@@ -126,7 +126,7 @@ Coordinates are whole canvas pixels.
 
 ## Tool catalog
 
-90 tools: 75 are relayed to the editor and 15 are answered by the server. **Where** is *Editor*
+93 tools: 78 are relayed to the editor and 15 are answered by the server. **Where** is *Editor*
 (needs the app open) or *Server* (no editor needed).
 
 ### Reading the project
@@ -214,7 +214,7 @@ Coordinates are whole canvas pixels.
 | `add_layer` | L1 | clip, `name` | Added on top of the stack |
 | `duplicate_layer` | L1 | clip, layer | Copy inserted above, with all its cels |
 | `delete_layer` | L2 | clip, layer | Goes to the project trash |
-| `set_layer_props` | L1 | clip, layer, `name`, `visible`, `opacity` (0–1) | — |
+| `set_layer_props` | L1 | clip, layer, `name`, `visible`, `opacity` (0–1), `locked`, `blend`, `modifiers` | `modifiers` attaches/clears non-destructive Live FX (`outline`, `shadow`, `colorRemap`) |
 | `reorder_layers` | L1 | clip, layer, `direction` `up` or `down` | One position |
 | `set_layer_linked` | L1 | clip, layer, `linked` | Shares one cel across all frames, or unlinks into independent cels |
 | `merge_down` | L1 | clip, layer | Composites onto the layer below |
@@ -232,6 +232,8 @@ All of these take clip, frame and layer references and are one undo step.
 | `rotate_frame` | L1 | `direction` `cw` or `ccw`, optional square `rect` | 90° rotation |
 | `shift_frame` | L1 | `dx`, `dy` | Vacated pixels become transparent |
 | `beautify_layer` | L1 | `outline`, `shade` | 1 px outline plus directional shading on bottom and right edges |
+| `set_vectors` | L1 | clip, frame, layer, `vectors` (0–64 shapes: `line`/`curve`/`rect`/`ellipse`/`polygon`) | Non-destructive pixel-perfect editable shapes rendered before Live FX modifiers |
+| `bake_vectors` | L1 | clip, frame, layer | Rasterizes editable vectors on the cel into permanent crisp pixels |
 
 ### Palettes and Style Lock
 
@@ -239,6 +241,7 @@ All of these take clip, frame and layer references and are one undo step.
 | --- | --- | --- | --- | --- |
 | `add_palette_color` | L1 | Editor | `hex` | No-op if present |
 | `remove_palette_color` | L1 | Editor | `hex` | Removes a palette entry; it does not recolor pixels |
+| `generate_hue_ramp` | L1 | Editor | `baseColor`, `steps` (3–9), `autoShift`, `shadowHueShift`, `highlightHueShift`, `contrast`, `addToPalette` | Automatic Hue Shifter: builds a cool-shadow / warm-highlight ramp and optionally adds new swatches in one undoable step |
 | `set_palette` | L2 | Editor | `colors` (1–256) | Replaces the whole palette |
 | `apply_library_palette` | L2 | Server | `id` | Resolves a library palette, then performs `set_palette` on the editor |
 | `harvest_palette` | L1 | Editor | `pngBase64`, `maxColors` (2–32, default 16) | Median-cut colours from any PNG, dark to light |
@@ -414,13 +417,13 @@ A project key is `db:<id>` for a database project, `file:<path>` for a file, or
 
 While an IDE agent is connected or actively editing over MCP, PixelForge renders a lightweight live collaboration HUD directly on the canvas stage (zero document side-effects, zero 60fps React re-renders):
 
-- **Progressive Pixel Reveal & AI Cursor:** Pixels drawn by MCP tools (`set_pixels`, `fill_rect`, `draw_*`, `beautify_layer`, `generate_template`, `generate_vfx`, `create_skin_variants`, etc.) sweep onto the canvas progressively along a serpentine brush path with glowing corner brackets and a moving agent cursor badge. Starting a manual brush stroke or pressing Undo immediately snaps the reveal to the real pixels.
+- **Progressive Pixel Reveal, Rim Glow & AI Cursor:** While an agent tool is running (`busy`), the pixel board pulses with a soft teal rim glow; when pixels commit, they sweep onto the canvas progressively along a serpentine brush path with glowing corner brackets and a moving agent cursor badge. Starting a manual brush stroke or pressing Undo immediately snaps the reveal to the real pixels.
 - **Connected Presence & Status Pill:** Shows connected IDE agent count (`N AI live`), active tool verb, and pixel delta (`+N px`).
-- **Hold-to-Compare (`Before`):** Hold **Before** on the pill or an activity row to peek at the pre-edit frame with a `BEFORE` tag; release to return to the live canvas.
+- **Hold-to-Compare (`Before`) & Stroke Replay:** Hold **Before** on the pill or an activity row to peek at the pre-edit frame with a `BEFORE` tag; click **Replay** on a recent feed row to re-watch the brush sweep live.
 - **1-Click & Per-Step Undo:** Undo the latest AI edit from the pill, or expand the **AI Activity Feed** (up to 16 recent steps) to jump to any edited clip/frame, flash its region, or safely undo to a specific step. Press `Escape` or click outside to close the feed.
-- **Artist Priority Pause & Auto-Follow:** Click **Pause** on the pill to hold mutating MCP writes (`artist_paused`) while keeping `L0` inspection available. Toggle **Follow** off in the feed to stay on your current clip/frame; off-view edits show a clickable **Jump** button instead.
+- **Artist Priority Pause & Smart Auto-Follow / Auto-Pan:** Click **Pause** on the pill to hold mutating MCP writes (`artist_paused`) while keeping `L0` inspection available. When **Follow** is ON, PixelForge switches to the edited clip/frame and pans the viewport if an edit lands off-screen while zoomed in; toggle **Follow** off to stay put and use the clickable **Jump** button instead.
 - **Two-Way `artistContext`:** `get_project_state` includes `artistContext` (`selection`, `primaryColor`, `secondaryColor`, `tool`, `mirrorX`, `mirrorY`, `tiledWrap`, `aiPaused`) so an agent can respect the artist's marquee selection and active canvas settings.
-- **Auto-Eyes Self-Critique:** Every pixel-writing MCP call automatically returns a native zoomed gridded `image/png` preview block (auto-scaled up to 8× for small sprites, base64 stripped from text JSON to save tokens) PLUS `visualCheck` (exact sprite bounds, margins, 4-connected parts, tiny floating fragment coordinates, horizontal symmetry %, off-palette color count, a cropped color-indexed `asciiGrid` with exact `y` row numbers, and common-sense warnings) so agents immediately notice and fix misplaced eyes, floating pixels, or bad proportions.
+- **Auto-Eyes Self-Critique:** Every pixel-writing MCP call (including `batch`, `macro_run`, `resize_canvas`, `auto_trim`, `merge_down`, and hidden-layer edits) automatically returns a native zoomed gridded `image/png` preview block with crisp X/Y coordinate rulers (`0, 8, 16…`, dark checkerboard at `scale >= 2`, base64 stripped from text JSON) PLUS `visualCheck` (exact sprite bounds, margins, 4-connected parts, tiny floating fragment coordinates, horizontal symmetry %, off-palette color count, a cropped color-indexed `asciiGrid` — 1:1 up to 48×48 and cleanly downsampled for larger sprites — and common-sense warnings including hidden/occluded layer alerts). `preview_animation` also auto-zooms with checkerboard and reports per-frame `frameBounds` plus `consistencyWarnings` for ground-line or height jumps.
 
 ## Second Brain panel
 

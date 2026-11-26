@@ -7,6 +7,7 @@ import {
   flashAiRegion,
   getAiActivitySnapshot,
   getUndoStepsForAiEntry,
+  replayAiActivityEntry,
   resetAiActivityForTests,
   setAiAutoFollow,
   setAiComparePreview,
@@ -108,6 +109,12 @@ describe('Live AI Artist Activity Overlay & Co-Pilot HUD', () => {
     // Clicking a feed row flashes a highlightOnly region pulse
     flashAiRegion(entry.id)
     expect(getAiActivitySnapshot().pulses.at(-1)?.highlightOnly).toBe(true)
+
+    // Replay re-emits a full progressive reveal pulse for that step
+    expect(replayAiActivityEntry(entry.id)).toBe(true)
+    const replayed = getAiActivitySnapshot().pulses.at(-1)!
+    expect(replayed.highlightOnly).toBeUndefined()
+    expect(replayed.reveal?.orderedIndices.length).toBe(16)
 
     resetAiActivityForTests()
   })

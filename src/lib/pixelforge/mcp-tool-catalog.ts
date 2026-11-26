@@ -259,6 +259,18 @@ export const MCP_TOOLS: McpToolInfo[] = [
     example: { points: [{ x: 6, y: 14 }, { x: 12, y: 12 }, { x: 10, y: 24 }, { x: 4, y: 22 }], color: '#b13e53', filled: true },
   },
   {
+    name: 'set_vectors',
+    tier: 'L1',
+    description: 'Set or replace non-destructive pixel-perfect editable vector shapes (line, curve, rect, ellipse, polygon) on a cel without flattening pixels.',
+    example: { vectors: [{ id: 'arc1', kind: 'curve', points: [{ x: 4, y: 24 }, { x: 16, y: 4 }, { x: 28, y: 24 }], stroke: '#2ce8f5', strokeWidth: 1 }] },
+  },
+  {
+    name: 'bake_vectors',
+    tier: 'L1',
+    description: 'Rasterize all editable vector shapes on the target cel into crisp pixels in one undoable step.',
+    example: {},
+  },
+  {
     name: 'flood_fill',
     tier: 'L1',
     description: 'Scanline flood-fill a contiguous region starting at (x, y).',
@@ -351,8 +363,8 @@ export const MCP_TOOLS: McpToolInfo[] = [
   {
     name: 'set_layer_props',
     tier: 'L1',
-    description: 'Rename / hide / set opacity (0–1) on a layer.',
-    example: { locked: true, blend: 'multiply' },
+    description: 'Rename, hide, lock, change blend/opacity, or set non-destructive Live FX modifiers (outline/sel-out, drop shadow, color remap) on a layer.',
+    example: { modifiers: { outline: { enabled: true, mode: 'sel-out', color: '#1a1c2c', connectivity: 4 } } },
   },
   {
     name: 'reorder_layers',
@@ -389,6 +401,12 @@ export const MCP_TOOLS: McpToolInfo[] = [
     tier: 'L1',
     description: 'Remove one existing color from the palette without recoloring pixels.',
     example: { hex: '#14b8a6' },
+  },
+  {
+    name: 'generate_hue_ramp',
+    tier: 'L1',
+    description: 'Automatic Hue Shifter: generate a 3–9 color pixel-art shading ramp (cool shadows, warm highlights) from a single base color and optionally merge it into the palette in one undoable step.',
+    example: { baseColor: '#38b764', steps: 5, autoShift: true, addToPalette: true },
   },
   {
     name: 'set_style_profile',

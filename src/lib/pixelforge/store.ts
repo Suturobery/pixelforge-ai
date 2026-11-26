@@ -21,6 +21,7 @@ import {
   CommandBus,
   JournalRecorder,
   CommandError,
+  applyLayerModifiers,
   clearRegionInPlace,
   clampRect,
   collectUniqueOpaqueColors,
@@ -29,6 +30,7 @@ import {
   computeTrimBounds,
   createProject as coreCreateProject,
   defaultStyleProfile,
+  hasActiveLayerModifiers,
   locateCel,
   measureStyleAnchor,
   pasteRegionInPlace,
@@ -37,10 +39,12 @@ import {
   renderSpriteTemplate,
   replaceColorInBuffer,
   sortPaletteColors,
+  uid,
   writeExportPlan,
   type CommandOrigin,
   type CustomBrush,
   type ClipTag,
+  type LayerModifiers,
   type MotionApplyPayload,
   type PaletteRemapMode,
   type PaletteSortBy,
@@ -52,6 +56,8 @@ import {
   type StyleAnchor,
   type StyleProfile,
   type StrokeHandle as CoreStrokeHandle,
+  type VectorShape,
+  type VectorShapeKind,
 } from '@pixelforge/core'
 import { hexToRgba } from './color'
 import { DEFAULT_PALETTE } from './palettes'
@@ -278,6 +284,13 @@ export interface EditorState {
   wandDiagonal: boolean
   /** Bayer Gradient tool: fade from primary to transparent instead of secondary */
   gradientToAlpha: boolean
+  /** Shade Brush default left-click direction (Shift / Right-click inverts it) */
+  shadeMode: 'darken' | 'lighten'
+  /** Pixel-perfect Vector tool options & selected shape id (view state) */
+  vectorKind: VectorShapeKind
+  vectorFilled: boolean
+  vectorStrokeWidth: 1 | 2
+  selectedVectorId: string | null
   // marquee selection — VIEW state only (v3.1 §2.8: excluded from history
   // until an op commits; cleared on frame/layer/clip switches)
   selection: SelectionRect | null
@@ -374,7 +387,18 @@ export interface EditorState {
   mergeDown: (layerId: string) => void
   moveLayer: (layerId: string, dir: -1 | 1) => void
   reorderLayer: (layerId: string, toIndex: number) => void
-  setLayerProp: (layerId: string, patch: Partial<Pick<{ name: string; visible: boolean; opacity: number; locked: boolean; blend: string }, 'name' | 'visible' | 'opacity' | 'locked' | 'blend'>>) => void
+  setLayerProp: (
+    layerId: string,
+    patch: Partial<{
+      name: string
+      visible: boolean
+      opacity: number
+      locked: boolean
+      blend: string
+      modifiers: LayerModifiers | null
+    }>
+  ) => void
+  bakeLayerModifiers: (layerId: string) => boolean
   setLayerLinked: (layerId: string, linked: boolean) => void
   polishLayer: (
     layerId: string,
@@ -466,6 +490,15 @@ export interface EditorState {
   setEllipseFilled: (v: boolean) => void
   setWandDiagonal: (v: boolean) => void
   setGradientToAlpha: (v: boolean) => void
+  setShadeMode: (m: 'darken' | 'lighten') => void
+  setVectorKind: (k: VectorShapeKind) => void
+  setVectorFilled: (v: boolean) => void
+  setVectorStrokeWidth: (w: 1 | 2) => void
+  setSelectedVectorId: (id: string | null) => void
+  setActiveCelVectors: (vectors: VectorShape[], label?: string) => boolean
+  bakeActiveCelVectors: (layerId?: string) => boolean
+  deleteSelectedVector: () => boolean
+  duplicateSelectedVector: () => boolean
   // --- selection ops (Task 5a) ---
   setSelection: (rect: SelectionRect | null) => void
   deselect: () => void
@@ -592,6 +625,11 @@ export const useEditor = create<EditorState>()((set, get) => ({
   ellipseFilled: false,
   wandDiagonal: false,
   gradientToAlpha: false,
+  shadeMode: 'darken',
+  vectorKind: 'curve',
+  vectorFilled: false,
+  vectorStrokeWidth: 1,
+  selectedVectorId: null,
   selection: null,
   clipboard: null,
   zoom: 12,
@@ -1366,6 +1404,49 @@ export const useEditor = create<EditorState>()((set, get) => ({
     }
   },
 
+  bakeLayerModifiers: (layerId) => {
+    const refs = activeRefs(get())
+    if (!refs) return false
+    const project = bus.getProject()
+    const clip = project.clips.find((c) => c.id === refs.clipId)
+    const layer = clip?.layers.find((l) => l.id === layerId)
+    if (!clip || !layer) return false
+    if (!hasActiveLayerModifiers(layer.modifiers)) return false
+    if (layer.locked) {
+      toast({ title: 'Layer is locked', description: 'Unlock it in the Layers panel to bake modifiers.', variant: 'destructive' })
+      return false
+    }
+    const seen = new Set<Uint8ClampedArray>()
+    const targets: Array<{ frameId: string; baked: Uint8ClampedArray }> = []
+    for (const frame of clip.frames) {
+      const cel = frame.cels[layerId]
+      if (!cel || seen.has(cel.buffer)) continue
+      seen.add(cel.buffer)
+      const baked = applyLayerModifiers(cel.buffer, project.width, project.height, layer.modifiers)
+      targets.push({ frameId: frame.id, baked: new Uint8ClampedArray(baked) })
+    }
+    try {
+      bus.transaction('Bake layer modifiers', ORIGIN, () => {
+        for (const t of targets) {
+          bus.execute(
+            'pixels.applyOp',
+            { clipId: refs.clipId, frameId: t.frameId, layerId, ops: [{ op: 'setBuffer', buffer: t.baked }] },
+            ORIGIN,
+          )
+        }
+        bus.execute('layer.setProps', { clipId: refs.clipId, layerId, patch: { modifiers: null } }, ORIGIN)
+      })
+      toast({
+        title: `Baked Live FX on "${layer.name}"`,
+        description: `Committed non-destructive effects to ${targets.length} frame${targets.length === 1 ? '' : 's'}.`,
+      })
+      return true
+    } catch (err) {
+      toast({ title: 'Could not bake modifiers', description: friendlyError(err), variant: 'destructive' })
+      return false
+    }
+  },
+
   setLayerLinked: (layerId, linked) => {
     const refs = activeRefs(get())
     if (!refs) return
@@ -1949,6 +2030,7 @@ export const useEditor = create<EditorState>()((set, get) => ({
         : (clip.layers.at(-1)?.id ?? ''),
       playing: false,
       selection: null,
+      selectedVectorId: null,
     })
   },
 
@@ -1959,6 +2041,7 @@ export const useEditor = create<EditorState>()((set, get) => ({
     set({
       activeFrameIndex: Math.min(Math.max(0, index), clip.frames.length - 1),
       selection: null,
+      selectedVectorId: null,
       ...(get().playing ? { playing: false } : {}),
     })
   },
@@ -1969,7 +2052,7 @@ export const useEditor = create<EditorState>()((set, get) => ({
     set({ activeFrameIndex: Math.min(Math.max(0, index), clip.frames.length - 1) })
   },
 
-  selectLayer: (id) => set({ activeLayerId: id, selection: null }),
+  selectLayer: (id) => set({ activeLayerId: id, selection: null, selectedVectorId: null }),
   setTool: (t) => set({ tool: t }),
   setPrimary: (hex) => set({ primary: hex }),
   setSecondary: (hex) => set({ secondary: hex }),
@@ -1985,6 +2068,92 @@ export const useEditor = create<EditorState>()((set, get) => ({
   setEllipseFilled: (v) => set({ ellipseFilled: v }),
   setWandDiagonal: (v) => set({ wandDiagonal: v }),
   setGradientToAlpha: (v) => set({ gradientToAlpha: v }),
+  setShadeMode: (m) => set({ shadeMode: m }),
+  setVectorKind: (k) => set({ vectorKind: k }),
+  setVectorFilled: (v) => set({ vectorFilled: v }),
+  setVectorStrokeWidth: (w) => set({ vectorStrokeWidth: w }),
+  setSelectedVectorId: (id) => set({ selectedVectorId: id }),
+
+  setActiveCelVectors: (vectors, label) => {
+    const refs = activeRefs(get())
+    if (!refs) return false
+    if (layerIsLocked(refs.clipId, refs.layerId)) {
+      toast({ title: 'Layer is locked', description: 'Unlock it in the Layers panel to edit vectors.', variant: 'destructive' })
+      return false
+    }
+    try {
+      bus.execute(
+        'cel.setVectors',
+        { clipId: refs.clipId, frameId: refs.frameId, layerId: refs.layerId, vectors },
+        ORIGIN,
+        label ? { label } : {},
+      )
+      return true
+    } catch (err) {
+      toast({ title: 'Could not update vectors', description: friendlyError(err), variant: 'destructive' })
+      return false
+    }
+  },
+
+  bakeActiveCelVectors: (layerId) => {
+    const refs = activeRefs(get())
+    if (!refs) return false
+    const targetLayerId = layerId ?? refs.layerId
+    if (layerIsLocked(refs.clipId, targetLayerId)) {
+      toast({ title: 'Layer is locked', description: 'Unlock it in the Layers panel to bake vectors.', variant: 'destructive' })
+      return false
+    }
+    const loc = locateCel(bus.getProject(), refs.clipId, refs.frameId, targetLayerId)
+    if (!loc?.cel?.vectors?.length) return false
+    const count = loc.cel.vectors.length
+    try {
+      bus.execute('cel.bakeVectors', { clipId: refs.clipId, frameId: refs.frameId, layerId: targetLayerId }, ORIGIN)
+      set({ selectedVectorId: null })
+      toast({
+        title: `Baked ${count} vector shape${count === 1 ? '' : 's'}`,
+        description: 'Rasterized into crisp pixels on the active cel (Ctrl+Z to undo).',
+      })
+      return true
+    } catch (err) {
+      toast({ title: 'Could not bake vectors', description: friendlyError(err), variant: 'destructive' })
+      return false
+    }
+  },
+
+  deleteSelectedVector: () => {
+    const { selectedVectorId } = get()
+    if (!selectedVectorId) return false
+    const refs = activeRefs(get())
+    if (!refs) return false
+    const loc = locateCel(bus.getProject(), refs.clipId, refs.frameId, refs.layerId)
+    const cur = loc?.cel?.vectors ?? []
+    if (!cur.some((v) => v.id === selectedVectorId)) return false
+    const ok = get().setActiveCelVectors(
+      cur.filter((v) => v.id !== selectedVectorId),
+      'Delete vector shape',
+    )
+    if (ok) set({ selectedVectorId: null })
+    return ok
+  },
+
+  duplicateSelectedVector: () => {
+    const { selectedVectorId } = get()
+    if (!selectedVectorId) return false
+    const refs = activeRefs(get())
+    if (!refs) return false
+    const loc = locateCel(bus.getProject(), refs.clipId, refs.frameId, refs.layerId)
+    const cur = loc?.cel?.vectors ?? []
+    const src = cur.find((v) => v.id === selectedVectorId)
+    if (!src) return false
+    const clone: VectorShape = {
+      ...src,
+      id: uid('vec'),
+      points: src.points.map((p) => ({ x: p.x + 2, y: p.y + 2 })),
+    }
+    const ok = get().setActiveCelVectors([...cur, clone], 'Duplicate vector shape')
+    if (ok) set({ selectedVectorId: clone.id })
+    return ok
+  },
   setZoom: (z) => set({ zoom: Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z)) }),
   setPan: (x, y) => set({ panX: x, panY: y }),
   setShowGrid: (v) => set({ showGrid: v }),

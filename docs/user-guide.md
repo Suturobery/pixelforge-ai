@@ -76,6 +76,7 @@ an entry without touching the file, or move the file to the Recycle Bin after a 
 | L | Line | — |
 | R | Rectangle | — |
 | C | Ellipse | Outline with the primary colour, fill with the secondary when "filled" is on |
+| N | Pixel-Perfect Vector | Non-destructive editable **Curves** (3-pt Quadratic / 4-pt Cubic Bézier), **Lines**, **Rects**, **Ellipses**, and **Polygons** with live draggable handles, zero anti-aliasing, Live FX support, and 1-click **Bake** |
 | S | Marquee | Selects a rectangle |
 | I | Eyedropper | Picks the colour under the cursor |
 | M | Move | Moves the selection or the cel |
@@ -111,8 +112,8 @@ slider, blend mode, and paint lock. Actions: add, duplicate, delete, move up, mo
 down.
 
 - **Blend modes:** normal, multiply, screen, overlay, darken, lighten.
-- **Linked layers** — one cel shared by every frame of the clip — exist in the document model
-  and the engine, but no editor control or agent tool creates them yet.
+- **Linked layers:** share one cel across every frame of the clip, or unlink into independent per-frame cels.
+- **Non-Destructive Live FX Modifiers:** open the wand (**Live FX**) button in the active layer bar to toggle **Live 1px Outline** (Solid or automatic hue-shifted **Sel-Out**, 4-way or 8-way), **Live Drop Shadow** (offset X/Y, color, opacity), and **Live Color / Skin Remap** (OKLab ramp or nearest preset). Modifiers render live across every frame and export cleanly without altering raw pixels; layers with active modifiers show an `FX` badge, and you can **Bake to pixels** or **Clear** anytime (fully undoable).
 - **Deleting** a layer, frame or clip moves it to the project trash, which holds 20 entries.
   Undo also restores it.
 
@@ -171,7 +172,7 @@ right-click sets the secondary.
 | Share a palette | Click **Code** to copy or paste a `PF1-…` share code |
 | Swap primary and secondary | X |
 | Apply a preset / browse 2,000+ palettes | Click the palette selector bar at the bottom (with optional **Swap sprite skin on pick**) |
-| Build a ramp | Add a four-step light and shade ramp around a colour |
+| Automatic Hue Shifter | Click `+`, pick any base colour, tune steps (3 / 5 / 7), cool-shadow / warm-highlight hue shift, and contrast, preview live swatches, and add the whole ramp in one undoable step |
 | Take colours from an image | Extract the 16 best colours with median cut |
 
 Palette changes are undoable.

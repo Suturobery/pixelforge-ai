@@ -351,43 +351,48 @@ export function SettingsDialog({
             <div className="grid gap-x-8 gap-y-2 sm:grid-cols-2">
               <div className="space-y-2">
                 <p className="font-mono text-[10px] uppercase tracking-wider text-zinc-400">Tools</p>
-                <ShortcutItem action="Pencil / Eraser / Fill" keys={['B', 'E', 'F']} />
+                <ShortcutItem action="Pencil / Eraser / Shade" keys={['B', 'E', 'H']} />
+                <ShortcutItem action="Fill / Bayer gradient" keys={['F', 'V']} />
                 <ShortcutItem action="Line / Rect / Ellipse" keys={['L', 'R', 'C']} />
-                <ShortcutItem action="Select / Eyedropper" keys={['S', 'I']} />
-                <ShortcutItem action="Move layer" keys={['M']} />
-                <p className="pt-1 font-mono text-[10px] uppercase tracking-wider text-zinc-400">Brush</p>
+                <ShortcutItem action="Pixel-perfect Vector" keys={['N']} />
+                <ShortcutItem action="Select / Magic wand" keys={['S', 'U']} />
+                <ShortcutItem action="Eyedropper / Move layer" keys={['I', 'M']} />
+                <p className="pt-1 font-mono text-[10px] uppercase tracking-wider text-zinc-400">Brush &amp; Shade</p>
                 <ShortcutItem action="Brush size (direct)" keys={['1', '–', '8']} />
                 <ShortcutItem action="Brush size − / + (Aseprite-style)" keys={['[', ']']} />
                 <ShortcutItem action="Scroll on brush button" keys={['wheel']} />
-                <p className="pt-1 font-mono text-[10px] uppercase tracking-wider text-zinc-400">Colors</p>
-                <ShortcutItem action="Swap colors" keys={['X']} />
-                <ShortcutItem action="Symmetry (mirror X)" keys={['Y']} />
+                <ShortcutItem action="Shade invert (lighten / darken)" keys={['right-click', 'Shift']} />
+                <p className="pt-1 font-mono text-[10px] uppercase tracking-wider text-zinc-400">Colors &amp; Symmetry</p>
+                <ShortcutItem action="Swap primary / secondary" keys={['X']} />
+                <ShortcutItem action="Symmetry X / Symmetry Y" keys={['Y', 'Shift+Y']} />
                 <ShortcutItem action="Dither fill" keys={['D']} />
                 <ShortcutItem action="Swatch → secondary color" keys={['right-click']} />
-                <p className="pt-1 font-mono text-[10px] uppercase tracking-wider text-zinc-400">Tilemap</p>
-                <ShortcutItem action="Tile snap on / off" keys={['K']} />
-                <ShortcutItem action="Tile stamp on / off (snap on)" keys={['Shift+K']} />
+                <p className="pt-1 font-mono text-[10px] uppercase tracking-wider text-zinc-400">Tilemap &amp; Wrap</p>
+                <ShortcutItem action="Tile snap / Tile stamp" keys={['K', 'Shift+K']} />
+                <ShortcutItem action="Seamless 3×3 tile wrap" keys={['W']} />
+              </div>
+              <div className="space-y-2">
+                <p className="font-mono text-[10px] uppercase tracking-wider text-zinc-400">Vectors (N tool)</p>
+                <ShortcutItem action="Duplicate selected vector" keys={['Ctrl+D']} />
+                <ShortcutItem action="Delete selected vector" keys={['Del', 'Backspace']} />
+                <ShortcutItem action="Add polygon vertex" keys={['Shift+click']} />
                 <p className="pt-1 font-mono text-[10px] uppercase tracking-wider text-zinc-400">Animation</p>
                 <ShortcutItem action="Play / pause" keys={['Space']} />
                 <ShortcutItem action="Prev / next frame" keys={[',', '.']} />
                 <ShortcutItem action="New frame" keys={['Alt+N']} />
-              </div>
-              <div className="space-y-2">
-                <p className="font-mono text-[10px] uppercase tracking-wider text-zinc-400">View</p>
+                <p className="pt-1 font-mono text-[10px] uppercase tracking-wider text-zinc-400">View</p>
                 <ShortcutItem action="Toggle grid / onion skin" keys={['G', 'O']} />
                 <ShortcutItem action="Toggle palette panel" keys={['P']} />
                 <ShortcutItem action="Collapse frames strip" keys={['T']} />
                 <ShortcutItem action="Zoom in / out" keys={['+', '–']} />
-                <ShortcutItem action="Pan canvas" keys={['middle', 'or right drag']} />
-                <p className="pt-1 font-mono text-[10px] uppercase tracking-wider text-zinc-400">Project</p>
+                <ShortcutItem action="Pan canvas" keys={['middle drag']} />
+                <p className="pt-1 font-mono text-[10px] uppercase tracking-wider text-zinc-400">Project &amp; Selection</p>
                 <ShortcutItem action="Undo / Redo" keys={['Ctrl+Z', 'Ctrl+Shift+Z / Ctrl+Y']} />
                 <ShortcutItem action="Save" keys={['Ctrl+S']} />
-                <ShortcutItem action="Deselect" keys={['Esc']} />
+                <ShortcutItem action="Deselect / Clear active node" keys={['Esc']} />
                 <ShortcutItem action="Delete selection" keys={['Del', 'Backspace']} />
-                <ShortcutItem action="Nudge selection" keys={['arrow keys']} />
+                <ShortcutItem action="Nudge selection (1px / 4px)" keys={['arrows', 'Shift+arrows']} />
                 <ShortcutItem action="Copy / Cut / Paste" keys={['Ctrl+C', 'Ctrl+X', 'Ctrl+V']} />
-                <p className="pt-1 font-mono text-[10px] uppercase tracking-wider text-zinc-400">Selection scale</p>
-                <ShortcutItem action="Scale ×2 / ×3 / ÷2" keys={['toolbar', 'buttons']} />
               </div>
             </div>
           </TabsContent>

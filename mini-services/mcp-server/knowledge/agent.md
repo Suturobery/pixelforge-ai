@@ -111,15 +111,21 @@ pill) and can undo each step — so draw in visible stages, not one giant call:
 
 1. Block in the silhouette first (`fill_rect` / `draw_polygon` / `draw_ellipse`).
 2. Fill base colors, then add shading and highlights with palette colors.
-3. Add the outline / sel-out last, then `beautify_layer` only if `craftGate` asks.
-4. **Use Auto-Eyes after EVERY stage:** every pixel-writing tool automatically
-   returns a crisp zoomed gridded preview image PLUS `visualCheck` (exact cropped
-   `asciiGrid` with `y` row numbers and color legend, `bounds`, `floatingFragments`,
-   `symmetryX`, and common-sense `warnings`) alongside `craftGate`. Look at the
-   returned image and `asciiGrid` after each pass to catch crooked eyes, detached
-   limbs, stray floating dots, flat shading, or bad proportions and fix them
-   before moving to the next stage. For extra zoom inspection, call
-   `get_frame_png { scale: 8, showGrid: true }`.
+3. Add the outline / sel-out last, then `beautify_layer` only if `craftGate` asks — OR attach non-destructive **Live FX** (`set_layer_props { modifiers: { outline, shadow, colorRemap } }`) so outlines, drop shadows, and palette remaps stay editable across every frame.
+4. **Non-destructive power tools (all wired to Live Action + Auto-Eyes):**
+   - `generate_hue_ramp` — build a full cool-shadow / warm-highlight shading ramp from 1 base color and add it to the palette in one undoable step.
+   - `set_vectors` / `bake_vectors` — draw crisp pixel-perfect editable Bézier curves, lines, rects, ellipses, and polygons per frame (rendered before Live FX, so live outlines & shadows follow every curve adjustment).
+   - `set_layer_props { modifiers }` — toggle live 1px `sel-out` / `solid` outlines, drop shadows, or live OKLab color/skin remaps without flattening raw pixels.
+5. **Use Auto-Eyes after EVERY stage:** every pixel-writing tool (including
+   `set_vectors`, `bake_vectors`, `set_layer_props`, `batch`, `resize_canvas`,
+   `auto_trim`, and `merge_down`) automatically returns a crisp zoomed gridded
+   preview image with X/Y coordinate rulers PLUS `visualCheck` (cropped
+   `asciiGrid` with `y` rows, `cellSize`, and color legend, `bounds`,
+   `floatingFragments`, `symmetryX`, and common-sense `warnings` — including
+   alerts if you painted on a hidden or occluded layer) alongside `craftGate`.
+   For animations, `preview_animation` auto-zooms frames with checkerboard and
+   reports per-frame `frameBounds` and ground-line `consistencyWarnings`. Look
+   at both after every pass and fix issues before moving on.
 
 Prefer several small, meaningful calls (a body part, a shading pass) over one
 huge `set_pixels` or `batch` — it keeps the artist in the loop, makes mistakes

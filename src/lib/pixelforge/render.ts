@@ -3,6 +3,7 @@
 // + the frame's cel per layer. An absent cel renders as fully transparent
 // (C2), and linked layers naturally share their buffer object.
 
+import { applyLayerModifiers, renderCelWithVectors } from '@pixelforge/core'
 import type { Cel, Clip, Frame, Layer, Project } from './types'
 
 let scratchCanvas: HTMLCanvasElement | null = null
@@ -69,7 +70,9 @@ export function drawCelBuffer(
   if (ctx.globalAlpha > 0) {
     const scratch = getScratch(w, h)
     const img = getScratchImageData(w, h)
-    img.data.set(cel.buffer)
+    const withVectors = renderCelWithVectors(cel, w, h)
+    const pixels = applyLayerModifiers(withVectors, w, h, layer.modifiers)
+    img.data.set(pixels)
     scratch.putImageData(img, 0, 0)
     ctx.drawImage(scratchCanvas as HTMLCanvasElement, 0, 0)
   }

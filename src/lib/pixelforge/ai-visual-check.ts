@@ -20,6 +20,8 @@ export interface FloatingFragment {
 export interface AsciiPixelGrid {
   originX: number
   originY: number
+  /** Source pixels represented per ASCII character (1 for <=48px sprites, 2+ for larger sprites). */
+  cellSize: number
   legend: Record<string, string>
   rows: string[]
 }
@@ -64,6 +66,7 @@ export function buildVisualCheck(
   width: number,
   height: number,
   palette: readonly string[],
+  extraWarnings: readonly string[] = [],
 ): VisualCheckReport {
   const totalPixels = Math.max(1, width * height)
   const paletteSet = new Set(palette.map((c) => c.toLowerCase()))
@@ -102,7 +105,7 @@ export function buildVisualCheck(
       colorCount: 0,
       offPaletteCount: 0,
       asciiGrid: null,
-      warnings: ['Frame is completely empty (0 opaque pixels).'],
+      warnings: [...extraWarnings, 'Frame is completely empty (0 opaque pixels).'],
     }
   }
 
@@ -195,27 +198,30 @@ export function buildVisualCheck(
   }
   const symmetryX = symUnion > 0 ? Math.round((symMatches / symUnion) * 100) : null
 
-  // Compact cropped ASCII color map so the agent has 100% pixel-exact spatial truth
-  let asciiGrid: AsciiPixelGrid | null = null
-  if (bounds.w <= MAX_ASCII_DIM && bounds.h <= MAX_ASCII_DIM) {
-    const x0 = Math.max(0, minX - 1)
-    const y0 = Math.max(0, minY - 1)
-    const x1 = Math.min(width - 1, maxX + 1)
-    const y1 = Math.min(height - 1, maxY + 1)
+  // Compact cropped ASCII color map so the agent has pixel-exact spatial truth
+  // (1:1 for sprites <= 48x48; cleanly downsampled by integer cellSize for larger canvases).
+  const x0 = Math.max(0, minX - 1)
+  const y0 = Math.max(0, minY - 1)
+  const x1 = Math.min(width - 1, maxX + 1)
+  const y1 = Math.min(height - 1, maxY + 1)
+  const cropW = x1 - x0 + 1
+  const cropH = y1 - y0 + 1
+  const cellSize = Math.max(1, Math.ceil(Math.max(cropW, cropH) / MAX_ASCII_DIM))
 
-    const sortedColors = [...colorCounts.entries()].sort((a, b) => b[1] - a[1])
-    const hexToSym = new Map<string, string>()
-    const legend: Record<string, string> = {}
-    sortedColors.forEach(([hex], i) => {
-      const sym = i < ASCII_SYMBOLS.length ? ASCII_SYMBOLS[i]! : '+'
-      hexToSym.set(hex, sym)
-      if (sym !== '+' || !legend['+']) legend[sym] = hex
-    })
+  const sortedColors = [...colorCounts.entries()].sort((a, b) => b[1] - a[1])
+  const hexToSym = new Map<string, string>()
+  const legend: Record<string, string> = {}
+  sortedColors.forEach(([hex], i) => {
+    const sym = i < ASCII_SYMBOLS.length ? ASCII_SYMBOLS[i]! : '+'
+    hexToSym.set(hex, sym)
+    if (sym !== '+' || !legend['+']) legend[sym] = hex
+  })
 
-    const rows: string[] = []
-    for (let y = y0; y <= y1; y++) {
-      let line = ''
-      for (let x = x0; x <= x1; x++) {
+  const rows: string[] = []
+  for (let y = y0; y <= y1; y += cellSize) {
+    let line = ''
+    for (let x = x0; x <= x1; x += cellSize) {
+      if (cellSize === 1) {
         const idx = (y * width + x) * 4
         if ((rgba[idx + 3] ?? 0) === 0) {
           line += '.'
@@ -223,14 +229,33 @@ export function buildVisualCheck(
           const hex = rgbHex(rgba[idx]!, rgba[idx + 1]!, rgba[idx + 2]!)
           line += hexToSym.get(hex) ?? '+'
         }
+      } else {
+        // Dominant opaque color inside this cellSize x cellSize block
+        const blockCounts = new Map<string, number>()
+        let bestHex: string | null = null
+        let bestCount = 0
+        for (let dy = 0; dy < cellSize && y + dy <= y1; dy++) {
+          for (let dx = 0; dx < cellSize && x + dx <= x1; dx++) {
+            const idx = ((y + dy) * width + (x + dx)) * 4
+            if ((rgba[idx + 3] ?? 0) === 0) continue
+            const hex = rgbHex(rgba[idx]!, rgba[idx + 1]!, rgba[idx + 2]!)
+            const next = (blockCounts.get(hex) ?? 0) + 1
+            blockCounts.set(hex, next)
+            if (next > bestCount) {
+              bestCount = next
+              bestHex = hex
+            }
+          }
+        }
+        line += bestHex ? (hexToSym.get(bestHex) ?? '+') : '.'
       }
-      rows.push(`y${String(y).padStart(2, '0')}: ${line}`)
     }
-    asciiGrid = { originX: x0, originY: y0, legend, rows }
+    rows.push(`y${String(y).padStart(2, '0')}: ${line}`)
   }
+  const asciiGrid: AsciiPixelGrid = { originX: x0, originY: y0, cellSize, legend, rows }
 
   // Actionable common-sense warnings
-  const warnings: string[] = []
+  const warnings: string[] = [...extraWarnings]
   if (floatingFragments.length > 0) {
     const sample = floatingFragments
       .slice(0, 3)

@@ -18,7 +18,14 @@ export type {
   Clip,
   Frame,
   Layer,
+  LayerColorRemapModifier,
+  LayerModifiers,
+  LayerOutlineModifier,
+  LayerShadowModifier,
   Project,
+  VectorPoint,
+  VectorShape,
+  VectorShapeKind,
 } from '@pixelforge/core'
 
 // ---------------------------------------------------------------------------
@@ -35,6 +42,7 @@ export type ToolId =
   | 'line'
   | 'rect'
   | 'ellipse'
+  | 'vector'
   | 'marquee'
   | 'wand'
   | 'eyedropper'

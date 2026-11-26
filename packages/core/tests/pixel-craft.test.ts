@@ -87,6 +87,20 @@ describe('Pro Pixel Craft utilities', () => {
     expect(getPixel(res.rgba, res.w, 36, 36)).toEqual([56, 183, 100, 255]);
     // Transparent cell (0, 0) gets opaque dark checkerboard when showGrid=true
     expect(getPixel(res.rgba, res.w, 4, 4)[3]).toBe(255);
+
+    // scale=2 with showGrid=true also draws opaque dark checkerboard behind transparent pixels
+    const res2 = renderInspectionRgba(src, 16, 16, 2, true);
+    expect(res2.w).toBe(32);
+    expect(res2.h).toBe(32);
+    expect(getPixel(res2.rgba, res2.w, 0, 0)[3]).toBe(255);
+
+    // showRulers=true adds a 16px top+left coordinate ruler gutter and preserves source pixels shifted by +16
+    const resRulers = renderInspectionRgba(src, 16, 16, 8, true, { showRulers: true });
+    expect(resRulers.w).toBe(144);
+    expect(resRulers.h).toBe(144);
+    expect(getPixel(resRulers.rgba, resRulers.w, 16 + 36, 16 + 36)).toEqual([56, 183, 100, 255]);
+    // Ruler divider line at y=15, x=15 is opaque teal-tinted divider
+    expect(getPixel(resRulers.rgba, resRulers.w, 15, 15)[3]).toBe(255);
   });
 
   test('analyzePixelCraft detects outline doubles, orphan speckles, and pillow shading', () => {

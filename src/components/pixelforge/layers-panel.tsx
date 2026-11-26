@@ -7,7 +7,10 @@ import {
   SPRITE_TEMPLATES,
   analyzePixelCraft,
   composeFrameRgba,
+  hasActiveLayerModifiers,
+  listSkinPresets,
   renderSpriteTemplate,
+  type LayerModifiers,
   type PixelCraftReport,
   type SpriteTemplateId,
 } from '@pixelforge/core'
@@ -57,6 +60,7 @@ import {
   Pin,
   Anchor,
   LayoutTemplate,
+  Wand2,
 } from 'lucide-react'
 
 function TemplatePreviewThumb({ templateId, palette }: { templateId: SpriteTemplateId; palette: readonly string[] }) {
@@ -205,6 +209,7 @@ export function LayersPanel() {
   const moveLayer = useEditor((s) => s.moveLayer)
   const reorderLayer = useEditor((s) => s.reorderLayer)
   const setLayerProp = useEditor((s) => s.setLayerProp)
+  const bakeLayerModifiers = useEditor((s) => s.bakeLayerModifiers)
   const setLayerLinked = useEditor((s) => s.setLayerLinked)
   const polishLayer = useEditor((s) => s.polishLayer)
   const centerContent = useEditor((s) => s.centerContent)
@@ -231,6 +236,8 @@ export function LayersPanel() {
   const [craftPinned, setCraftPinned] = useState(false)
   const [trimOpen, setTrimOpen] = useState(false)
   const [trimPad, setTrimPad] = useState<0 | 1 | 2 | 4>(1)
+  const [fxOpen, setFxOpen] = useState(false)
+  const skinPresets = useMemo(() => listSkinPresets(), [])
   // frame drag-and-drop: source (clipId+index) + current drop insertion point
   const [dragSrc, setDragSrc] = useState<{ clipId: string; index: number } | null>(null)
   const [dropIdx, setDropIdx] = useState<number | null>(null)
@@ -606,6 +613,22 @@ export function LayersPanel() {
                         link
                       </span>
                     )}
+                    {hasActiveLayerModifiers(layer.modifiers) && (
+                      <span
+                        className="shrink-0 rounded bg-violet-500/20 px-1 py-0.5 font-mono text-[9px] uppercase tracking-wider text-violet-300"
+                        title="Non-destructive Live FX active on this layer"
+                      >
+                        fx
+                      </span>
+                    )}
+                    {(frame.cels[layer.id]?.vectors?.length ?? 0) > 0 && (
+                      <span
+                        className="shrink-0 rounded bg-sky-500/20 px-1 py-0.5 font-mono text-[9px] uppercase tracking-wider text-sky-300"
+                        title={`${frame.cels[layer.id]?.vectors?.length ?? 0} editable pixel-perfect vector shape(s) on this frame`}
+                      >
+                        vec
+                      </span>
+                    )}
                   </span>
                 )}
                 <Tooltip>
@@ -779,6 +802,318 @@ export function LayersPanel() {
               </Tooltip>
 
               <div className="ml-auto flex items-center gap-0.5">
+                {/* Non-Destructive Live Layer Modifiers (Outline/Sel-Out, Drop Shadow, Color/Skin Remap) */}
+                <Popover open={fxOpen} onOpenChange={setFxOpen}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <PopoverTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className={`h-6 w-6 ${
+                            hasActiveLayerModifiers(active.modifiers)
+                              ? 'bg-violet-500/20 text-violet-300 ring-1 ring-violet-500/40 hover:bg-violet-500/30'
+                              : 'text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100'
+                          }`}
+                          aria-label="Live layer modifiers (non-destructive FX)"
+                          aria-pressed={hasActiveLayerModifiers(active.modifiers)}
+                        >
+                          <Wand2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </PopoverTrigger>
+                    </TooltipTrigger>
+                    <TooltipContent>Live FX — non-destructive outline, shadow &amp; color remap</TooltipContent>
+                  </Tooltip>
+                  <PopoverContent side="top" align="end" className="w-72 space-y-2.5 border-zinc-800 bg-zinc-950 p-3">
+                    {(() => {
+                      const cur: LayerModifiers = active.modifiers ?? {}
+                      const outline = cur.outline ?? { enabled: false, mode: 'sel-out' as const, color: '#1a1c2c', connectivity: 4 as const }
+                      const shadow = cur.shadow ?? { enabled: false, offsetX: 1, offsetY: 1, color: '#111118', opacity: 0.45 }
+                      const firstSkin = skinPresets[0]
+                      const remap = cur.colorRemap ?? {
+                        enabled: false,
+                        presetId: firstSkin?.id,
+                        palette: firstSkin ? [...firstSkin.palette] : ['#1a1c2c', '#5d275d', '#ef7d57', '#ffcd75'],
+                        mode: 'ramp' as const,
+                      }
+                      const patchMods = (next: LayerModifiers) => {
+                        setLayerProp(active.id, { modifiers: next })
+                      }
+                      const activeNow = hasActiveLayerModifiers(active.modifiers)
+
+                      return (
+                        <>
+                          <div className="flex items-center justify-between">
+                            <span className="truncate font-mono text-[10px] font-semibold uppercase tracking-wider text-violet-300">
+                              Live FX · {active.name}
+                            </span>
+                            <span className="shrink-0 rounded bg-violet-500/15 px-1.5 py-0.5 font-mono text-[8px] uppercase text-violet-300">
+                              non-destructive
+                            </span>
+                          </div>
+                          <p className="font-mono text-[9px] leading-snug text-zinc-400">
+                            Applies live across every frame in this layer without altering raw pixels.
+                          </p>
+
+                          {/* 1. Live 1px Outline / Sel-Out */}
+                          <div className="space-y-1.5 rounded border border-zinc-800 bg-zinc-900/60 p-2">
+                            <label className="flex cursor-pointer items-center justify-between font-mono text-[10px] font-medium text-zinc-200">
+                              <span>Live 1px Outline</span>
+                              <input
+                                type="checkbox"
+                                checked={outline.enabled}
+                                onChange={(e) =>
+                                  patchMods({
+                                    ...cur,
+                                    outline: { ...outline, enabled: e.target.checked },
+                                  })
+                                }
+                                className="h-3.5 w-3.5 accent-violet-500"
+                              />
+                            </label>
+                            {outline.enabled && (
+                              <div className="space-y-1.5 pt-1 font-mono text-[9px]">
+                                <div className="flex items-center justify-between gap-1.5">
+                                  <div className="flex items-center gap-0.5">
+                                    {(['sel-out', 'solid'] as const).map((m) => (
+                                      <button
+                                        key={m}
+                                        type="button"
+                                        onClick={() => patchMods({ ...cur, outline: { ...outline, mode: m } })}
+                                        className={`rounded px-1.5 py-0.5 transition-colors ${
+                                          outline.mode === m
+                                            ? 'bg-violet-500/25 text-violet-200 ring-1 ring-violet-500/40'
+                                            : 'text-zinc-400 hover:bg-zinc-800'
+                                        }`}
+                                      >
+                                        {m === 'sel-out' ? 'Sel-Out' : 'Solid'}
+                                      </button>
+                                    ))}
+                                  </div>
+                                  <div className="flex items-center gap-0.5">
+                                    {([4, 8] as const).map((conn) => (
+                                      <button
+                                        key={conn}
+                                        type="button"
+                                        onClick={() => patchMods({ ...cur, outline: { ...outline, connectivity: conn } })}
+                                        className={`rounded px-1.5 py-0.5 transition-colors ${
+                                          (outline.connectivity ?? 4) === conn
+                                            ? 'bg-teal-500/20 text-teal-300 ring-1 ring-teal-500/40'
+                                            : 'text-zinc-400 hover:bg-zinc-800'
+                                        }`}
+                                      >
+                                        {conn}-way
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                                {outline.mode === 'solid' && (
+                                  <label className="flex items-center justify-between text-zinc-400">
+                                    <span>Outline color</span>
+                                    <span className="flex items-center gap-1.5">
+                                      <input
+                                        type="color"
+                                        value={outline.color}
+                                        onChange={(e) => patchMods({ ...cur, outline: { ...outline, color: e.target.value } })}
+                                        aria-label="Live outline color"
+                                        className="h-5 w-6 cursor-pointer rounded border border-zinc-700 bg-transparent p-0"
+                                      />
+                                      <span className="text-zinc-300">{outline.color.toLowerCase()}</span>
+                                    </span>
+                                  </label>
+                                )}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* 2. Live Drop Shadow */}
+                          <div className="space-y-1.5 rounded border border-zinc-800 bg-zinc-900/60 p-2">
+                            <label className="flex cursor-pointer items-center justify-between font-mono text-[10px] font-medium text-zinc-200">
+                              <span>Live Drop Shadow</span>
+                              <input
+                                type="checkbox"
+                                checked={shadow.enabled}
+                                onChange={(e) =>
+                                  patchMods({
+                                    ...cur,
+                                    shadow: { ...shadow, enabled: e.target.checked },
+                                  })
+                                }
+                                className="h-3.5 w-3.5 accent-violet-500"
+                              />
+                            </label>
+                            {shadow.enabled && (
+                              <div className="space-y-1.5 pt-1 font-mono text-[9px] text-zinc-400">
+                                <div className="flex items-center justify-between gap-2">
+                                  <label className="flex items-center gap-1">
+                                    <span>X</span>
+                                    <input
+                                      type="number"
+                                      min={-6}
+                                      max={6}
+                                      value={shadow.offsetX}
+                                      onChange={(e) => {
+                                        const v = Math.max(-6, Math.min(6, Math.round(Number(e.target.value) || 0)))
+                                        patchMods({ ...cur, shadow: { ...shadow, offsetX: v } })
+                                      }}
+                                      aria-label="Shadow X offset"
+                                      className="h-5 w-11 rounded border border-zinc-700 bg-zinc-950 px-1 text-center text-zinc-200"
+                                    />
+                                  </label>
+                                  <label className="flex items-center gap-1">
+                                    <span>Y</span>
+                                    <input
+                                      type="number"
+                                      min={-6}
+                                      max={6}
+                                      value={shadow.offsetY}
+                                      onChange={(e) => {
+                                        const v = Math.max(-6, Math.min(6, Math.round(Number(e.target.value) || 0)))
+                                        patchMods({ ...cur, shadow: { ...shadow, offsetY: v } })
+                                      }}
+                                      aria-label="Shadow Y offset"
+                                      className="h-5 w-11 rounded border border-zinc-700 bg-zinc-950 px-1 text-center text-zinc-200"
+                                    />
+                                  </label>
+                                  <input
+                                    type="color"
+                                    value={shadow.color}
+                                    onChange={(e) => patchMods({ ...cur, shadow: { ...shadow, color: e.target.value } })}
+                                    aria-label="Shadow color"
+                                    className="h-5 w-6 cursor-pointer rounded border border-zinc-700 bg-transparent p-0"
+                                  />
+                                </div>
+                                <label className="flex items-center gap-2">
+                                  <span className="w-12 shrink-0">Opacity</span>
+                                  <input
+                                    type="range"
+                                    min={10}
+                                    max={100}
+                                    step={5}
+                                    value={Math.round(shadow.opacity * 100)}
+                                    onChange={(e) =>
+                                      patchMods({ ...cur, shadow: { ...shadow, opacity: Number(e.target.value) / 100 } })
+                                    }
+                                    aria-label="Shadow opacity"
+                                    className="h-1 flex-1 accent-violet-500"
+                                  />
+                                  <span className="w-8 text-right text-zinc-300">{Math.round(shadow.opacity * 100)}%</span>
+                                </label>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* 3. Live Color / Skin Remap */}
+                          <div className="space-y-1.5 rounded border border-zinc-800 bg-zinc-900/60 p-2">
+                            <label className="flex cursor-pointer items-center justify-between font-mono text-[10px] font-medium text-zinc-200">
+                              <span>Live Color / Skin Remap</span>
+                              <input
+                                type="checkbox"
+                                checked={remap.enabled}
+                                onChange={(e) =>
+                                  patchMods({
+                                    ...cur,
+                                    colorRemap: { ...remap, enabled: e.target.checked },
+                                  })
+                                }
+                                className="h-3.5 w-3.5 accent-violet-500"
+                              />
+                            </label>
+                            {remap.enabled && (
+                              <div className="space-y-1.5 pt-1 font-mono text-[9px]">
+                                <Select
+                                  value={remap.presetId ?? firstSkin?.id ?? ''}
+                                  onValueChange={(id) => {
+                                    const preset = skinPresets.find((p) => p.id === id)
+                                    if (!preset) return
+                                    patchMods({
+                                      ...cur,
+                                      colorRemap: {
+                                        ...remap,
+                                        enabled: true,
+                                        presetId: preset.id,
+                                        palette: [...preset.palette],
+                                      },
+                                    })
+                                  }}
+                                >
+                                  <SelectTrigger size="sm" aria-label="Skin remap preset" className="h-6 w-full border-zinc-700 bg-zinc-950 font-mono text-[10px]">
+                                    <SelectValue placeholder="Choose skin preset" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {skinPresets.map((p) => (
+                                      <SelectItem key={p.id} value={p.id} className="font-mono text-xs">
+                                        {p.name}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                                <div className="flex items-center justify-between gap-2">
+                                  <div className="flex items-center gap-0.5">
+                                    {remap.palette.slice(0, 8).map((hex, i) => (
+                                      <span
+                                        key={`${hex}-${i}`}
+                                        className="h-3 w-3 rounded-[2px] border border-black/40"
+                                        style={{ background: hex }}
+                                      />
+                                    ))}
+                                  </div>
+                                  <div className="flex items-center gap-0.5">
+                                    {(['ramp', 'nearest'] as const).map((mode) => (
+                                      <button
+                                        key={mode}
+                                        type="button"
+                                        onClick={() =>
+                                          patchMods({ ...cur, colorRemap: { ...remap, mode } })
+                                        }
+                                        className={`rounded px-1.5 py-0.5 transition-colors ${
+                                          (remap.mode ?? 'ramp') === mode
+                                            ? 'bg-teal-500/20 text-teal-300 ring-1 ring-teal-500/40'
+                                            : 'text-zinc-400 hover:bg-zinc-800'
+                                        }`}
+                                      >
+                                        {mode}
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Footer actions: Bake to pixels / Clear FX */}
+                          <div className="flex gap-1.5 pt-0.5">
+                            <Button
+                              size="sm"
+                              disabled={!activeNow || active.locked}
+                              className="h-7 flex-1 bg-violet-600 font-mono text-[10px] text-white hover:bg-violet-500 disabled:opacity-40"
+                              onClick={() => {
+                                if (bakeLayerModifiers(active.id)) {
+                                  setFxOpen(false)
+                                }
+                              }}
+                            >
+                              Bake to pixels
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={!active.modifiers}
+                              className="h-7 border-zinc-700 font-mono text-[10px] text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
+                              onClick={() => {
+                                setLayerProp(active.id, { modifiers: null })
+                                toast({ title: `Cleared Live FX on "${active.name}"` })
+                              }}
+                            >
+                              Clear
+                            </Button>
+                          </div>
+                        </>
+                      )
+                    })()}
+                  </PopoverContent>
+                </Popover>
+
                 {/* 1-click OKLab Sel-Out & Polish Layer popover */}
                 <Popover open={polishOpen} onOpenChange={setPolishOpen}>
                   <Tooltip>

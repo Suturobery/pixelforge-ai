@@ -19,6 +19,7 @@ const TOOL_KEYS: Record<string, ToolId> = {
   l: 'line',
   r: 'rect',
   c: 'ellipse',
+  n: 'vector',
   s: 'marquee',
   u: 'wand',
   i: 'eyedropper',
@@ -83,16 +84,27 @@ export function useKeyboardShortcuts(onSave: () => void) {
         return
       }
       if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (st.tool === 'vector' && st.selectedVectorId) {
+          e.preventDefault()
+          st.deleteSelectedVector()
+          return
+        }
         if (st.selection) {
           e.preventDefault()
           st.selectionDelete()
         }
         return
       }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd' && st.tool === 'vector' && st.selectedVectorId) {
+        e.preventDefault()
+        st.duplicateSelectedVector()
+        return
+      }
       if (e.key === 'Escape') {
         e.preventDefault()
         st.cancelStroke() // no-op when no stroke is in progress
         if (st.selection) st.deselect()
+        if (st.selectedVectorId) st.setSelectedVectorId(null)
         return
       }
       if (e.key.startsWith('Arrow') && st.selection) {
