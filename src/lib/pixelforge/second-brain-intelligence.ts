@@ -388,13 +388,78 @@ const MOTION_SYNONYMS: Array<{ preset: string; regex: RegExp }> = [
 
 const VFX_HINTS: Array<{ effect: string; regex: RegExp }> = [
   { effect: 'fire/campfire', regex: /\b(campfire|flame|fire|bonfire|torch)\b/i },
-  { effect: 'explosions/burst', regex: /\b(explosion|explode|blast|boom|bomb)\b/i },
-  { effect: 'lightning/bolt', regex: /\b(lightning|thunder|zap|electric|shock)\b/i },
+  { effect: 'explosions/big-explosion', regex: /\b(explosion|explode|blast|boom|bomb)\b/i },
+  { effect: 'lightning/lightning-strike', regex: /\b(lightning|thunder|zap|electric|shock)\b/i },
   { effect: 'ice/frost-nova', regex: /\b(ice|frost|freeze|blizzard|snow)\b/i },
   { effect: 'arcane/portal', regex: /\b(portal|magic|arcane|spell|aura|vortex)\b/i },
   { effect: 'nature/poison-cloud', regex: /\b(poison|smoke|cloud|gas|spore)\b/i },
   { effect: 'pickups/coin-spin', regex: /\b(sparkle|coin|pickup|loot|heal|buff)\b/i },
 ]
+
+export interface StarterTemplateHint {
+  id:
+    | 'chibi-humanoid'
+    | 'slime'
+    | 'rpg-sword'
+    | 'potion-flask'
+    | 'treasure-chest'
+    | 'stone-pedestal'
+    | 'topdown-tree'
+    | 'dungeon-tile'
+  label: string
+}
+
+const STARTER_TEMPLATE_HINTS: Array<StarterTemplateHint & { regex: RegExp }> = [
+  { id: 'slime', label: 'Slime', regex: /\b(slime|blob|ooze|jelly)\b/i },
+  { id: 'rpg-sword', label: 'RPG Sword', regex: /\b(sword|blade|dagger|katana|claymore|weapon)\b/i },
+  { id: 'potion-flask', label: 'Potion Flask', regex: /\b(potion|flask|elixir|bottle|vial)\b/i },
+  { id: 'treasure-chest', label: 'Treasure Chest', regex: /\b(chest|crate|lootbox|treasure)\b/i },
+  { id: 'stone-pedestal', label: 'Stone Pedestal', regex: /\b(pedestal|altar|pillar|statue)\b/i },
+  { id: 'topdown-tree', label: 'Top-down Tree', regex: /\b(tree|bush|foliage|forest|oak|pine)\b/i },
+  { id: 'dungeon-tile', label: 'Dungeon Tile', regex: /\b(dungeon|brick|floor\s*tile|wall\s*tile|tileset|cobble)\b/i },
+  { id: 'chibi-humanoid', label: 'Chibi Character', regex: /\b(knight|hero|warrior|mage|archer|ninja|rogue|chibi|character|humanoid|adventurer|npc|player)\b/i },
+]
+
+/** Match a rough prompt to one of PixelForge's 8 built-in hand-crafted starter templates. */
+export function detectStarterTemplateHint(prompt: string): StarterTemplateHint | null {
+  const clean = prompt.trim()
+  if (!clean) return null
+  for (const item of STARTER_TEMPLATE_HINTS) {
+    if (item.regex.test(clean)) return { id: item.id, label: item.label }
+  }
+  return null
+}
+
+/**
+ * Build a crisp, copy-paste-ready prompt for an external MCP IDE agent
+ * (Claude Code, Codex, Cursor, Antigravity) carrying live project context.
+ */
+export function buildIdeAgentHandoffPrompt(input: {
+  enhancedPrompt: string
+  projectName: string
+  width: number
+  height: number
+  clipName: string | null
+  frameNumber: number
+  selection: { x: number; y: number; w: number; h: number } | null
+  paletteCount: number
+  recommendedTools: readonly string[]
+}): string {
+  const lines = [
+    `PixelForge AI live MCP task (project "${input.projectName}", ${input.width}x${input.height}px, ${input.paletteCount}-color palette):`,
+    input.enhancedPrompt,
+    '',
+    `Target: clip "${input.clipName ?? 'active'}" · frame ${input.frameNumber}` +
+      (input.selection
+        ? ` · focus inside artist selection x:${input.selection.x} y:${input.selection.y} (${input.selection.w}x${input.selection.h})`
+        : ''),
+    'Workflow: call get_project_state first, stay strictly within the project palette, and draw in visible stages (silhouette → base colors → shading → outline) so I can watch live on the canvas.',
+  ]
+  if (input.recommendedTools.length > 0) {
+    lines.push(`Suggested tools: ${input.recommendedTools.join(' -> ')}`)
+  }
+  return lines.join('\n')
+}
 
 export function resolveMotionPresetSynonym(input: string): string | null {
   const clean = input.trim().toLowerCase()

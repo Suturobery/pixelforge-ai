@@ -14,7 +14,7 @@ import { MCP_TOOLS } from '@/lib/pixelforge/mcp-tool-catalog'
 import { useEditor } from '@/lib/pixelforge/store'
 import { useAppSettings } from '@/lib/pixelforge/settings'
 import { copyText } from '@/lib/pixelforge/desktop-bridge'
-import { getRecentRemoteEdits, subscribeBridge } from '@/lib/pixelforge/mcp-bridge'
+import { getBridgeState, getRecentRemoteEdits, subscribeBridge, type RemoteEditRecord } from '@/lib/pixelforge/mcp-bridge'
 import { drawSpritePreview } from './sprite-preview'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -129,7 +129,11 @@ export function AgentPanel() {
   const [latestReview, setReview] = useState<(ToolReview & { tool: string; clientName?: string }) | null>(null)
   const loadEpoch = useEditor((s) => s.loadEpoch)
   const review = latestReview?.loadEpoch === loadEpoch ? latestReview : null
-  const remoteEdits = useRef(getRecentRemoteEdits())
+  const [remoteEdits, setRemoteEdits] = useState<RemoteEditRecord[]>(() => getRecentRemoteEdits())
+  const [connectedClients, setConnectedClients] = useState<number>(() => {
+    const b = getBridgeState()
+    return b.status === 'connected' ? (b.server?.clientsConnected ?? 0) : 0
+  })
   // AI agent approval gate: resolves the pending Promise from the UI buttons
   const pendingResolveRef = useRef<((v: 'run' | 'skip') => void) | null>(null)
   const [mcpStatus, setMcpStatus] = useState<{ reachable: boolean; authRequired: boolean; serverName?: string } | null>(null)
@@ -342,15 +346,20 @@ export function AgentPanel() {
     }
   }, [])
 
-  // live remote-edit feed: refresh the session log and, when a CONNECTED agent
-  // (e.g. ZCode) just changed pixels, flip Review Result to that edit
+  // live remote-edit feed: refresh the session log reactively and, when a
+  // connected IDE agent just changed pixels, flip Review Result to that edit
+  const lastRemoteTopRef = useRef<RemoteEditRecord | undefined>(remoteEdits[0])
   useEffect(() => {
-    const unsubscribe = subscribeBridge(() => {
-      const previous = remoteEdits.current[0]
-      remoteEdits.current = getRecentRemoteEdits()
-      const newest = remoteEdits.current[0]
-      if (newest !== previous && newest?.review) {
-        setReview({ ...newest.review, tool: newest.tool, clientName: newest.clientName })
+    const unsubscribe = subscribeBridge((bridge) => {
+      setConnectedClients(bridge.status === 'connected' ? (bridge.server?.clientsConnected ?? 0) : 0)
+      const next = getRecentRemoteEdits()
+      const newest = next[0]
+      if (newest !== lastRemoteTopRef.current) {
+        lastRemoteTopRef.current = newest
+        setRemoteEdits(next)
+        if (newest?.review) {
+          setReview({ ...newest.review, tool: newest.tool, clientName: newest.clientName })
+        }
       }
     })
     return unsubscribe
@@ -374,63 +383,70 @@ export function AgentPanel() {
   return (
     <div className="pixelforge-scroll mx-auto flex h-full w-full max-w-[520px] flex-col gap-3 overflow-x-hidden overflow-y-auto p-3">
       {/* slim header: identity + MCP status + brief export */}
-      <div className="flex items-center gap-2">
-        <Bot className="h-4 w-4 shrink-0 text-frost-400" aria-hidden />
-        <span className="shrink-0 font-mono text-[11px] font-semibold text-zinc-200">Agent</span>
-        <span
-          className={`inline-flex min-w-0 items-center gap-1 truncate rounded-full border px-1.5 py-px font-mono text-[9px] ${
-            mcpStatus === null
-              ? 'border-zinc-700 text-zinc-400'
-              : mcpStatus.reachable
-                ? mcpStatus.authRequired
-                  ? 'border-amber-500/40 text-amber-300'
-                  : 'border-emerald-500/40 text-emerald-300'
-                : 'border-zinc-700 text-zinc-500'
-          }`}
-          title={
-            mcpStatus?.reachable
-              ? mcpStatus.authRequired
-                ? 'MCP server is running — paired clients only'
-                : 'MCP server is running and accepting sessions'
-              : 'MCP server not detected — tools run locally, built-in catalog (E2E-tested against the server)'
-          }
-        >
+      <div className="space-y-1">
+        <div className="flex items-center gap-2">
+          <Bot className="h-4 w-4 shrink-0 text-frost-400" aria-hidden />
+          <span className="shrink-0 font-mono text-[11px] font-semibold text-zinc-200">MCP Tools</span>
           <span
-            className={`h-1.5 w-1.5 rounded-full ${
+            className={`inline-flex min-w-0 items-center gap-1 truncate rounded-full border px-1.5 py-px font-mono text-[9px] ${
               mcpStatus === null
-                ? 'bg-zinc-500'
+                ? 'border-zinc-700 text-zinc-400'
                 : mcpStatus.reachable
                   ? mcpStatus.authRequired
-                    ? 'bg-amber-400'
-                    : 'bg-emerald-400'
-                  : 'bg-zinc-600'
+                    ? 'border-amber-500/40 text-amber-300'
+                    : 'border-emerald-500/40 text-emerald-300'
+                  : 'border-zinc-700 text-zinc-500'
             }`}
-          />
-          {mcpStatus === null
-            ? 'checking…'
-            : mcpStatus.reachable
-              ? mcpStatus.authRequired
-                ? 'MCP live · pairing only'
-                : `MCP live${mcpStatus.serverName ? ` · ${mcpStatus.serverName}` : ''}`
-              : 'local mode'}
-        </span>
-        <button
-          type="button"
-          className="ml-auto shrink-0 rounded px-1 font-mono text-[9px] text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
-          onClick={() => {
-            void (async () => {
-              const status = await window.pixelforge?.mcp.status()
-              if (!status?.ready || !status.endpoint) throw new Error('MCP is not ready')
-              return copyText(buildAgentInstructions(status.endpoint))
-            })()
-              .then(() => toast({ title: 'Agent instructions copied', description: 'Paste into Claude Desktop, Cline, ChatGPT…' }))
-              .catch(() => toast({ title: 'MCP is not ready', description: 'Keep the desktop app open, then try again.', variant: 'destructive' }))
-          }}
-          aria-label="Copy agent instructions for external AI assistants"
-          title="Tools run locally on the shared CommandBus — edits are instant and undoable (Ctrl+Z). External assistants connect via the MCP server."
-        >
-          <Copy className="mr-0.5 inline h-3 w-3" /> brief
-        </button>
+            title={
+              mcpStatus?.reachable
+                ? mcpStatus.authRequired
+                  ? 'MCP server is running — paired clients only'
+                  : 'MCP server is running and accepting sessions'
+                : 'MCP server not detected — tools run locally, built-in catalog (E2E-tested against the server)'
+            }
+          >
+            <span
+              className={`h-1.5 w-1.5 rounded-full ${
+                mcpStatus === null
+                  ? 'bg-zinc-500'
+                  : mcpStatus.reachable
+                    ? mcpStatus.authRequired
+                      ? 'bg-amber-400'
+                      : 'bg-emerald-400'
+                    : 'bg-zinc-600'
+              }`}
+            />
+            {mcpStatus === null
+              ? 'checking…'
+              : mcpStatus.reachable
+                ? connectedClients > 0
+                  ? `${connectedClients} IDE live`
+                  : mcpStatus.authRequired
+                    ? 'MCP live · pairing'
+                    : 'MCP live'
+                : 'local mode'}
+          </span>
+          <button
+            type="button"
+            className="ml-auto shrink-0 rounded px-1 font-mono text-[9px] text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+            onClick={() => {
+              void (async () => {
+                const status = await window.pixelforge?.mcp.status()
+                if (!status?.ready || !status.endpoint) throw new Error('MCP is not ready')
+                return copyText(buildAgentInstructions(status.endpoint))
+              })()
+                .then(() => toast({ title: 'Agent instructions copied', description: 'Paste into Claude Code, Codex, Cursor, or Antigravity.' }))
+                .catch(() => toast({ title: 'MCP is not ready', description: 'Keep the desktop app open, then try again.', variant: 'destructive' }))
+            }}
+            aria-label="Copy agent instructions for external AI assistants"
+            title="Tools run locally on the shared CommandBus — edits are instant and undoable (Ctrl+Z). External assistants connect via the MCP server."
+          >
+            <Copy className="mr-0.5 inline h-3 w-3" /> brief
+          </button>
+        </div>
+        <p className="font-mono text-[9px] leading-tight text-zinc-500">
+          Run PixelForge actions locally, inspect 1×/3× before-after style checks, or test any MCP tool. Chat with your AI in Claude Code, Codex, or Cursor.
+        </p>
       </div>
 
       {/* ---------------------------- Quick actions (no AI needed) ---------------------------- */}
@@ -758,7 +774,7 @@ export function AgentPanel() {
           <History className="h-3 w-3" /> Session log
           <span className="ml-auto normal-case text-zinc-400">server-wide log: Settings → MCP</span>
         </div>
-        {ops.length === 0 && remoteEdits.current.length === 0 ? (
+        {ops.length === 0 && remoteEdits.length === 0 ? (
           <p className="font-mono text-[10px] text-zinc-400">No tool runs this session.</p>
         ) : (
           <ul className="pixelforge-scroll max-h-48 space-y-1 overflow-y-auto pr-1">
@@ -800,7 +816,7 @@ export function AgentPanel() {
                 </p>
               </li>
             ))}
-            {remoteEdits.current.map((r, i) => (
+            {remoteEdits.map((r, i) => (
               <li key={'remote-' + i} className="rounded border border-frost-900/60 bg-frost-950/20 px-2 py-1">
                 <div className="flex items-center justify-between gap-2">
                   <span className={`font-mono text-[10px] ${r.ok ? 'text-frost-300' : 'text-red-300'}`}>
@@ -809,8 +825,10 @@ export function AgentPanel() {
                   <span className="font-mono text-[9px] text-zinc-400">{r.at}</span>
                 </div>
                 <p className="truncate font-mono text-[10px] text-zinc-400">
-                  <span className="mr-1 rounded border border-frost-800/60 px-1 text-[9px] text-frost-400">ZCode (MCP)</span>
-                  performed by connected agent "{r.clientName}"
+                  <span className="mr-1 rounded border border-frost-800/60 px-1 text-[9px] text-frost-400">
+                    {r.clientName || 'IDE Agent'} (MCP)
+                  </span>
+                  live MCP edit
                 </p>
               </li>
             ))}

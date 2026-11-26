@@ -4,7 +4,11 @@
 // Memory lifecycle tests live in brain-memory.test.ts.
 
 import { describe, expect, test } from 'bun:test'
-import { interpretAndEnhancePrompt } from '../src/lib/pixelforge/brain-core'
+import {
+  buildIdeAgentHandoffPrompt,
+  detectStarterTemplateHint,
+  interpretAndEnhancePrompt,
+} from '../src/lib/pixelforge/brain-core'
 import type { AgentContextEvent, SecondBrainMemory } from '../src/lib/pixelforge/second-brain-intelligence'
 
 const project = {
@@ -51,5 +55,34 @@ describe('facade re-exports the shared interpreter', () => {
     const result = interpretAndEnhancePrompt('draw a red potion sprite', project, undefined, memory(0), only)
     expect(result.detectedIntent).toBe('sprite-generation')
     for (const t of result.inferredContext.recommendedTools) expect(only).toContain(t)
+  })
+
+  test('detects valid pixelfx VFX IDs, starter templates, and builds IDE handoff prompt with selection', () => {
+    const lightning = interpretAndEnhancePrompt('add lightning effect to it', project, undefined, memory(0))
+    expect(lightning.inferredContext.vfxEffect).toBe('lightning/lightning-strike')
+
+    const boom = interpretAndEnhancePrompt('big explosion vfx', project, undefined, memory(0))
+    expect(boom.inferredContext.vfxEffect).toBe('explosions/big-explosion')
+
+    expect(detectStarterTemplateHint('chibi knight warrior')?.id).toBe('chibi-humanoid')
+    expect(detectStarterTemplateHint('green slime monster')?.id).toBe('slime')
+    expect(detectStarterTemplateHint('iron rpg sword')?.id).toBe('rpg-sword')
+    expect(detectStarterTemplateHint('abstract geometry')).toBeNull()
+
+    const handoff = buildIdeAgentHandoffPrompt({
+      enhancedPrompt: 'Chibi knight with silver armor',
+      projectName: 'Mimic',
+      width: 32,
+      height: 32,
+      clipName: 'idle',
+      frameNumber: 2,
+      selection: { x: 8, y: 4, w: 16, h: 12 },
+      paletteCount: 16,
+      recommendedTools: ['set_pixels', 'beautify_layer'],
+    })
+    expect(handoff).toContain('32x32px')
+    expect(handoff).toContain('x:8 y:4 (16x12)')
+    expect(handoff).toContain('get_project_state')
+    expect(handoff).toContain('set_pixels -> beautify_layer')
   })
 })

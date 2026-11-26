@@ -175,8 +175,8 @@ function RightDock({ mobile }: { mobile: boolean }) {
         <div role="tablist" aria-label="Panel tabs" className="shrink-0 border-b border-zinc-800/80 p-2">
           <div className="space-y-1.5">
             {RIGHT_TAB_GROUPS.map((group) => (
-              <div key={group.label} className="flex min-w-0 items-center gap-1.5">
-                <span className="w-11 shrink-0 font-mono text-[9px] uppercase tracking-[0.12em] text-zinc-600">{group.label}</span>
+              <div key={group.label} className="flex min-w-0 items-center gap-2">
+                <span className="w-14 shrink-0 font-mono text-[9px] uppercase tracking-[0.1em] text-zinc-500">{group.label}</span>
                 <div className="flex min-w-0 flex-1 gap-1 rounded-md bg-zinc-800/60 p-0.5">
                   {group.tabs.map((id) => {
                     const t = RIGHT_TABS.find((tab) => tab.id === id)!

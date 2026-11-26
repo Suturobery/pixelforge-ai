@@ -29,19 +29,23 @@ import {
   Bot,
   Eraser,
   ClipboardList,
+  Flame,
+  Film,
+  Sparkles,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { useEditor } from '@/lib/pixelforge/store'
 import { useToast } from '@/hooks/use-toast'
 import { currentProjectIdentity, mcpCtrl } from '@/lib/pixelforge/mcp-bridge'
-import type { RemoteEditRecord } from '@/lib/pixelforge/mcp-bridge'
+import { executeMcpTool } from '@/lib/pixelforge/mcp-tools'
 import { copyText, desktopConfirm } from '@/lib/pixelforge/desktop-bridge'
 import {
   addBrainPreference,
+  buildIdeAgentHandoffPrompt,
   clearBrainSessionContext,
+  detectStarterTemplateHint,
   exportBrainMemory,
   interpretAndEnhancePrompt,
   readBrainMemory,
@@ -49,8 +53,6 @@ import {
   removeBrainPreference,
   resetBrainMemory,
   subscribeBrainMemory,
-  writeBrainMemory,
-  type PromptCorrection,
   type SecondBrainMemory,
 } from '@/lib/pixelforge/brain-core'
 import { MCP_TOOLS } from '@/lib/pixelforge/mcp-tool-catalog'
@@ -93,6 +95,7 @@ export function SecondBrain() {
   const activeClipId = useEditor((s) => s.activeClipId)
   const activeLayerId = useEditor((s) => s.activeLayerId)
   const activeFrameIndex = useEditor((s) => s.activeFrameIndex)
+  const selection = useEditor((s) => s.selection)
   const setReferenceDraft = useEditor((s) => s.setReferenceDraft)
   const { toast } = useToast()
   const requestRightTab = useEditor((s) => s.requestRightTab)
@@ -106,6 +109,8 @@ export function SecondBrain() {
   // Prompt Interpreter & Enhancer state
   const [rawPrompt, setRawPrompt] = useState('')
   const [copiedEnhanced, setCopiedEnhanced] = useState(false)
+  const [copiedIdePrompt, setCopiedIdePrompt] = useState(false)
+  const [interpreterBusy, setInterpreterBusy] = useState<string | null>(null)
   const [memoryExported, setMemoryExported] = useState(false)
   const [feedbackNote, setFeedbackNote] = useState('')
   const [feedbackSaved, setFeedbackSaved] = useState<'up' | 'down' | null>(null)
@@ -224,6 +229,15 @@ export function SecondBrain() {
       if (res.ok) {
         setBriefStatus('sent')
         void pollBoard()
+        // MCP cannot auto-wake an idle chat — copy a 1-line wake trigger so the
+        // artist can just Ctrl+V into Claude Code / Codex / Cursor to run it.
+        try {
+          await copyText(
+            `Work the pending PixelForge task board item ("Pixel art recipe: ${brief.assetType || 'asset'}") and draw it live on the canvas via MCP.`,
+          )
+        } catch {
+          /* clipboard optional when already queued */
+        }
         return
       }
       const code = res.error?.code ?? 'unknown'
@@ -307,6 +321,25 @@ export function SecondBrain() {
   const effectiveEnhanced = localInterpretation?.enhancedPrompt ?? ''
   const effectiveCorrections = localInterpretation?.corrections ?? []
   const effectiveGuidance = localInterpretation?.pixelArtGuidance ?? []
+  const templateHint = useMemo(
+    () => (localInterpretation ? detectStarterTemplateHint(localInterpretation.correctedPrompt) : null),
+    [localInterpretation],
+  )
+
+  const ideHandoffText = useMemo(() => {
+    if (!localInterpretation) return ''
+    return buildIdeAgentHandoffPrompt({
+      enhancedPrompt: localInterpretation.enhancedPrompt,
+      projectName: project.name,
+      width: project.width,
+      height: project.height,
+      clipName: localInterpretation.inferredContext.targetClipName,
+      frameNumber: activeFrameIndex + 1,
+      selection,
+      paletteCount: project.palette.length,
+      recommendedTools: localInterpretation.inferredContext.recommendedTools,
+    })
+  }, [localInterpretation, project.name, project.width, project.height, project.palette.length, activeFrameIndex, selection])
 
   /** Hand a custom sprite brief to the Reference panel: prefill the brief and
    *  guide to the approved reference when the project has none. */
@@ -328,6 +361,111 @@ export function SecondBrain() {
     setTimeout(() => setCopiedEnhanced(false), 1500)
   }
 
+  const handleCopyIdeHandoff = async () => {
+    if (!ideHandoffText) return
+    await copyText(ideHandoffText)
+    setCopiedIdePrompt(true)
+    setTimeout(() => setCopiedIdePrompt(false), 1800)
+    toast({
+      title: 'Copied prompt for IDE Agent',
+      description: 'Paste into Claude Code, Codex, Cursor, or Antigravity to draw live on this canvas.',
+    })
+  }
+
+  const handleRunVfxFromPrompt = async (effectId: string) => {
+    if (interpreterBusy) return
+    setInterpreterBusy('vfx')
+    try {
+      const res = await executeMcpTool(
+        'generate_vfx',
+        { effect: effectId, target: 'new_clip', useProjectPalette: true },
+        { clientId: 'second-brain', clientName: 'Second Brain', tier: 'L1' },
+      )
+      if (res.ok) {
+        toast({ title: `Generated ${effectId}`, description: res.summary ?? 'Added VFX clip (Ctrl+Z to undo).' })
+      } else {
+        toast({ title: 'VFX failed', description: res.error?.message, variant: 'destructive' })
+      }
+    } finally {
+      setInterpreterBusy(null)
+    }
+  }
+
+  const handleDropTemplateFromPrompt = async (templateId: string, label: string) => {
+    if (interpreterBusy) return
+    setInterpreterBusy('template')
+    try {
+      const res = await executeMcpTool(
+        'generate_template',
+        { template: templateId, autoTagParts: true },
+        { clientId: 'second-brain', clientName: 'Second Brain', tier: 'L1' },
+      )
+      if (res.ok) {
+        toast({
+          title: `Dropped ${label} base`,
+          description: res.summary ?? 'Added starter layer with palette lock (Ctrl+Z to undo).',
+        })
+      } else {
+        toast({ title: 'Template failed', description: res.error?.message, variant: 'destructive' })
+      }
+    } finally {
+      setInterpreterBusy(null)
+    }
+  }
+
+  const handleQueuePromptToBoard = async () => {
+    if (!localInterpretation || !ideHandoffText || interpreterBusy) return
+    setInterpreterBusy('queue')
+    const shortTitle = localInterpretation.correctedPrompt.slice(0, 72) || 'Pixel art request'
+    try {
+      const res = await mcpCtrl<{ tasks: unknown[] }>({
+        kind: 'brain-push',
+        tasks: [{ title: shortTitle, detail: ideHandoffText, targetProject: currentProjectIdentity() }],
+      })
+      if (res.ok) {
+        void pollBoard()
+        const wake = `Work the pending PixelForge task board item ("${shortTitle}") and draw it live via MCP.`
+        try {
+          await copyText(wake)
+          toast({
+            title: 'Queued + Wake trigger copied',
+            description: 'MCP agents cannot self-wake — paste into Claude/Codex to start it live.',
+          })
+        } catch {
+          toast({
+            title: 'Queued on Task Board',
+            description: 'Tell your connected IDE agent to check brain_get_tasks.',
+          })
+        }
+      } else {
+        await copyText(ideHandoffText)
+        toast({
+          title: 'MCP offline — copied full prompt instead',
+          description: 'Paste directly into Claude Code, Codex, or Cursor once connected.',
+        })
+      }
+    } catch {
+      await copyText(ideHandoffText)
+      toast({ title: 'Copied full prompt for IDE Agent', description: 'Paste into your IDE agent chat.' })
+    } finally {
+      setInterpreterBusy(null)
+    }
+  }
+
+  const handleCopyWakePending = async () => {
+    const pending = boardTasks.filter((t) => t.status === 'pending')
+    if (pending.length === 0) return
+    const wake =
+      pending.length === 1
+        ? `Check PixelForge task board (brain_get_tasks), claim "${pending[0]!.title}", and draw it live on the canvas via MCP.`
+        : `Check PixelForge task board (brain_get_tasks) and complete all ${pending.length} pending tasks one by one live on the canvas via MCP.`
+    await copyText(wake)
+    toast({
+      title: `Copied trigger for ${pending.length} pending task${pending.length === 1 ? '' : 's'}`,
+      description: 'Paste into Claude Code, Codex, Cursor, or Antigravity to wake your agent.',
+    })
+  }
+
   const handleFeedback = (rating: 'up' | 'down') => {
     if (!rawPrompt.trim() || !effectiveEnhanced) return
     recordBrainFeedback({
@@ -340,6 +478,7 @@ export function SecondBrain() {
     setFeedbackNote('')
   }
 
+  const pendingBoardCount = boardTasks.filter((t) => t.status === 'pending').length
   const hasFinishedBoardTasks = boardTasks.some((t) => t.status === 'done' || t.status === 'failed' || t.status === 'cancelled')
   const hasFailedBoardTasks = boardTasks.some((t) => t.status === 'failed')
   const reviewTask = boardTasks.find((t) => t.id === reviewTaskId && t.status === 'done')
@@ -450,27 +589,99 @@ export function SecondBrain() {
               </p>
             </div>
 
-            {/* Hand-off actions — sprite prompts route to the right workflow:
-                bundled characters → Create Character; custom sprites → the
-                Reference panel (uses the project's approved reference +
-                style); anything queued for an IDE agent stays separate. */}
-            {localInterpretation.detectedIntent === 'sprite-generation' && (
-              <div className="rounded border border-teal-800/60 bg-teal-950/30 p-1.5">
-                <p className="text-[9px] leading-tight text-teal-200">
-                  Sprite brief ready — queue it for your external IDE agent below, or open the{' '}
-                  <strong className="text-teal-300">Reference panel</strong> to import and clean an external PNG against the
-                  project's approved style.
-                </p>
+            {/* Actionable hand-off & instant local execution */}
+            <div className="space-y-1.5 rounded border border-teal-800/50 bg-teal-950/20 p-2">
+              <p className="text-[9px] uppercase tracking-wider text-teal-300">
+                Run now or hand off to IDE agent
+              </p>
+
+              {/* Context-smart instant local buttons (zero AI wait, Ctrl+Z undoable) */}
+              {(localInterpretation.inferredContext.vfxEffect ||
+                templateHint ||
+                localInterpretation.inferredContext.motionPreset) && (
+                <div className="flex flex-wrap gap-1">
+                  {localInterpretation.inferredContext.vfxEffect && (
+                    <Button
+                      size="sm"
+                      disabled={interpreterBusy !== null}
+                      onClick={() => void handleRunVfxFromPrompt(localInterpretation.inferredContext.vfxEffect!)}
+                      className="h-6 bg-amber-600/90 px-2 font-mono text-[9px] text-white hover:bg-amber-500"
+                    >
+                      {interpreterBusy === 'vfx' ? (
+                        <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                      ) : (
+                        <Flame className="mr-1 h-3 w-3" />
+                      )}
+                      Run {localInterpretation.inferredContext.vfxEffect.split('/')[1]} VFX
+                    </Button>
+                  )}
+                  {templateHint && (
+                    <Button
+                      size="sm"
+                      disabled={interpreterBusy !== null}
+                      onClick={() => void handleDropTemplateFromPrompt(templateHint.id, templateHint.label)}
+                      className="h-6 bg-teal-600 px-2 font-mono text-[9px] text-white hover:bg-teal-500"
+                    >
+                      {interpreterBusy === 'template' ? (
+                        <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                      ) : (
+                        <Sparkles className="mr-1 h-3 w-3" />
+                      )}
+                      Drop {templateHint.label} base
+                    </Button>
+                  )}
+                  {localInterpretation.inferredContext.motionPreset && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => requestRightTab('motion')}
+                      className="h-6 border-zinc-700 bg-zinc-900 px-2 font-mono text-[9px] text-zinc-200 hover:border-teal-500/60"
+                    >
+                      <Film className="mr-1 h-3 w-3 text-teal-400" />
+                      Open Motion ({localInterpretation.inferredContext.motionPreset})
+                    </Button>
+                  )}
+                </div>
+              )}
+
+              {/* Direct IDE Agent handoff + Task Board queue */}
+              <div className="grid grid-cols-2 gap-1">
                 <Button
                   size="sm"
-                  className="mt-1 h-6 w-full font-mono text-[10px]"
-                  onClick={() => openInReference(rawPrompt)}
-                  title="Open the Reference panel with this brief prefilled to import and grid-snap an external PNG"
+                  onClick={() => void handleCopyIdeHandoff()}
+                  className="h-7 bg-frost-600 px-2 font-mono text-[9px] text-white hover:bg-frost-500"
+                  title="Copy enhanced prompt + canvas size, selection, and staged MCP rules to paste into Claude Code / Codex / Cursor"
                 >
-                  <WandSparkles className="mr-1 h-3 w-3" /> Open in Reference Import
+                  {copiedIdePrompt ? <Check className="mr-1 h-3 w-3" /> : <Copy className="mr-1 h-3 w-3" />}
+                  {copiedIdePrompt ? 'Copied!' : 'Copy for IDE AI'}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={interpreterBusy !== null}
+                  onClick={() => void handleQueuePromptToBoard()}
+                  className="h-7 border-zinc-700 bg-zinc-950 px-2 font-mono text-[9px] text-zinc-200 hover:border-teal-500/60 hover:text-teal-200"
+                  title="Queue on Task Board AND copy a 1-line wake trigger to paste into your IDE agent"
+                >
+                  {interpreterBusy === 'queue' ? (
+                    <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                  ) : (
+                    <Send className="mr-1 h-3 w-3 text-teal-400" />
+                  )}
+                  Queue + Trigger
                 </Button>
               </div>
-            )}
+
+              {localInterpretation.detectedIntent === 'sprite-generation' && (
+                <button
+                  type="button"
+                  onClick={() => openInReference(rawPrompt)}
+                  className="w-full rounded border border-zinc-800 bg-zinc-950/80 py-1 text-center font-mono text-[9px] text-zinc-400 hover:border-zinc-700 hover:text-zinc-200"
+                >
+                  Or import an external PNG in Reference panel →
+                </button>
+              )}
+            </div>
 
             {/* Inferred context & recommended tools */}
             <div className="flex flex-wrap gap-1 text-[9px] text-zinc-400">
@@ -896,10 +1107,10 @@ export function SecondBrain() {
                 className="h-7 font-mono text-[10px]"
                 onClick={() => void confirmBrief()}
                 disabled={briefBusy || !briefText.trim() || briefText.length > 2000}
-                title="Queue this brief on the agent task board for a connected IDE agent"
+                title="Queue this recipe on the task board and copy a 1-line wake trigger for Claude/Codex/Cursor"
               >
                 {briefBusy ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Check className="mr-1 h-3 w-3" />}
-                Send to Connected Agent
+                Queue &amp; Copy Trigger
               </Button>
               <Button
                 size="sm"
@@ -940,8 +1151,8 @@ export function SecondBrain() {
 
         {briefStatus === 'sent' && (
           <div role="status" className="mt-2 rounded border border-teal-700/60 bg-teal-950/30 px-2 py-1.5 font-mono text-[10px] leading-tight text-teal-200">
-            <strong>Recipe sent to the task board</strong> — pending until an agent claims it. This is NOT “asset done”:
-            edits appear on the canvas when the connected agent finishes (watch the Agent Task Board below, ✓ rows).
+            <strong>Queued on Task Board + wake trigger copied!</strong> MCP agents (Claude/Codex/Cursor) cannot
+            auto-start an idle chat — paste the trigger into your IDE agent so it claims the task and draws live.
           </div>
         )}
         {briefStatus === 'copied' && (
@@ -997,20 +1208,32 @@ export function SecondBrain() {
       </details>
 
       {/* ------------------------------------------------ 2. Agent Task Board */}
-      <details className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-2.5">
+      <details className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-2.5" open={pendingBoardCount > 0}>
         <summary className="flex cursor-pointer list-none items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-zinc-300 [&::-webkit-details-marker]:hidden">
           <ListChecks className="h-3.5 w-3.5 text-frost-400" /> Agent Task Board
-          <span className="ml-auto normal-case tracking-normal text-zinc-500">delegated work</span>
+          <span className={`ml-auto normal-case tracking-normal ${pendingBoardCount > 0 ? 'rounded bg-teal-500/15 px-1.5 py-0.5 text-[9px] text-teal-300' : 'text-zinc-500'}`}>
+            {pendingBoardCount > 0 ? `${pendingBoardCount} pending` : 'delegated work'}
+          </span>
         </summary>
-        <p className="mb-2 font-mono text-[9px] leading-tight text-zinc-500">
-          Work queued by the artist's plans and external IDE agents. Pending tasks are claimable via brain_claim_task.
+        <p className="mb-2 mt-1 font-mono text-[9px] leading-tight text-zinc-500">
+          MCP cannot auto-wake an idle IDE chat — queue 1 or more tasks here, then paste the wake trigger into Claude Code, Codex, or Cursor so it runs them live via <span className="text-zinc-400">brain_claim_task</span>.
         </p>
 
         {boardTasks.length > 0 && (
           <div className="pixelforge-scroll mt-2 max-h-40 space-y-1 overflow-y-auto rounded border border-zinc-800 bg-zinc-950 p-2 font-mono text-[9px] leading-tight">
-            <div className="mb-1 flex items-center justify-between text-[8px] uppercase tracking-wider text-zinc-500">
+            <div className="mb-1 flex flex-wrap items-center justify-between gap-1 text-[8px] uppercase tracking-wider text-zinc-500">
               <span>Agent task board ({boardTasks.length})</span>
               <div className="flex items-center gap-1">
+                {pendingBoardCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => void handleCopyWakePending()}
+                    className="rounded border border-teal-500/40 bg-teal-500/15 px-1.5 py-0.5 text-[8px] font-medium text-teal-200 hover:bg-teal-500/25"
+                    title="Copy a 1-line command to paste into Claude/Codex/Cursor so it claims and executes all pending tasks"
+                  >
+                    Copy wake trigger ({pendingBoardCount})
+                  </button>
+                )}
                 {hasFailedBoardTasks && (
                   <button
                     type="button"

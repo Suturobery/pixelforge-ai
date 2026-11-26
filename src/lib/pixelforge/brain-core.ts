@@ -13,6 +13,8 @@ import type { SecondBrainMemory } from '@/lib/pixelforge/second-brain-intelligen
 export {
   interpretAndEnhancePrompt,
   resolveMotionPresetSynonym,
+  detectStarterTemplateHint,
+  buildIdeAgentHandoffPrompt,
   fuzzyFindByName,
   readBrainMemory,
   writeBrainMemory,
@@ -34,4 +36,5 @@ export type {
   BrainFeedbackEntry,
   AgentContextEvent,
   SecondBrainMemory,
+  StarterTemplateHint,
 } from '@/lib/pixelforge/second-brain-intelligence'

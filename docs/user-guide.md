@@ -162,16 +162,21 @@ right-click sets the secondary.
 
 | Action | How |
 | --- | --- |
-| Add a colour | The add button, or add-to-palette from the colour editor |
-| Remove the primary colour | The remove button |
+| Add a colour | The `+` button, or add-to-palette from the colour editor |
+| Remove the primary colour | The `-` button |
+| Sort palette (OKLab) | The sort button (by lightness or hue wheel) |
+| Replace Primary → Secondary | The replace button (scope: layer, frame, or clip) |
+| Copy active hex | Click the `#rrggbb` hex readout on the right of the tool row |
+| Generate Sprite Skins | Click **Skins** to preview and clone the active clip into elemental/RPG palette-swapped clips |
+| Share a palette | Click **Code** to copy or paste a `PF1-…` share code |
 | Swap primary and secondary | X |
-| Apply a preset | The preset menu: `forge16`, `pico8`, `sweetie16`, `gray8` |
-| Browse the library | The library browser (2006 palettes) |
+| Apply a preset / browse 2,000+ palettes | Click the palette selector bar at the bottom (with optional **Swap sprite skin on pick**) |
 | Build a ramp | Add a four-step light and shade ramp around a colour |
 | Take colours from an image | Extract the 16 best colours with median cut |
-| Share a palette | Copy or paste a `PF1-…` code |
 
 Palette changes are undoable.
+
+**Aseprite Import:** Open or drag-and-drop `.ase` / `.aseprite` files directly into the studio to import layers, frames, frame durations, tags (as clips), and palettes.
 
 ## Style Lock
 
@@ -248,15 +253,23 @@ Draw a rough sketch on a visible layer, then export a sketch pack for an externa
 The pack is a zip with `sketch.png`, `study.png` (a silhouette view and a three-value view side
 by side), `prompt.txt` and, when a reference is set, `style-reference.png`.
 
-## Agent, Brain and Reference panels
+## Live AI Artist Co-Pilot, Agent, Brain and Reference panels
 
-The Agent and Brain panels work with AI assistants. See [AI and agents](ai-agents.md).
+When an IDE AI assistant (Claude Code, Codex, Cursor, Windsurf, or Antigravity) connects via MCP, a floating **Live AI Co-Pilot HUD** appears at the top-center of the canvas stage:
 
-- **Agent** runs tools inside the app and shows what connected agents did.
-- **Brain** interprets prompts, builds Pixel Art Recipes and manages the task board. Ctrl+Shift+B.
+- **Watch edits land live:** Pixels appear progressively along the AI brush cursor with corner focus brackets and a `+N px` status pill.
+- **Hold `Before` to compare:** Hold the **Before** button on the pill or feed row to peek at the pre-edit frame.
+- **1-Click Undo & Activity Feed:** Undo the latest AI step directly on the pill, or expand the feed to jump to edited frames, flash regions, toggle **Follow**, or undo to an earlier step.
+- **Pause AI (Artist Priority):** Pause mutating AI writes while you paint manually; read-only inspection continues until you click **Resume**.
+- **Two-way selection awareness:** Draw a marquee selection before messaging your IDE AI — `get_project_state` shares your selection box, active colors, symmetry, and tile-wrap state.
+
+The right-dock panels (grouped under **Artwork**, **Animate**, and **Assist**):
+
+- **Agent (MCP Tools):** Runs PixelForge tools locally, shows 1×/3× Before/After style checks, and displays live relayed MCP edits.
+- **Brain (Ctrl+Shift+B):** Interprets rough prompts with 1-click local actions (**Run VFX**, **Drop Starter Base**, **Open Motion**), copies ready-to-paste IDE handoff prompts (**Copy for IDE AI**), builds Pixel Art Recipes, and manages the Agent Task Board (with 1-click wake triggers since MCP cannot auto-wake an idle IDE chat).
 - On a completed task, choose **Review** to inspect the live clip at true 1× size or enlarged,
   play its animation, see technical craft warnings, and approve the frame or request an IDE revision.
-- **Reference** also links to the reference clips used by Style Lock.
+- **Reference** links to the reference clips used by Style Lock and offline PNG-to-pixel cleaning.
 
 ## Export
 

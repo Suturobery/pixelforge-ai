@@ -18,7 +18,9 @@ Desktop builds include automatic background update checks and in-app update noti
 ## Key Features
 
 - **Pixel Art & Animation Studio** — Layers with blend modes & opacity, linked cels, timeline with per-frame timing, onion skinning, symmetry/mirror, dithering, tile wrap, and 2,000+ curated palettes.
+- **Live AI Artist Co-Pilot HUD** — Watch connected IDE agents paint onto the canvas in real time with a moving AI brush cursor, progressive pixel reveal, live `+N px` status pill, connected-agent indicator, **Hold-to-Compare (`Before`)** peek, **1-click & per-step Undo**, **Artist Priority Pause**, **Auto-follow + Jump**, and two-way **`artistContext`** (agents see your active marquee selection, colors, symmetry, and wrap mode).
 - **Built-In Local MCP Server (1-Click IDE Setup)** — Auto-detects **Cursor, Claude Code, Codex, Windsurf, and Antigravity** and connects with 1 click (safe `.bak` backup, loopback `127.0.0.1` only, revocable per-client tokens, L0/L1/L2 permission tiers).
+- **Second Brain & Instant Actions** — Deterministic prompt interpreter & enhancer with 1-click local execution (**Run VFX**, **Drop Starter Base**, **Open Motion**), **Copy for IDE AI** (carries live canvas/selection/palette context), and a **Task Board** with 1-click wake triggers.
 - **AI-Proof Consistency Pack** — Starter Sprite Templates (`chibi-humanoid`, `slime`, `rpg-sword`, `treasure-chest`, `dungeon-tile`, etc.), **Hero Sprite Style Anchor** (locks height, ground line, and outline across characters), **Style Lock**, **Auto Craft Gate** (flags orphan pixels, doubles, and jaggies), and **Artwork Review**.
 - **Motion Presets & Procedural VFX** — Body-part animation presets (`idle`, `walk`, `run`, `jump`, `attack`, `hit`) and deterministic seeded pixel VFX (`fire`, `lightning`, `explosion`, `portal`, `smoke`, etc.).
 - **Aseprite Importer** — Open or drag-and-drop `.ase` / `.aseprite` files with layers, frames, timings, tags → clips, and palettes preserved.

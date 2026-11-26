@@ -133,7 +133,7 @@ Coordinates are whole canvas pixels.
 
 | Tool | Tier | Where | Parameters | Result |
 | --- | --- | --- | --- | --- |
-| `get_project_state` | L0 | Editor | — | Name, size, palette, Style Lock, clips with layers, frames and durations, trash count, dirty flag, `stateHash` |
+| `get_project_state` | L0 | Editor | — | Name, size, palette, Style Lock, clips with layers, frames and durations, `activePointers`, live `artistContext` (selection rect, primary/secondary colors, active tool, mirrorX/Y, tiledWrap, `aiPaused`), trash count, dirty flag, `stateHash` |
 | `list_projects` | L0 | Editor | — | Saved projects: id, name, size, timestamps |
 | `get_clip` | L0 | Editor | clip reference | Layer stack, every frame with its duration and which layers have cels, tags, loop settings |
 | `get_frame_png` | L0 | Editor | clip, frame, `scale` 1 / 0.5 / 0.25 | One composited frame as a PNG image and data URL |
@@ -312,7 +312,8 @@ Presets: `idle`, `walk`, `run`, `attack`, `jump`, `spin`, `duck`, `hurt`, `swim`
 | `task_project_mismatch` | Tool | A claimed task targets another project. Open that project in the editor |
 | `editor_not_connected` | Tool | The app is not attached to the MCP server. Open it and enable MCP |
 | `editor_timeout`, `editor_disconnected` | Tool | The editor did not answer within 30 s, or went away mid-call |
-| `editor_busy` | Tool | A manual stroke is in progress. Retry |
+| `editor_busy` | Tool | A manual stroke is in progress (HUD shows a waiting notice). Retry in a moment |
+| `artist_paused` | Tool | The artist toggled **Pause AI** on the live HUD to hold canvas writes; read-only `L0` tools still work. Ask the artist before retrying |
 | `stale_document` | Tool | `expectedStateHash` is old. Re-read `get_project_state` |
 | `dirty_project` | Tool | Unsaved changes block replacing the document. Ask the user to save |
 | `unknown_tool` | Tool | Not implemented by this editor |
@@ -409,6 +410,17 @@ The task board hands work from the artist to connected agents. It lives in the M
 A project key is `db:<id>` for a database project, `file:<path>` for a file, or
 `unsaved:<session>:<epoch>` for an untitled document.
 
+## Live AI Artist Co-Pilot HUD
+
+While an IDE agent is connected or actively editing over MCP, PixelForge renders a lightweight live collaboration HUD directly on the canvas stage (zero document side-effects, zero 60fps React re-renders):
+
+- **Progressive Pixel Reveal & AI Cursor:** Pixels drawn by MCP tools (`set_pixels`, `fill_rect`, `draw_*`, `beautify_layer`, `generate_template`, `generate_vfx`, `create_skin_variants`, etc.) sweep onto the canvas progressively along a serpentine brush path with glowing corner brackets and a moving agent cursor badge. Starting a manual brush stroke or pressing Undo immediately snaps the reveal to the real pixels.
+- **Connected Presence & Status Pill:** Shows connected IDE agent count (`N AI live`), active tool verb, and pixel delta (`+N px`).
+- **Hold-to-Compare (`Before`):** Hold **Before** on the pill or an activity row to peek at the pre-edit frame with a `BEFORE` tag; release to return to the live canvas.
+- **1-Click & Per-Step Undo:** Undo the latest AI edit from the pill, or expand the **AI Activity Feed** (up to 16 recent steps) to jump to any edited clip/frame, flash its region, or safely undo to a specific step. Press `Escape` or click outside to close the feed.
+- **Artist Priority Pause & Auto-Follow:** Click **Pause** on the pill to hold mutating MCP writes (`artist_paused`) while keeping `L0` inspection available. Toggle **Follow** off in the feed to stay on your current clip/frame; off-view edits show a clickable **Jump** button instead.
+- **Two-Way `artistContext`:** `get_project_state` includes `artistContext` (`selection`, `primaryColor`, `secondaryColor`, `tool`, `mirrorX`, `mirrorY`, `tiledWrap`, `aiPaused`) so an agent can respect the artist's marquee selection and active canvas settings.
+
 ## Second Brain panel
 
 Open it with the **Brain** tab or Ctrl+Shift+B. Everything here is deterministic and local.
@@ -420,9 +432,14 @@ Open it with the **Brain** tab or Ctrl+Shift+B. Everything here is deterministic
 3. expands shorthand (`no bg` → `transparent background`);
 4. resolves "it" or "this" against the project name;
 5. detects an intent — sprite, animation, VFX, palette, layer edit or project workflow — and
-   names the target clip and layer;
+   names the target clip, layer, matching VFX effect, Motion preset, and Starter Template;
 6. writes an enhanced prompt from the canvas size, Style Lock and your preferences;
 7. recommends a tool sequence, filtered against the real tool catalog.
+
+Right below the enhanced prompt, Second Brain provides **direct actions**:
+- **Instant local execution:** 1-click **Run VFX** (when a `pixelfx` effect matches), **Drop Starter Base** (when one of the 8 built-in starter templates matches), or **Open Motion**.
+- **Copy for IDE AI:** Copies a structured handoff prompt containing the enhanced prompt, canvas dimensions, active clip/frame, active marquee selection (if any), palette size, and staged live MCP drawing instructions ready to paste into Claude Code, Codex, Cursor, or Antigravity.
+- **Queue + Trigger:** Pushes the task onto the **Agent Task Board** and copies a 1-line wake trigger. Because MCP servers cannot force-wake an idle LLM chat without a human turn, pasting that 1-line trigger into your IDE agent starts the queued work immediately.
 
 Thumbs up or down saves the interpretation, with an optional note, as a learned preference.
 
@@ -440,9 +457,9 @@ Controls: clear recent activity and feedback while keeping preferences; factory 
 the whole record as JSON.
 
 **Pixel Art Recipe.** Choose a sprite recipe, set camera, pose, palette limit, lighting and
-references, then compose an editable drawing contract. **Queue** sends it to a connected IDE
-agent; **Copy** is the fallback when MCP is unreachable. The agent is asked to draw, inspect
-the native PNG, refine, and complete the task.
+references, then compose an editable drawing contract. **Queue & Copy Trigger** puts the contract
+on the task board and copies a short wake prompt to paste into your IDE agent; **Copy brief**
+copies the full contract directly.
 
 **Artwork proof.** Open **Review** on a completed task to inspect the live selected clip at
 native 1× and enlarged size, play its frames with their saved timing, and see technical craft
@@ -450,23 +467,18 @@ and Style Lock warnings. **Approve frame** stores a human verdict. **Request rev
 a project-bound task with your feedback and the selected clip/frame. A warning appears if the
 project changes after approval; the proof is a live view, not a saved snapshot of agent output.
 
-**Board controls.** Cancel a task, re-queue failed tasks, remove finished tasks, and revoke an
-agent's token.
+**Board controls.** Copy a wake trigger for all pending tasks (**Copy wake trigger**), cancel a
+task, re-queue failed tasks, remove finished tasks, and revoke an agent's token.
 
-## Agent Console
+## MCP Tools panel (Agent tab)
 
-The **Agent** tab runs editor tools inside the app from
-`src/lib/pixelforge/mcp-tool-catalog.ts` — executes each call in-process on the CommandBus,
-and shows results, errors and a sprite preview.
+The **Agent** tab (**MCP Tools**) is a local MCP tool runner and 1×/3× Before/After style inspector backed by `src/lib/pixelforge/mcp-tool-catalog.ts` — it executes calls in-process on the shared CommandBus and shows live remote edits from connected IDE agents:
 
-- **Review Result.** For pixel tools (`set_pixels`, `fill_rect`, `replace_color`, the
-  transforms, `beautify_layer`, `resize_canvas`) it records the edited cel before and after
-  plus the Style Lock checks.
-- **Recent edits.** Tool calls relayed from connected agents are listed as "performed by
-  connected agent".
-- **Copy agent instructions** produces a Markdown briefing with the endpoint, pairing steps and
-  every tool with an example.
-- A shortcut opens the Motion workflow on the active clip.
+- **Quick actions:** Run deterministic tools locally (`Outline + shade`, `Create 4 empty frames`, `Preview Idle Animation`).
+- **Review Result:** For pixel tools (`set_pixels`, `fill_rect`, `replace_color`, transforms, `beautify_layer`, `resize_canvas`) it renders 1× and 3× before/after canvases plus Style Lock checks and a 1-click Undo button.
+- **Session log:** Lists local runs and live relayed edits tagged with the real connected client name (e.g. `Claude Code (MCP)`, `Codex (MCP)`).
+- **Manual tools:** Filter and run any MCP tool with JSON arguments or plain-English quick commands (`flip h`, `rotate ccw`, `opacity 50`).
+- **Copy brief:** Copies a Markdown briefing with the live endpoint and tool examples.
 
 ## Troubleshooting
 

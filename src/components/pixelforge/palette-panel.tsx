@@ -351,7 +351,7 @@ export function PalettePanel() {
       ref={rootRef}
       data-testid="palette-panel"
       aria-label="Palette panel — drag the header to move, click the eye to hide"
-      className={`absolute left-3 top-3 z-30 w-[216px] touch-none select-none rounded-xl border border-zinc-700/80 bg-zinc-900/90 shadow-xl backdrop-blur-xl ${
+      className={`absolute left-3 top-3 z-30 w-[216px] touch-none select-none overflow-hidden rounded-xl border border-zinc-700/80 bg-zinc-900/90 shadow-xl backdrop-blur-xl ${
         dragging ? 'cursor-grabbing' : ''
       }`}
       style={pos ? { left: pos.x, top: pos.y } : undefined}
@@ -453,10 +453,10 @@ export function PalettePanel() {
         </div>
       </div>
 
-      {/* footer: action row (add/remove/code) + unified visual palette selector */}
-      <div className="border-t border-zinc-800 px-3 py-1.5">
-        <div className="mb-1.5 flex items-center justify-between">
-          <div className="flex items-center gap-1">
+      {/* footer: color tools row + balanced Skins/Code row + unified palette selector */}
+      <div className="space-y-1.5 border-t border-zinc-800 px-3 py-2">
+        <div className="flex items-center justify-between gap-1">
+          <div className="flex items-center gap-0.5">
             <Popover>
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -678,6 +678,30 @@ export function PalettePanel() {
             </Popover>
           </div>
 
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    await copyText(primary)
+                    toast({ title: 'Hex copied', description: primary })
+                  } catch {
+                    /* clipboard unavailable */
+                  }
+                }}
+                className="min-w-0 truncate rounded px-1 py-0.5 font-mono text-[10px] text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
+                aria-label={`Copy primary hex ${primary}`}
+              >
+                {primary.toLowerCase()}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top">Click to copy primary hex</TooltipContent>
+          </Tooltip>
+        </div>
+
+        {/* balanced 2-column feature row: Skins + Code always fit inside the 216px panel */}
+        <div className="grid grid-cols-2 gap-1.5">
           {/* sprite skin variants generator (clones active clip into elemental/RPG skins) */}
           <Popover open={skinsOpen} onOpenChange={setSkinsOpen}>
             <Tooltip>
@@ -685,11 +709,11 @@ export function PalettePanel() {
                 <PopoverTrigger asChild>
                   <button
                     type="button"
-                    className="flex h-6 items-center gap-1 rounded border border-zinc-800 bg-zinc-950 px-1.5 font-mono text-[10px] text-zinc-400 hover:border-teal-500/60 hover:text-teal-300"
+                    className="flex h-6 w-full min-w-0 items-center justify-center gap-1 rounded border border-zinc-800 bg-zinc-950 px-1.5 font-mono text-[10px] text-zinc-300 transition-colors hover:border-teal-500/60 hover:text-teal-300"
                     aria-label="Generate sprite skin variants"
                   >
-                    <Sparkles className="h-3 w-3 text-teal-400" aria-hidden />
-                    <span>Skins</span>
+                    <Sparkles className="h-3 w-3 shrink-0 text-teal-400" aria-hidden />
+                    <span className="truncate">Skins</span>
                   </button>
                 </PopoverTrigger>
               </TooltipTrigger>
@@ -697,10 +721,10 @@ export function PalettePanel() {
             </Tooltip>
             <PopoverContent side="top" align="end" className="w-80 space-y-2 border-zinc-800 bg-zinc-950 p-2.5">
               <div className="flex items-center justify-between gap-2">
-                <p className="font-mono text-[10px] font-semibold uppercase tracking-wider text-zinc-200">
+                <p className="shrink-0 font-mono text-[10px] font-semibold uppercase tracking-wider text-zinc-200">
                   Sprite Skin Variants
                 </p>
-                <span className="font-mono text-[9px] text-zinc-500">
+                <span className="min-w-0 truncate font-mono text-[9px] text-zinc-500">
                   from &ldquo;{activeClipName}&rdquo;
                 </span>
               </div>
@@ -784,11 +808,11 @@ export function PalettePanel() {
                 <PopoverTrigger asChild>
                   <button
                     type="button"
-                    className="flex h-6 items-center gap-1 rounded border border-zinc-800 bg-zinc-950 px-1.5 font-mono text-[10px] text-zinc-400 hover:border-frost-500/60 hover:text-frost-300"
+                    className="flex h-6 w-full min-w-0 items-center justify-center gap-1 rounded border border-zinc-800 bg-zinc-950 px-1.5 font-mono text-[10px] text-zinc-300 transition-colors hover:border-frost-500/60 hover:text-frost-300"
                     aria-label="Share or paste a palette code"
                   >
-                    <Share2 className="h-3 w-3" aria-hidden />
-                    <span>Code</span>
+                    <Share2 className="h-3 w-3 shrink-0" aria-hidden />
+                    <span className="truncate">Code</span>
                   </button>
                 </PopoverTrigger>
               </TooltipTrigger>

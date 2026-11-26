@@ -4,8 +4,14 @@ The IDE model plans and draws through MCP. PixelForge supplies the canvas, art g
 project palette, undo history, motion presets and procedural effects. Pair at L0 for
 review, L1 for drawing and animation, or L2 for project saves and disk exports.
 
-## Connect (2 minutes)
+## Connect (1-click desktop auto-setup or manual pairing)
 
+**Desktop 1-Click Auto-Setup (recommended):**
+1. Open PixelForge → **Settings → AI connection** → make sure **Enable MCP server** is on.
+2. Under **1-Click IDE Auto-Setup**, pick your permission tier (`L0`, `L1`, or `L2`) and click **Connect** next to **Cursor**, **Claude Code**, **Codex**, **Windsurf**, or **Antigravity**.
+3. PixelForge issues a dedicated `pfm_…` token, backs up your existing config to `.pixelforge.bak`, and writes the MCP server entry safely. Restart/reload your IDE once and ask the agent to call `get_project_state`.
+
+**Manual pairing (any MCP client):**
 1. Open PixelForge → **Settings → AI connection** → choose your IDE and permission tier →
    **Generate pairing code** (6 words, single-use, expires in 15 minutes).
 2. In your IDE, add an MCP server:
@@ -13,9 +19,8 @@ review, L1 for drawing and animation, or L2 for project saves and disk exports.
    - Authorization: `Bearer <the 6-word code>` (temporary, for pairing only)
 3. Call `pair_client { name: "your-client" }` — you get a persistent
    `pfm_…` token. **Replace** the temporary Authorization header with it.
-4. Start every session with `get_project_state` — its ids and `stateHash`
-   feed every other tool. The in-app guide (`Settings → AI connection → IDE guide`)
-   copies these steps with the live endpoint filled in.
+4. Start every session with `get_project_state` — its ids, `stateHash`, and `artistContext`
+   (live selection, active colors, mirror/wrap flags, pause state) feed every other tool.
 5. Ask the IDE agent to call `get_project_state`, then run **Check connection** in PixelForge.
 
 Desktop app: it supervises the MCP service itself — no terminal needed.
@@ -56,17 +61,21 @@ Text-only clients can still read frame metadata, timing and technical checks.
 - Read-only resources: `pixelforge://capabilities` (tier-filtered
   catalog) and `pixelforge://project/active` (live project summary).
 
-**In-app Pixel Art Recipe (artist-side):** the Brain panel composes a staged
-drawing contract from the active project + Style Lock. The agent draws via MCP,
-then reviews the PNG and technical checks. After a task finishes, the artist
-can open **Review**, approve a frame, or queue a revision with specific feedback.
-`validate_asset_set` checks palette consistency across clips; provide
-`actorClipIds` for hero-based height, ground line and outline comparisons.
+**In-app Prompt Interpreter & Pixel Art Recipe (artist-side):** the Brain panel interprets rough
+prompts with 1-click local actions (**Run VFX**, **Drop Starter Base**, **Open Motion**) and
+generates ready-to-paste IDE prompts (**Copy for IDE AI**) or task-board entries (**Queue + Trigger**).
+Because MCP servers cannot force-wake an idle IDE chat, PixelForge copies a 1-line wake trigger
+whenever you queue tasks — paste it into Claude Code, Codex, Cursor, or Antigravity to run them live.
+After a task finishes, open **Review** to approve a frame or queue a revision with feedback.
+`validate_asset_set` checks palette consistency across clips; provide `actorClipIds` for
+hero-based height, ground line and outline comparisons.
 
 ## Troubleshooting
 
 - **editor_not_connected** — keep the PixelForge app open; it is the tool
   executor.
+- **editor_busy** — the artist is mid-brush-stroke on the canvas; wait a moment and retry.
+- **artist_paused** — the artist clicked **Pause AI** on the live canvas HUD; stop mutating and ask before resuming.
 - **stale_document** — your `expectedStateHash` is old; re-read state.
 - **dirty_project** — `create_project`/`open_project` are blocked while the
   document has unsaved changes; ask the human to save first.
