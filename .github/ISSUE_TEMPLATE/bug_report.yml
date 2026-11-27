@@ -1,0 +1,62 @@
+name: Bug Report
+description: Report a bug in PixelForge AI (desktop app, web studio, or MCP server)
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: A clear and concise description of the bug.
+      placeholder: Describe what went wrong...
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: How can we reproduce the issue?
+      placeholder: |
+        1. Open PixelForge AI
+        2. Click '...'
+        3. See error
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: PixelForge AI Version
+      description: e.g., v0.7.2 or commit hash
+      placeholder: v0.7.2
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Windows (Desktop App)
+        - macOS (Desktop App)
+        - Linux (AppImage)
+        - Web Studio (Local Dev)
+    validations:
+      required: true
+
+  - type: input
+    id: ide
+    attributes:
+      label: Connected AI IDE (if MCP-related)
+      placeholder: Cursor / Claude Code / Codex / Windsurf / Antigravity / None
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Screenshots or Logs
+      description: Paste any console errors, MCP logs, or drag-and-drop screenshots here.
+    validations:
+      required: false

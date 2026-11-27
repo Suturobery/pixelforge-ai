@@ -69,3 +69,6 @@ apps/desktop/release/
 
 # mcp verification session data
 artifacts/*/mcp-data/
+
+# local Obsidian planning & marketing vault
+PixelForge-Memory/

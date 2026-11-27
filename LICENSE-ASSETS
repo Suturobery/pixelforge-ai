@@ -1,0 +1,21 @@
+NOTE ON BRAND & VISUAL ASSETS
+
+The MIT License in `LICENSE` applies to the SOURCE CODE of PixelForge AI.
+
+1. Brand & Promotional Assets (Reserved)
+   The "PixelForge AI" name, logos, desktop application icons
+   (`apps/desktop/build/`), and promotional showcase imagery (`docs/images/`)
+   are Copyright (c) 2026 Suturobery — All Rights Reserved. You may use them
+   to refer to or link to the official PixelForge AI project, but you may not
+   use them to misrepresent a fork or derivative product as an official
+   PixelForge AI release.
+
+2. User-Created Artwork (100% Yours)
+   Any sprites, animations, tilesets, palettes, VFX clips, or exports that you
+   create using PixelForge AI — including works started from built-in Starter
+   Sprite Templates or procedural VFX — belong 100% to you and may be used in
+   personal or commercial games and projects without restriction.
+
+3. Third-Party Libraries & Palettes
+   Third-party dependencies (including `pixelfx` and npm/Bun packages) remain
+   governed by their respective open-source licenses.
