@@ -69,6 +69,6 @@ See [`docs/architecture.md`](docs/architecture.md) and [`docs/development.md`](d
 1. Fork the repository and create a focused branch (`feat/...` or `fix/...`).
 2. Keep PRs scoped to one feature or bug fix.
 3. Fill out the PR template clearly — include screenshots or GIFs for UI/canvas changes.
-4. By submitting a PR, you agree that your contributions will be licensed under the project’s [MIT License](LICENSE).
+4. By submitting a PR, you agree that your contributions will be licensed under the project’s [GNU AGPL-3.0 License](LICENSE).
 
 Need help getting started? Ask in the [PixelForge AI Discord](https://discord.gg/2f5MvmAqF) or open an issue!

@@ -7,8 +7,10 @@
 Use the AI IDE subscriptions you already pay for (**Cursor, Claude Code, Codex, Windsurf, Antigravity**) to paint, animate, and review directly on your live pixel canvas — **100% local, deterministic, and open source.**
 
 <p>
-  <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-14b8a6.svg?style=flat-square"></a>
+  <a href="./LICENSE"><img alt="License: AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-14b8a6.svg?style=flat-square"></a>
   <a href="https://github.com/Suturobery/pixelforge-ai/releases/latest"><img alt="Latest Release" src="https://img.shields.io/github/v/release/Suturobery/pixelforge-ai?style=flat-square&color=14b8a6&label=download"></a>
+  <a href="https://github.com/Suturobery/pixelforge-ai/releases"><img alt="Total Downloads" src="https://img.shields.io/github/downloads/Suturobery/pixelforge-ai/total?style=flat-square&color=0ea5e9&label=downloads"></a>
+  <a href="https://github.com/Suturobery/pixelforge-ai/actions/workflows/ci.yml"><img alt="CI Build Status" src="https://img.shields.io/github/actions/workflow/status/Suturobery/pixelforge-ai/ci.yml?style=flat-square&label=build"></a>
   <img alt="Platform: Windows | macOS | Linux" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-334155.svg?style=flat-square">
   <a href="./CONTRIBUTING.md"><img alt="PRs Welcome" src="https://img.shields.io/badge/PRs-welcome-10b981.svg?style=flat-square"></a>
   <a href="https://discord.gg/2f5MvmAqF"><img alt="Discord Community" src="https://img.shields.io/badge/Discord-Join%20Community-5865F2?style=flat-square&logo=discord&logoColor=white"></a>
@@ -25,6 +27,8 @@ Use the AI IDE subscriptions you already pay for (**Cursor, Claude Code, Codex, 
 Get the latest desktop installer for **Windows** (`.exe`), **macOS** (`arm64.dmg` / `.zip`), or **Linux** (`.AppImage`) from **[GitHub Releases](https://github.com/Suturobery/pixelforge-ai/releases/latest)**.
 
 Desktop builds bundle the studio and local MCP sidecar automatically (no terminal needed) and include background update notifications.
+
+> **Unsigned indie builds:** Releases are built transparently via GitHub Actions and are currently unsigned, so Windows SmartScreen or macOS Gatekeeper may show a first-run prompt. See **[CODE_SIGNING.md](CODE_SIGNING.md)** for quick instructions (or build from source below).
 
 ---
 
@@ -84,4 +88,4 @@ Full guides live in [`docs/`](docs/README.md):
 - **Community & Support:** Join the **[PixelForge AI Discord](https://discord.gg/2f5MvmAqF)** or use **Help & feedback (?)** inside the app.
 - **Contributing:** PRs and bug reports are welcome! Read [`CONTRIBUTING.md`](CONTRIBUTING.md), [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md), and [`SECURITY.md`](SECURITY.md).
 - **Changelog:** See [`CHANGELOG.md`](CHANGELOG.md) or [GitHub Releases](https://github.com/Suturobery/pixelforge-ai/releases).
-- **License:** Source code is licensed under the **[MIT License](LICENSE)**. Brand marks and promotional assets are covered by [`LICENSE-ASSETS`](LICENSE-ASSETS); artwork you create in PixelForge AI belongs **100% to you**.
+- **License:** Source code is licensed under the **[GNU AGPL-3.0 License](LICENSE)**. Brand marks and promotional assets are covered by [`LICENSE-ASSETS`](LICENSE-ASSETS); artwork you create in PixelForge AI belongs **100% to you**.
